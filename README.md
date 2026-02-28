@@ -10,7 +10,7 @@ primarily in terms of functionality, and secondarily in terms of
 philosophy. Like [dwm], dwl is:
 
 - Easy to understand, hack on, and extend with patches
-- One C source file (or a very small number) configurable via `config.h`
+- One C source file configurable via `config.h`
 - Tied to as few external dependencies as possible
 
 ## Getting Started:
