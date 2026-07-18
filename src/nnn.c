@@ -365,7 +365,7 @@ typedef struct {
 	uint_t ctxactive  : 1;  /* Context active or not */
 	uint_t reverse    : 1;  /* Reverse sort */
 	uint_t version    : 1;  /* Version sort */
-	uint_t reserved1  : 1;
+	uint_t hidesymlink : 1; /* Set to hide symlinks */
 	/* The following settings are global */
 	uint_t curctx     : 3;  /* Current context number */
 	uint_t prefersel  : 1;  /* Prefer selection over current, if exists */
@@ -7415,6 +7415,15 @@ static int dentfill(char *path, struct entry **ppdents)
 				entflags = SYM_ORPHAN;
 		}
 
+		if (cfg.hidesymlink) {
+#if !(defined(__sun) || defined(__HAIKU__))
+			if (!flags ? dp->d_type == DT_LNK : S_ISLNK(sb.st_mode))
+#else
+			if (S_ISLNK(sb.st_mode))
+#endif
+				continue;
+		}
+
 		if (ndents == total_dents) {
 			if (cfg.blkorder) {
 				pthread_mutex_lock(&running_mutex);
@@ -9260,6 +9269,7 @@ nochange:
 			goto nochange;
 		case SEL_MFLTR: // fallthrough
 		case SEL_HIDDEN: // fallthrough
+		case SEL_SYMLINK: // fallthrough
 		case SEL_DETAIL: // fallthrough
 		case SEL_PREVIEW: // fallthrough
 		case SEL_SORT:
@@ -9275,6 +9285,15 @@ nochange:
 			case SEL_HIDDEN:
 				if (sel == SEL_HIDDEN) {
 					cfg.showhidden ^= 1;
+					if (cfg.filtermode)
+						presel = FILTER;
+					clearfilter();
+				}
+				copycurname(lastname);
+				goto cdfalse_begin;
+			case SEL_SYMLINK:
+				if (sel == SEL_SYMLINK) {
+					cfg.hidesymlink ^= 1;
 					if (cfg.filtermode)
 						presel = FILTER;
 					clearfilter();
