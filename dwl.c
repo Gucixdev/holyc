@@ -2839,6 +2839,7 @@ unmapnotify(struct wl_listener *listener, void *data)
 	}
 
 	wlr_scene_node_destroy(&c->scene->node);
+	client_surface(c)->data = NULL;
 	printstatus();
 	motionnotify(0, NULL, 0, 0, 0, 0);
 }
