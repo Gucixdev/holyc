@@ -11,13 +11,12 @@ pub const PRIMARY: Color = Color::Rgb(0, 255, 65); // green - default/active tex
 pub const WARN: Color = Color::Rgb(255, 0, 0); // red - genuine warning/critical only
 pub const CAUTION: Color = Color::Rgb(255, 255, 0); // yellow - medium severity
 pub const ACCENT: Color = Color::Rgb(153, 68, 255); // purple - borders/headers/accents/selected
-// 2026-08-29, "wkurwia mnie bialy kolor w progressbar" - NEUTRAL (the
-// "empty/available capacity" segment of every usage bar) used to be a
-// light gray that rendered as near-white in the user's terminal theme;
-// switched to a soft purple so it reads as "empty" without ever
-// looking white. Kept visually distinct from ACCENT (vivid) and
-// DISABLED (dim, muted) - this one sits between them.
-pub const NEUTRAL: Color = Color::Rgb(190, 150, 230); // soft purple - "empty/available capacity", never used for a warning tier
+// 2026-08-29: NEUTRAL (the "empty/available capacity" segment of every
+// usage bar) first went from a near-white light gray to its own
+// custom soft purple, but the user then asked for ONE identical purple
+// used everywhere ("wszedzie fiolet ma byc identyczny jak ramki") -
+// so NEUTRAL is now literally ACCENT, not a separate shade.
+pub const NEUTRAL: Color = ACCENT; // same purple as everything else - "empty/available capacity", never used for a warning tier
 pub const DISABLED: Color = Color::Rgb(120, 90, 160); // dim muted purple - unavailable/disabled
 
 /// tier_color - real, consistent severity coloring shared by every
@@ -41,4 +40,4 @@ pub const RAM_USED: Color = Color::Rgb(0, 217, 255); // cyan
 pub const RAM_ZRAM: Color = Color::Rgb(255, 46, 196); // magenta
 pub const RAM_CACHE: Color = Color::Rgb(255, 174, 0); // amber
 pub const RAM_SWAP: Color = Color::Rgb(255, 59, 59); // red
-pub const RAM_FREE: Color = Color::Rgb(124, 77, 255); // violet
+pub const RAM_FREE: Color = ACCENT; // same purple as everything else (was its own slightly-off violet)
