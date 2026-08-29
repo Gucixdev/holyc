@@ -378,7 +378,10 @@ fn draw_gpu(f: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![util_line, util_graph];
     if app.gpu.reading.mem_total_mb > 0 {
         let mem_pct = app.gpu.reading.mem_used_mb as f64 / app.gpu.reading.mem_total_mb as f64 * 100.0;
-        let vram_suffix = format!(" {:.0}% {}M", mem_pct, app.gpu.reading.mem_used_mb);
+        let vram_suffix = format!(
+            " {:.0}% {}M/{}M",
+            mem_pct, app.gpu.reading.mem_used_mb, app.gpu.reading.mem_total_mb
+        );
         let vram_bar_w = inner_w
             .saturating_sub(vram_suffix.chars().count() as u16)
             .saturating_sub(5)
