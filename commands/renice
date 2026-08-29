@@ -1,0 +1,11 @@
+#!/bin/sh
+# real example command - classic task manager "Set Priority". Typed as
+# `renice <niceness> ` in the "/" command palette (e.g. `renice 10`) -
+# the palette passes any words after the command name as real leading
+# args BEFORE the selected/marked pid(s), so $1 is the real niceness
+# value and the rest are real pids.
+prio="$1"
+shift
+for pid in "$@"; do
+	renice "$prio" -p "$pid"
+done

@@ -1,0 +1,8 @@
+#!/bin/sh
+# real example command - graceful "End Task" (SIGTERM), the softer
+# counterpart to `kill`'s SIGKILL. Invoked from the PROC panel's "/"
+# command palette with the selected/marked pid(s) as real positional
+# arguments.
+for pid in "$@"; do
+	kill -TERM "$pid"
+done

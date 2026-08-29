@@ -237,8 +237,17 @@ impl App {
         if input.is_empty() {
             return;
         }
-        // real args: every pid in the marked set, or the cursor row.
-        let mut args: Vec<String> = Vec::new();
+        // Real "more options like a classic task manager" support
+        // (2026-08-29, "wiecej opcji... tylko zaznaczanie spacja i
+        // komendy... jako obsluga"): the first typed word is the real
+        // command name (commands/<name>), any further words are real
+        // extra positional args a command can use for itself (e.g. a
+        // priority value for `renice 10`) - passed BEFORE the real
+        // marked/cursor pids, which are always appended last.
+        let mut words = input.split_whitespace();
+        let Some(name) = words.next() else { return };
+        let name = name.to_string();
+        let mut args: Vec<String> = words.map(str::to_string).collect();
         if self.procs.marked.is_empty() {
             if let Some(g) = self.procs.groups.get(self.procs.cursor) {
                 if !g.is_divider {
@@ -253,15 +262,15 @@ impl App {
             }
         }
         self.procs.marked.clear();
-        self.palette_result = match crate::commands::run(&input, &args) {
+        self.palette_result = match crate::commands::run(&name, &args) {
             Ok(out) => {
                 if out.is_empty() {
-                    format!("{input}: ok")
+                    format!("{name}: ok")
                 } else {
-                    format!("{input}: {out}")
+                    format!("{name}: {out}")
                 }
             }
-            Err(e) => format!("{input}: {e}"),
+            Err(e) => format!("{name}: {e}"),
         };
     }
 }
