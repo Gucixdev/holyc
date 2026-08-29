@@ -93,9 +93,10 @@ impl App {
         self.gpu.refresh();
 
         let mounts = read_mounts();
-        let (used, total) = aggregate_partition_usage(&self.disk.devices, &mounts);
+        let (used, total, per_device) = aggregate_partition_usage(&self.disk.devices, &mounts);
         self.disk.used_bytes = used;
         self.disk.total_bytes = total;
+        self.disk.device_usage = per_device;
 
         self.procs.refresh(self.mem.mem_total);
 

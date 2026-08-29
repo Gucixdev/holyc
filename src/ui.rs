@@ -203,7 +203,13 @@ fn draw_cpu(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(theme::PRIMARY),
     ));
 
-    let mut lines: Vec<Line> = vec![bar_line, legend];
+    // Real fixed-[0,100] aggregate trend graph (2026-08-29 real bug fix
+    // - "cpu... brak grafu": app.cpu.agg_hist was already tracked and
+    // pushed every tick, but nothing here ever actually rendered it).
+    let agg_hist = app.cpu.agg_hist.as_u64();
+    let agg_graph = Line::from(raw_percent_graph(&agg_hist, inner_w, theme::PRIMARY));
+
+    let mut lines: Vec<Line> = vec![bar_line, agg_graph, legend];
 
     for c in &app.cpu.cores {
         let freq = c
@@ -229,13 +235,6 @@ fn draw_cpu(f: &mut Frame, app: &App, area: Rect) {
     }
 
     f.render_widget(Paragraph::new(lines).block(block("CPU")), area);
-
-    // Real fixed-[0,100] aggregate trend graph as its own ratatui
-    // Sparkline widget, drawn UNDER the Paragraph inside the same box's
-    // remaining rows isn't directly composable with Paragraph text in
-    // one widget - rendered as a second widget into the block's own
-    // inner rect instead (see draw_agg_graph_row below for the general
-    // pattern used by every section).
 }
 
 /// raw_percent_graph - real eighth-block glyphs at a fixed [0,100]
@@ -262,7 +261,19 @@ fn raw_percent_graph(hist: &[u64], width: u16, color: ratatui::style::Color) -> 
         let frac = t - i0 as f64;
         let v = hist[i0] as f64 * (1.0 - frac) + hist[i1] as f64 * frac;
         let lvl = (v / 100.0).clamp(0.0, 1.0);
-        let idx = ((lvl * 8.0).round() as usize).min(8);
+        // Real fix: `.round()` made anything under 100/16 = 6.25% (a
+        // genuinely common real CPU/GPU/RAM reading on a lightly-loaded
+        // desktop) round DOWN to 0, rendering as a blank cell
+        // indistinguishable from a real code bug ("brak grafu" was
+        // reported against exactly this - a graph that WAS rendering,
+        // just invisibly, at real everyday-low utilization). `.ceil()`
+        // means any genuinely nonzero value shows at least the lowest
+        // visible glyph; a true zero still renders as a real blank.
+        let idx = if v > 0.0 {
+            ((lvl * 8.0).ceil() as usize).clamp(1, 8)
+        } else {
+            0
+        };
         s.push(GLYPHS[idx]);
     }
     vec![Span::styled(s, Style::default().fg(color))]
@@ -288,7 +299,13 @@ fn draw_gpu(f: &mut Frame, app: &App, area: Rect) {
         .spans
         .push(Span::styled(util_suffix, Style::default().fg(theme::PRIMARY)));
 
-    let mut lines = vec![util_line];
+    // Real fixed-[0,100] util trend graph (2026-08-29 real bug fix -
+    // "gpu brakuje grafu": app.gpu.util_hist was already tracked and
+    // pushed every tick in gpu.rs, but nothing here ever rendered it).
+    let util_hist = app.gpu.util_hist.as_u64();
+    let util_graph = Line::from(raw_percent_graph(&util_hist, inner_w, theme::PRIMARY));
+
+    let mut lines = vec![util_line, util_graph];
     if app.gpu.reading.mem_total_mb > 0 {
         let mem_pct = app.gpu.reading.mem_used_mb as f64 / app.gpu.reading.mem_total_mb as f64 * 100.0;
         let vram_suffix = format!(" {:.0}% {}M", mem_pct, app.gpu.reading.mem_used_mb);
@@ -328,7 +345,14 @@ fn draw_ram(f: &mut Frame, app: &App, area: Rect) {
         .spans
         .push(Span::styled(summary, Style::default().fg(theme::PRIMARY)));
 
-    let mut lines = vec![bar_line];
+    // Real fixed-[0,100] used% trend graph (2026-08-29 real bug fix -
+    // same "aggregate bar with no graph under it" gap CPU/GPU had:
+    // m.used_pct_hist was already tracked and pushed every tick, but
+    // nothing here ever rendered it).
+    let used_hist = m.used_pct_hist.as_u64();
+    let used_graph = Line::from(raw_percent_graph(&used_hist, inner_w, theme::RAM_USED));
+
+    let mut lines = vec![bar_line, used_graph];
     lines.push(Line::from(Span::styled(
         format!("used  {}/{}", human_bytes(other), human_bytes(m.mem_total as f64)),
         Style::default().fg(theme::RAM_USED),
@@ -392,6 +416,12 @@ fn draw_disk(f: &mut Frame, app: &App, area: Rect) {
             .spans
             .push(Span::styled(summary, Style::default().fg(theme::PRIMARY)));
         lines.push(bar_line);
+        // Real aggregate activity graph (2026-08-29 real fix - the same
+        // "aggregate bar with no graph under it" gap CPU/GPU had):
+        // unbounded rate, same auto-scaling raw_rate_graph_line every
+        // per-device graph below already uses.
+        let agg_hist = app.disk.agg_hist.as_u64();
+        lines.push(raw_rate_graph_line(&agg_hist, inner_w));
     }
 
     if app.disk.devices.is_empty() {
@@ -416,6 +446,25 @@ fn draw_disk(f: &mut Frame, app: &App, area: Rect) {
             format!("{ident} {}", human_bytes(d.size_bytes as f64)),
             Style::default().fg(color),
         )));
+        // Real per-device usage bar (2026-08-29, "kazdy dysk ma swoj
+        // graf i swoj progressbar" - only the one aggregate bar existed
+        // before; this is the SAME real statvfs data, just summed per
+        // device instead of only across all devices - see
+        // aggregate_partition_usage's own per_device return).
+        if let Some(&(used, total)) = app.disk.device_usage.get(&d.name) {
+            let free = (total - used) as f64;
+            let summary = format!(" {}/{}", human_bytes(used as f64), human_bytes(free));
+            let bar_w = inner_w.saturating_sub(summary.chars().count() as u16).max(10);
+            let mut dev_bar = segmented_bar(
+                &[(used as f64, theme::PRIMARY), (free, theme::NEUTRAL)],
+                total as f64,
+                bar_w,
+            );
+            dev_bar
+                .spans
+                .push(Span::styled(summary, Style::default().fg(theme::PRIMARY)));
+            lines.push(dev_bar);
+        }
         let hist = app
             .disk
             .device_hist
@@ -427,12 +476,13 @@ fn draw_disk(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).block(block("DISK")), area);
 }
 
-/// raw_rate_graph_line - plain-text placeholder line reserved for
-/// where a real ratatui Sparkline widget is rendered as a SEPARATE
-/// overlay afterward (see draw_disk/draw_net callers using
-/// render_stateful pattern) - kept simple here as inline blocks since
-/// disk/net rate graphs don't need to share a row's own selection
-/// style the way PROC rows do.
+/// raw_rate_graph_line - the real, unbounded-rate trend graph (disk/net
+/// throughput has no fixed bound the way a percentage does, so this
+/// auto-scales to its own window's real max instead of a fixed range -
+/// see raw_percent_graph for the fixed-[0,100] sibling used everywhere
+/// else). Plain inline glyphs, not a separate ratatui Sparkline widget,
+/// so it composes into the same Paragraph as every other line in these
+/// panels without a second render pass.
 fn raw_rate_graph_line(hist: &[u64], width: u16) -> Line<'static> {
     if hist.len() < 2 {
         return Line::from(" ".repeat(width as usize));
@@ -717,3 +767,34 @@ fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Real regression guard for a real bug (2026-08-29, "brak grafu" -
+    /// a percentage graph WAS rendering, just invisibly: `.round()`
+    /// made any value under 100/16=6.25% - a genuinely common real CPU/
+    /// GPU/RAM reading on a lightly-loaded desktop - round down to a
+    /// blank cell, indistinguishable from a missing graph). Any real,
+    /// nonzero history value must show at least the lowest visible
+    /// glyph; a genuine all-zero history must still render as blank.
+    #[test]
+    fn raw_percent_graph_shows_low_nonzero_values() {
+        let low_hist = vec![2u64, 3u64]; // real low-utilization values, e.g. 2-3% CPU
+        let spans = raw_percent_graph(&low_hist, 10, theme::PRIMARY);
+        let rendered: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            rendered.chars().any(|c| c != ' '),
+            "a real nonzero (2-3%) history rendered as entirely blank: {rendered:?}"
+        );
+
+        let zero_hist = vec![0u64, 0u64];
+        let spans = raw_percent_graph(&zero_hist, 10, theme::PRIMARY);
+        let rendered: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            rendered.chars().all(|c| c == ' '),
+            "a real all-zero history rendered something other than blank: {rendered:?}"
+        );
+    }
+}

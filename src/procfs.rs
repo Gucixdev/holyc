@@ -300,6 +300,10 @@ pub struct DiskCollector {
     /// caller (main app tick) and stored here for the UI to read.
     pub used_bytes: u64,
     pub total_bytes: u64,
+    /// per-device (used, total) real bytes - same real statvfs data,
+    /// just kept per-device too so each device can draw its OWN usage
+    /// bar, not only the one aggregate bar.
+    pub device_usage: HashMap<String, (u64, u64)>,
 }
 
 impl DiskCollector {
@@ -397,14 +401,24 @@ pub fn read_mounts() -> HashMap<String, String> {
 
 /// aggregate_partition_usage - real per-partition statvfs (see
 /// fsstat::statvfs) summed across every real mounted partition under
-/// every real whole-device this collector already found.
-pub fn aggregate_partition_usage(devices: &[DiskDevice], mounts: &HashMap<String, String>) -> (u64, u64) {
+/// every real whole-device this collector already found - both the
+/// grand total (used, total) AND each device's own real sub-total
+/// (dev name -> (used, total), only for devices with at least one real
+/// mounted partition) so the UI can draw a real PER-DEVICE usage bar,
+/// not just the one aggregate one.
+pub fn aggregate_partition_usage(
+    devices: &[DiskDevice],
+    mounts: &HashMap<String, String>,
+) -> (u64, u64, HashMap<String, (u64, u64)>) {
     let mut used = 0u64;
     let mut total = 0u64;
+    let mut per_device = HashMap::new();
     for dev in devices {
         let Ok(entries) = fs::read_dir(Path::new("/sys/block").join(&dev.name)) else {
             continue;
         };
+        let mut dev_used = 0u64;
+        let mut dev_total = 0u64;
         for entry in entries.flatten() {
             let part_name = entry.file_name().to_string_lossy().into_owned();
             if !entry.path().join("partition").exists() {
@@ -416,10 +430,15 @@ pub fn aggregate_partition_usage(devices: &[DiskDevice], mounts: &HashMap<String
             if let Some((u, t)) = crate::fsstat::statvfs_usage(mp) {
                 used += u;
                 total += t;
+                dev_used += u;
+                dev_total += t;
             }
         }
+        if dev_total > 0 {
+            per_device.insert(dev.name.clone(), (dev_used, dev_total));
+        }
     }
-    (used, total)
+    (used, total, per_device)
 }
 
 // ---------- Network ----------
