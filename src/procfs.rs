@@ -286,6 +286,63 @@ pub struct DiskDevice {
     pub read_rate: f64,
     #[allow(dead_code)]
     pub write_rate: f64,
+    /// Real per-partition breakdown (2026-08-29, "pokazuj partycje
+    /// dyskow w drzewie jak wczesniej" - re-added after an earlier
+    /// simplification round dropped it; populated by the caller
+    /// (App::tick, which already has the real /proc/mounts read) via
+    /// list_partitions, not by DiskCollector::refresh itself.
+    pub partitions: Vec<DiskPartition>,
+}
+
+/// DiskPartition - one real partition under a real whole-device -
+/// /sys/block/<dev>/<part>/partition is the kernel's own real marker
+/// (not a name-prefix guess). used_bytes/total_bytes are only real
+/// (has_usage true) for an actually-mounted partition, via a real
+/// statvfs (crate::fsstat) - an unmounted partition has no live
+/// filesystem to ask.
+#[derive(Debug, Clone)]
+pub struct DiskPartition {
+    pub name: String,
+    pub size_bytes: u64,
+    pub mountpoint: Option<String>,
+    pub used_bytes: u64,
+    pub total_bytes: u64,
+    pub has_usage: bool,
+}
+
+pub fn list_partitions(dev: &str, mounts: &HashMap<String, String>) -> Vec<DiskPartition> {
+    let mut parts = Vec::new();
+    let Ok(entries) = fs::read_dir(Path::new("/sys/block").join(dev)) else {
+        return parts;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !entry.path().join("partition").exists() {
+            continue; // not a real partition subdirectory
+        }
+        let size_sectors: u64 = fs::read_to_string(entry.path().join("size"))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(0);
+        let mountpoint = mounts.get(&name).cloned();
+        let (used_bytes, total_bytes, has_usage) = match mountpoint.as_deref() {
+            Some(mp) => match crate::fsstat::statvfs_usage(mp) {
+                Some((u, t)) => (u, t, true),
+                None => (0, 0, false),
+            },
+            None => (0, 0, false),
+        };
+        parts.push(DiskPartition {
+            name,
+            size_bytes: size_sectors * 512,
+            mountpoint,
+            used_bytes,
+            total_bytes,
+            has_usage,
+        });
+    }
+    parts.sort_by(|a, b| a.name.cmp(&b.name));
+    parts
 }
 
 #[derive(Default)]
@@ -371,6 +428,7 @@ impl DiskCollector {
                 removable,
                 read_rate,
                 write_rate,
+                partitions: Vec::new(), // filled in by App::tick, which has the real /proc/mounts read
             });
         }
         devices.sort_by(|a, b| a.name.cmp(&b.name));
@@ -538,28 +596,3 @@ impl NetCollector {
     }
 }
 
-// ---------- Listening ports (real "servers") ----------
-
-/// real_listening_ports - /proc/net/tcp(+tcp6), real LISTEN-state
-/// (0A) sockets - "which local services are actually listening now".
-pub fn real_listening_ports() -> Vec<u16> {
-    let mut seen = std::collections::BTreeSet::new();
-    for path in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        let Ok(s) = fs::read_to_string(path) else {
-            continue;
-        };
-        for line in s.lines().skip(1) {
-            let fields: Vec<&str> = line.split_whitespace().collect();
-            if fields.len() < 4 || fields[3] != "0A" {
-                continue;
-            }
-            let Some((_, port_hex)) = fields[1].rsplit_once(':') else {
-                continue;
-            };
-            if let Ok(port) = u16::from_str_radix(port_hex, 16) {
-                seen.insert(port);
-            }
-        }
-    }
-    seen.into_iter().collect()
-}

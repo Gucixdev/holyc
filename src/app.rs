@@ -1,25 +1,13 @@
 //! Real application state, tick refresh, and key handling.
 
+use std::io::Write;
 use std::time::{Duration, Instant};
 
-use crate::containers::{self, ContainerInfo, Runtime};
 use crate::gpu::GpuCollector;
-use crate::procfs::{aggregate_partition_usage, read_mounts, CpuCollector, DiskCollector, MemInfo, NetCollector, real_listening_ports};
+use crate::procfs::{aggregate_partition_usage, read_mounts, CpuCollector, DiskCollector, MemInfo, NetCollector};
 use crate::proc_list::ProcCollector;
 
 pub const TICK: Duration = Duration::from_secs(1);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Focus {
-    Proc,
-    Containers,
-}
-
-#[derive(Debug, Clone)]
-pub struct ContainerEntry {
-    pub runtime: Runtime,
-    pub name: String,
-}
 
 pub struct App {
     pub cpu: CpuCollector,
@@ -32,19 +20,23 @@ pub struct App {
 
     pub procs: ProcCollector,
 
-    pub docker: Vec<ContainerInfo>,
-    pub podman: Vec<ContainerInfo>,
-    pub qemu: Vec<String>,
-    pub jails: Vec<String>,
-    pub ports: Vec<u16>,
-    pub container_entries: Vec<ContainerEntry>,
-    pub container_cursor: usize,
-    pub container_action_msg: String,
-    pub container_action_at: Option<Instant>,
     pub proc_action_msg: String,
     pub proc_action_at: Option<Instant>,
 
-    pub focus: Focus,
+    /// Real, user-adjustable refresh interval (2026-08-29, "zarzadzanie
+    /// ms odwierzania" - +/- keys tune how often tick() actually runs).
+    /// Clamped in handle_key to a real sane range, not a raw unbounded
+    /// value.
+    pub tick_interval: Duration,
+
+    /// Real "r"-toggled resource recording (2026-08-29, "nagrywanie
+    /// wszystkich zasobow i zapisywanie do jakiegos pliku") - a real
+    /// CSV row appended every tick while active, one real file per
+    /// recording session (a fresh timestamped file each time "r" turns
+    /// it back on, not appended across sessions).
+    pub recording: bool,
+    pub record_path: Option<String>,
+    record_file: Option<std::fs::File>,
 
     /// Real "/"-triggered command palette - typed name dispatches to
     /// commands/<name> against the current PROC selection/marks.
@@ -66,18 +58,12 @@ impl App {
             tpu: crate::accel::find_coral_tpu(),
             npu: crate::accel::find_npu(),
             procs: ProcCollector::default(),
-            docker: Vec::new(),
-            podman: Vec::new(),
-            qemu: Vec::new(),
-            jails: Vec::new(),
-            ports: Vec::new(),
-            container_entries: Vec::new(),
-            container_cursor: 0,
-            container_action_msg: String::new(),
-            container_action_at: None,
             proc_action_msg: String::new(),
             proc_action_at: None,
-            focus: Focus::Proc,
+            tick_interval: TICK,
+            recording: false,
+            record_path: None,
+            record_file: None,
             palette_open: false,
             palette_input: String::new(),
             palette_result: String::new(),
@@ -97,44 +83,74 @@ impl App {
         self.disk.used_bytes = used;
         self.disk.total_bytes = total;
         self.disk.device_usage = per_device;
+        // Real per-partition tree (2026-08-29, "pokazuj partycje
+        // dyskow w drzewie jak wczesniej").
+        for dev in &mut self.disk.devices {
+            dev.partitions = crate::procfs::list_partitions(&dev.name, &mounts);
+        }
 
         self.procs.refresh(self.mem.mem_total);
 
-        self.docker = containers::list_docker();
-        self.podman = containers::list_podman();
-        self.qemu = containers::list_qemu_vms();
-        self.jails = containers::list_jails();
-        self.ports = real_listening_ports();
+        self.record_tick();
+    }
 
-        let mut entries = Vec::new();
-        for c in &self.docker {
-            entries.push(ContainerEntry {
-                runtime: Runtime::Docker,
-                name: c.name.clone(),
-            });
-        }
-        for c in &self.podman {
-            entries.push(ContainerEntry {
-                runtime: Runtime::Podman,
-                name: c.name.clone(),
-            });
-        }
-        self.container_entries = entries;
-        if self.container_cursor >= self.container_entries.len() {
-            self.container_cursor = self.container_entries.len().saturating_sub(1);
+    /// record_tick - appends one real CSV row of the same real metrics
+    /// every panel already shows, while recording is active. Never
+    /// panics/crashes on a write failure (a full disk, a removed file)
+    /// - just silently stops recording so the rest of the app keeps
+    /// running.
+    fn record_tick(&mut self) {
+        let Some(file) = self.record_file.as_mut() else {
+            return;
+        };
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mem_pct = self.mem.used_pct_hist.last();
+        let disk_rate = self.disk.agg_hist.last();
+        let net_rate = self.net.agg_hist.last();
+        let ok = writeln!(
+            file,
+            "{ts},{:.2},{mem_pct:.2},{:.2},{disk_rate:.2},{net_rate:.2}",
+            self.cpu.agg_pct, self.gpu.reading.util,
+        )
+        .is_ok();
+        if !ok {
+            self.recording = false;
+            self.record_file = None;
         }
     }
 
-    pub fn manage_selected_container(&mut self, action: &str) {
-        let Some(entry) = self.container_entries.get(self.container_cursor).cloned() else {
+    /// toggle_record - real "r" key (2026-08-29, "r for toggle record
+    /// nagrywanie wszystkich zasobow i zapisywanie do jakiegos pliku").
+    /// A fresh, real, timestamped CSV file per session - turning
+    /// recording back on later starts a NEW file rather than appending
+    /// to the old one, so each recording is a clean, self-contained
+    /// real log.
+    fn toggle_record(&mut self) {
+        if self.recording {
+            self.recording = false;
+            self.record_file = None;
             return;
-        };
-        let msg = match containers::manage(entry.runtime, action, &entry.name) {
-            Ok(()) => format!("{}: {action} {}", entry.runtime.bin(), entry.name),
-            Err(e) => format!("{}: {action} {} failed: {e}", entry.runtime.bin(), entry.name),
-        };
-        self.container_action_msg = msg;
-        self.container_action_at = Some(Instant::now());
+        }
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = format!("bsc-record-{ts}.csv");
+        match std::fs::File::create(&path) {
+            Ok(mut f) => {
+                let _ = writeln!(f, "unix_ts,cpu_pct,mem_used_pct,gpu_util_pct,disk_rate_bytes_s,net_rate_bytes_s");
+                self.record_file = Some(f);
+                self.record_path = Some(path);
+                self.recording = true;
+            }
+            Err(e) => {
+                self.proc_action_msg = format!("record: could not create {path}: {e}");
+                self.proc_action_at = Some(Instant::now());
+            }
+        }
     }
 
     pub fn handle_key(&mut self, key: crossterm::event::KeyCode) {
@@ -161,74 +177,42 @@ impl App {
 
         match key {
             K::Char('q') => self.should_quit = true,
-            K::Tab => {
-                self.focus = match self.focus {
-                    Focus::Proc => Focus::Containers,
-                    Focus::Containers => Focus::Proc,
-                };
-            }
             K::Left => {
-                if self.focus == Focus::Proc {
-                    let m = self.procs.mode.prev();
-                    self.procs.set_mode(m);
-                }
+                let m = self.procs.mode.prev();
+                self.procs.set_mode(m);
             }
             K::Right => {
-                if self.focus == Focus::Proc {
-                    let m = self.procs.mode.next();
-                    self.procs.set_mode(m);
-                }
+                let m = self.procs.mode.next();
+                self.procs.set_mode(m);
             }
-            K::Up => match self.focus {
-                Focus::Proc => self.procs.move_up(),
-                Focus::Containers => {
-                    if self.container_cursor > 0 {
-                        self.container_cursor -= 1;
-                    }
-                }
-            },
-            K::Down => match self.focus {
-                Focus::Proc => self.procs.move_down(),
-                Focus::Containers => {
-                    if self.container_cursor + 1 < self.container_entries.len() {
-                        self.container_cursor += 1;
-                    }
-                }
-            },
-            K::Char(' ') => {
-                if self.focus == Focus::Proc {
-                    self.procs.toggle_mark();
-                }
-            }
+            K::Up => self.procs.move_up(),
+            K::Down => self.procs.move_down(),
+            K::Char(' ') => self.procs.toggle_mark(),
             K::Char('k') => {
-                if self.focus == Focus::Proc {
-                    let msg = self.procs.kill_selected();
-                    if !msg.is_empty() {
-                        self.proc_action_msg = msg;
-                        self.proc_action_at = Some(Instant::now());
-                    }
-                }
-            }
-            K::Char('s') => {
-                if self.focus == Focus::Containers {
-                    self.manage_selected_container("start");
-                }
-            }
-            K::Char('x') => {
-                if self.focus == Focus::Containers {
-                    self.manage_selected_container("stop");
-                }
-            }
-            K::Char('r') => {
-                if self.focus == Focus::Containers {
-                    self.manage_selected_container("restart");
+                let msg = self.procs.kill_selected();
+                if !msg.is_empty() {
+                    self.proc_action_msg = msg;
+                    self.proc_action_at = Some(Instant::now());
                 }
             }
             K::Char('/') => {
-                if self.focus == Focus::Proc {
-                    self.palette_open = true;
-                    self.palette_input.clear();
-                }
+                self.palette_open = true;
+                self.palette_input.clear();
+            }
+            K::Char('r') => self.toggle_record(),
+            // Real refresh-interval control (2026-08-29, "zarzadzanie ms
+            // odwierzania") - clamped to [100ms, 5s] so it can't be
+            // tuned down into a real busy-loop or up into "never really
+            // updates".
+            K::Char('+') | K::Char('=') => {
+                self.tick_interval =
+                    (self.tick_interval + Duration::from_millis(100)).min(Duration::from_secs(5));
+            }
+            K::Char('-') => {
+                self.tick_interval = self
+                    .tick_interval
+                    .saturating_sub(Duration::from_millis(100))
+                    .max(Duration::from_millis(100));
             }
             _ => {}
         }

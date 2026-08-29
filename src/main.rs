@@ -1,7 +1,6 @@
 mod accel;
 mod app;
 mod commands;
-mod containers;
 mod fsstat;
 mod gpu;
 mod history;
@@ -35,7 +34,7 @@ fn main() -> io::Result<()> {
     loop {
         terminal.draw(|f| ui::draw(f, &app))?;
 
-        let timeout = app::TICK.saturating_sub(last_tick.elapsed());
+        let timeout = app.tick_interval.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -43,7 +42,7 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        if last_tick.elapsed() >= app::TICK {
+        if last_tick.elapsed() >= app.tick_interval {
             app.tick();
             last_tick = std::time::Instant::now();
         }
@@ -96,10 +95,9 @@ mod tests {
         assert!(text.contains("DISK"), "DISK panel title missing:\n{text}");
         assert!(text.contains("NET"), "NET panel title missing:\n{text}");
         assert!(text.contains("PROC"), "PROC panel title missing:\n{text}");
-        assert!(
-            text.contains("CONTAINERS"),
-            "CONTAINERS panel title missing:\n{text}"
-        );
+        // CONTAINERS was removed entirely (2026-08-29, "containers
+        // jebac cnie... to jest jednak calkowicie zbedne") - real,
+        // deliberate removal, not a regression this test should guard.
         assert!(
             text.contains('█') || text.contains('▁'),
             "expected at least one real bar/graph glyph somewhere on screen:\n{text}"

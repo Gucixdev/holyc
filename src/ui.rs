@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::app::{App, Focus};
+use crate::app::App;
 use crate::theme;
 
 fn block(title: &str) -> Block<'_> {
@@ -89,45 +89,109 @@ fn human_rate(v: f64) -> String {
 
 pub fn draw(f: &mut Frame, app: &App) {
     let size = f.area();
+
+    // Real fix (2026-08-29, "widzisz ile panele dysk i net marnuja
+    // miejsca" - the old fixed Percentage(62) top row always used the
+    // SAME height for every column, so DISK/NET (usually far shorter
+    // than CPU's own per-core-driven height) stretched into a lot of
+    // real empty space with nothing below it to reclaim that room).
+    // The top row is now sized to whichever column ACTUALLY needs the
+    // most real content, and everything freed goes to PROC below.
+    let top_h = top_row_content_height(app).min(size.height.saturating_sub(6));
     let root = Layout::new(
         Direction::Vertical,
-        [Constraint::Percentage(62), Constraint::Percentage(38)],
+        [Constraint::Length(top_h), Constraint::Min(0)],
     )
     .split(size);
 
     draw_top_row(f, app, root[0]);
-
-    let bottom = Layout::new(
-        Direction::Vertical,
-        [Constraint::Percentage(65), Constraint::Percentage(35)],
-    )
-    .split(root[1]);
-    draw_proc(f, app, bottom[0]);
-    draw_containers(f, app, bottom[1]);
+    draw_proc(f, app, root[1]);
 
     if app.palette_open {
         draw_palette(f, app, size);
     }
 }
 
+fn cpu_col_height(app: &App) -> u16 {
+    let cpu_lines = 3 + app.cpu.cores.len() as u16 + 2; // bar+graph+legend + one per core + border
+    let gpu_lines: u16 = if app.gpu.reading.found { 5 } else { 3 }; // bar+graph+vram (or unavailable) + border
+    cpu_lines + gpu_lines
+}
+
+fn ram_col_height(app: &App) -> u16 {
+    let ram_lines = 8 + 2; // bar+graph+used+zram+cache+swap+capacity+free + border
+    let tpu = if app.tpu.is_some() { 3 } else { 0 };
+    let npu = if app.npu.is_some() { 3 } else { 0 };
+    ram_lines + tpu + npu
+}
+
+/// disk_content_lines - real content-line count for the whole DISK
+/// panel (shared by the top-row height calc and draw_col_c's own
+/// Length constraint, so the two never disagree): agg bar + agg graph,
+/// then per device: name, usage bar, graph, and one real line per
+/// partition (2026-08-29, "pokazuj partycje dyskow w drzewie").
+fn disk_content_lines(app: &App) -> u16 {
+    let mut n: u16 = 2; // agg bar + agg graph
+    for d in &app.disk.devices {
+        n += 3 + d.partitions.len() as u16;
+    }
+    n + 2 // border
+}
+
+fn disk_net_col_height(app: &App) -> u16 {
+    let net_lines: u16 = 2 // agg line + agg graph
+        + app.net.ifaces.len() as u16 * 2 // header, bar-or-graph (addresses may add more, real minimum here)
+        + 2; // border
+    disk_content_lines(app) + net_lines
+}
+
+/// top_row_content_height - the real max across all three columns, so
+/// the shortest ones don't get stretched to match a much taller one
+/// for no reason - see draw()'s own doc comment.
+fn top_row_content_height(app: &App) -> u16 {
+    cpu_col_height(app)
+        .max(ram_col_height(app))
+        .max(disk_net_col_height(app))
+        .max(10)
+}
+
 fn draw_top_row(f: &mut Frame, app: &App, area: Rect) {
     // colA/colB narrower (bounded content - core rows, a bar+graph
-    // line), DISK/NET wider (tree/address lines need more room).
+    // line); colC (DISK+NET, stacked into ONE column - 2026-08-29,
+    // "net i disk moglyby byc jeden pod drugim") gets the rest.
     let cols = Layout::new(
         Direction::Horizontal,
         [
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
-            Constraint::Percentage(30),
-            Constraint::Percentage(30),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(50),
         ],
     )
     .split(area);
 
     draw_col_a(f, app, cols[0]);
     draw_col_b(f, app, cols[1]);
-    draw_disk(f, app, cols[2]);
-    draw_net(f, app, cols[3]);
+    draw_col_c(f, app, cols[2]);
+}
+
+fn draw_col_c(f: &mut Frame, app: &App, area: Rect) {
+    // Each of DISK/NET is sized to its OWN real content instead of
+    // stretching to match the column's full height - any real leftover
+    // space here is at least confined to one place, not doubled across
+    // two separate always-full-height boxes the way it was before.
+    let disk_lines: u16 = disk_content_lines(app);
+    let net_lines: u16 = 2 + app.net.ifaces.len() as u16 * 2 + 2;
+    let parts = Layout::new(
+        Direction::Vertical,
+        [
+            Constraint::Length(disk_lines.min(area.height)),
+            Constraint::Length(net_lines.min(area.height)),
+            Constraint::Min(0),
+        ],
+    )
+    .split(area);
+    draw_disk(f, app, parts[0]);
+    draw_net(f, app, parts[1]);
 }
 
 fn draw_col_a(f: &mut Frame, app: &App, area: Rect) {
@@ -207,7 +271,7 @@ fn draw_cpu(f: &mut Frame, app: &App, area: Rect) {
     // - "cpu... brak grafu": app.cpu.agg_hist was already tracked and
     // pushed every tick, but nothing here ever actually rendered it).
     let agg_hist = app.cpu.agg_hist.as_u64();
-    let agg_graph = Line::from(raw_percent_graph(&agg_hist, inner_w, theme::PRIMARY));
+    let agg_graph = Line::from(raw_percent_graph(&agg_hist, inner_w, theme::ACCENT));
 
     let mut lines: Vec<Line> = vec![bar_line, agg_graph, legend];
 
@@ -230,7 +294,11 @@ fn draw_cpu(f: &mut Frame, app: &App, area: Rect) {
             .unwrap_or_default();
         let color = theme::tier_color(c.pct);
         let mut spans = vec![Span::styled(fixed, Style::default().fg(color))];
-        spans.extend(raw_percent_graph(&hist, graph_w, color));
+        // Real fix (2026-08-29, "graf obliczeniowy moze wszedzie na
+        // fioletowo a nie zielono") - the fixed pct/freq/temp text
+        // keeps its real severity (tier) color, but every graph glyph
+        // is purple now, consistently with every other section.
+        spans.extend(raw_percent_graph(&hist, graph_w, theme::ACCENT));
         lines.push(Line::from(spans));
     }
 
@@ -303,7 +371,7 @@ fn draw_gpu(f: &mut Frame, app: &App, area: Rect) {
     // "gpu brakuje grafu": app.gpu.util_hist was already tracked and
     // pushed every tick in gpu.rs, but nothing here ever rendered it).
     let util_hist = app.gpu.util_hist.as_u64();
-    let util_graph = Line::from(raw_percent_graph(&util_hist, inner_w, theme::PRIMARY));
+    let util_graph = Line::from(raw_percent_graph(&util_hist, inner_w, theme::ACCENT));
 
     let mut lines = vec![util_line, util_graph];
     if app.gpu.reading.mem_total_mb > 0 {
@@ -350,7 +418,7 @@ fn draw_ram(f: &mut Frame, app: &App, area: Rect) {
     // m.used_pct_hist was already tracked and pushed every tick, but
     // nothing here ever rendered it).
     let used_hist = m.used_pct_hist.as_u64();
-    let used_graph = Line::from(raw_percent_graph(&used_hist, inner_w, theme::RAM_USED));
+    let used_graph = Line::from(raw_percent_graph(&used_hist, inner_w, theme::ACCENT));
 
     let mut lines = vec![bar_line, used_graph];
     lines.push(Line::from(Span::styled(
@@ -372,13 +440,13 @@ fn draw_ram(f: &mut Frame, app: &App, area: Rect) {
             format!("swap  {}/{}", human_bytes(swap_used), human_bytes(m.swap_total as f64)),
             Style::default().fg(theme::RAM_SWAP),
         )));
+        // Real simplification (2026-08-29, "nie chce tego chce all
+        // poprostu... ile jest razem ram+swapa" - just the plain
+        // combined total, not the "(X + Y)" breakdown - the individual
+        // RAM/swap capacities are already real, separate facts visible
+        // from the used/zram/cache/swap/free lines just above this one).
         lines.push(Line::from(Span::styled(
-            format!(
-                "RAM+swap capacity: {} ({} + {})",
-                human_bytes(grand_total),
-                human_bytes(m.mem_total as f64),
-                human_bytes(m.swap_total as f64)
-            ),
+            format!("RAM+swap capacity: {}", human_bytes(grand_total)),
             Style::default().fg(theme::PRIMARY),
         )));
     } else {
@@ -472,6 +540,37 @@ fn draw_disk(f: &mut Frame, app: &App, area: Rect) {
             .map(|h| h.as_u64())
             .unwrap_or_default();
         lines.push(raw_rate_graph_line(&hist, inner_w));
+
+        // Real per-partition tree (2026-08-29, "pokazuj partycje
+        // dyskow w drzewie jak wczesniej" - re-added after an earlier
+        // simplification round dropped it). "not mounted" shown
+        // honestly rather than omitted; a real inline usage bar only
+        // when actually mounted (has_usage - see DiskPartition's own
+        // doc comment for why an unmounted partition can't have one).
+        for (i, p) in d.partitions.iter().enumerate() {
+            let last = i == d.partitions.len() - 1;
+            let connector = if last { "\u{2514}\u{2500}\u{2500} " } else { "\u{251c}\u{2500}\u{2500} " };
+            let mp = p.mountpoint.as_deref().unwrap_or("not mounted");
+            let mut spans = vec![Span::styled(
+                format!("{connector}{} {} \u{2192} {mp}", p.name, human_bytes(p.size_bytes as f64)),
+                Style::default().fg(theme::PRIMARY),
+            )];
+            if p.has_usage && p.total_bytes > 0 {
+                let used_pct = p.used_bytes as f64 / p.total_bytes as f64 * 100.0;
+                let bar = segmented_bar(
+                    &[(used_pct, theme::tier_color(used_pct)), (100.0 - used_pct, theme::NEUTRAL)],
+                    100.0,
+                    8,
+                );
+                spans.push(Span::raw(" "));
+                spans.extend(bar.spans);
+                spans.push(Span::styled(
+                    format!(" {used_pct:.0}%"),
+                    Style::default().fg(theme::PRIMARY),
+                ));
+            }
+            lines.push(Line::from(spans));
+        }
     }
     f.render_widget(Paragraph::new(lines).block(block("DISK")), area);
 }
@@ -499,10 +598,19 @@ fn raw_rate_graph_line(hist: &[u64], width: u16) -> Line<'static> {
         let frac = t - i0 as f64;
         let v = hist[i0] as f64 * (1.0 - frac) + hist[i1] as f64 * frac;
         let lvl = (v / max as f64).clamp(0.0, 1.0);
-        let idx = ((lvl * 8.0).round() as usize).min(8);
+        // Same real low-value-visibility fix as raw_percent_graph - any
+        // real nonzero rate shows at least the lowest visible glyph.
+        let idx = if v > 0.0 {
+            ((lvl * 8.0).ceil() as usize).clamp(1, 8)
+        } else {
+            0
+        };
         s.push(GLYPHS[idx]);
     }
-    Line::from(Span::styled(s, Style::default().fg(theme::PRIMARY)))
+    // Real fix (2026-08-29, "graf obliczeniowy moze wszedzie na
+    // fioletowo a nie zielono" - every activity graph is purple now,
+    // not green).
+    Line::from(Span::styled(s, Style::default().fg(theme::ACCENT)))
 }
 
 fn draw_net(f: &mut Frame, app: &App, area: Rect) {
@@ -571,9 +679,32 @@ fn draw_net(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
-    let focused = app.focus == Focus::Proc;
+    // CONTAINERS was removed entirely (2026-08-29, "containers jebac
+    // cnie... to jest jednak calkowicie zbedne") - PROC is the only
+    // focusable list now, always active, with the full bottom area to
+    // itself.
     let inner_w = area.width.saturating_sub(4);
     let show_gpu = app.gpu.reading.found;
+
+    // Real scroll-follows-cursor (2026-08-29, "chociaz z 10 linijek...
+    // albo chociaz tak ze strzalki gora dol przesuwaja ta liste" - a
+    // real terminal is often shorter than DISPLAY_CAP's full 15 rows;
+    // the visible window now follows the cursor via up/down instead of
+    // silently clipping off whatever didn't fit, which could leave the
+    // cursor's own row scrolled out of view entirely).
+    let reserved = 4u16; // border(2) + header(1) + hint(1)
+    let visible_rows = area.height.saturating_sub(reserved).max(1) as usize;
+    let total = app.procs.groups.len();
+    let start = if total <= visible_rows {
+        0
+    } else {
+        app.procs
+            .cursor
+            .saturating_sub(visible_rows.saturating_sub(1))
+            .min(total - visible_rows)
+    };
+    let end = (start + visible_rows).min(total);
+
     let mut header = format!(
         "{:<3}{:<22}{:>6} {:>6} {:>9} {:>10} {:<10}",
         "", "NAME", "CPU%", "MEM%", "MEM", "DISK", "ACTIVITY"
@@ -587,7 +718,8 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(theme::ACCENT),
     ))];
 
-    for (i, g) in app.procs.groups.iter().enumerate() {
+    for (i, g) in app.procs.groups[start..end].iter().enumerate() {
+        let i = start + i;
         if g.is_divider {
             lines.push(Line::from(Span::styled(
                 g.name.clone(),
@@ -600,7 +732,7 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
         } else {
             " "
         };
-        let selected = focused && i == app.procs.cursor;
+        let selected = i == app.procs.cursor;
         let style = if selected {
             Style::default().fg(ratatui::style::Color::Black).bg(theme::ACCENT).add_modifier(Modifier::BOLD)
         } else {
@@ -621,7 +753,11 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
             .get(&g.name)
             .map(|h| h.as_u64())
             .unwrap_or_default();
-        let graph_color = if selected { ratatui::style::Color::Black } else { style.fg.unwrap_or(theme::PRIMARY) };
+        // Real fix (2026-08-29, "graf obliczeniowy moze wszedzie na
+        // fioletowo") - purple, same as every other section's graph;
+        // selected rows keep black so it stays legible against the
+        // purple selection background instead of purple-on-purple.
+        let graph_color = if selected { ratatui::style::Color::Black } else { theme::ACCENT };
         let mut spans = vec![Span::styled(fixed, style)];
         spans.extend(raw_percent_graph(&hist, 10, graph_color));
         if show_gpu {
@@ -631,16 +767,31 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(spans));
     }
 
-    let mode_hint = format!(
-        "\u{2191}/\u{2193} select  \u{2190}\u{2192} mode:{}  space: mark",
-        app.procs.mode.label()
-    );
-    let hint = if focused {
-        format!("{mode_hint}  k: kill  /: command")
+    let scroll_hint = if total > visible_rows {
+        format!(" [{}-{}/{}]", start + 1, end, total)
     } else {
-        format!("{mode_hint}  (tab: focus this list)")
+        String::new()
     };
+    // Real refresh-interval indicator (2026-08-29, "zarzadzanie ms
+    // odwierzania") - +/- adjust app.tick_interval, shown here so the
+    // current real value is visible, not just adjustable blind.
+    let hint = format!(
+        "\u{2191}/\u{2193} select{scroll_hint}  \u{2190}\u{2192} mode:{}  space: mark  k: kill  /: command  +/-: refresh {}ms  r: record",
+        app.procs.mode.label(),
+        app.tick_interval.as_millis()
+    );
     lines.push(Line::from(Span::styled(hint, Style::default().fg(theme::ACCENT))));
+
+    // Real recording indicator (2026-08-29, "r for toggle record") -
+    // shows the real file it's actually writing to, not just an
+    // opaque on/off marker.
+    if app.recording {
+        let path = app.record_path.as_deref().unwrap_or("?");
+        lines.push(Line::from(Span::styled(
+            format!("\u{25cf} recording to {path}"),
+            Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+        )));
+    }
 
     if !app.proc_action_msg.is_empty() {
         if app.proc_action_at.map(|t| t.elapsed().as_secs() < 5).unwrap_or(false) {
@@ -657,100 +808,8 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
-    let mut title = "PROC".to_string();
-    if focused {
-        title.push_str(" [focused]");
-    }
     let _ = inner_w;
-    f.render_widget(Paragraph::new(lines).block(block(&title)), area);
-}
-
-fn draw_containers(f: &mut Frame, app: &App, area: Rect) {
-    let focused = app.focus == Focus::Containers;
-    let mut lines: Vec<Line> = Vec::new();
-    let mut idx = 0usize;
-
-    for (label, items) in [("docker", &app.docker), ("podman", &app.podman)] {
-        for c in items {
-            let selected = focused && idx == app.container_cursor;
-            let style = if selected {
-                Style::default().fg(ratatui::style::Color::Black).bg(theme::ACCENT)
-            } else if c.running {
-                Style::default().fg(theme::PRIMARY)
-            } else {
-                Style::default().fg(theme::NEUTRAL)
-            };
-            // real docker/podman status string (e.g. "Up 3 hours" /
-            // "Exited (0) 2 days ago") - more honest than a simplified
-            // up/stopped label, and this is what "wylaczone wlaczone
-            // bez roznicy... ma pokazywac" actually asked for: show it.
-            // Real bug fixed here: Rust's `{:<20}` PADS a short string
-            // but never truncates a longer one, so an image name over
-            // 20 real chars ran directly into the status text with no
-            // separator at all (confirmed in a real TestBackend render:
-            // "...debian:stableExited (0) 292 years ago"). trunc_chars
-            // below is a real, char-boundary-safe truncation (Rust's
-            // own String::truncate panics if the byte index it's given
-            // isn't on a char boundary - a real risk for any non-ASCII
-            // name, not just a cosmetic nicety).
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "{label:<8}{:<20}{:<20}{}",
-                    trunc_chars(&c.name, 20),
-                    trunc_chars(&c.image, 20),
-                    c.status
-                ),
-                style,
-            )));
-            idx += 1;
-        }
-    }
-    for v in &app.qemu {
-        lines.push(Line::from(Span::styled(
-            format!("qemu    {v}"),
-            Style::default().fg(theme::PRIMARY),
-        )));
-    }
-    for j in &app.jails {
-        lines.push(Line::from(Span::styled(
-            format!("jails   {j}"),
-            Style::default().fg(theme::PRIMARY),
-        )));
-    }
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "(no containers, VMs, or jails running)",
-            Style::default().fg(theme::PRIMARY),
-        )));
-    }
-    if !app.ports.is_empty() {
-        let ports = app.ports.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
-        lines.push(Line::from(Span::styled(
-            format!("servers: {ports}"),
-            Style::default().fg(theme::ACCENT),
-        )));
-    }
-
-    let hint = if focused {
-        "\u{2191}/\u{2193} select  s: start  x: stop  r: restart".to_string()
-    } else {
-        "\u{2191}/\u{2193} select  (tab: focus this list)".to_string()
-    };
-    lines.push(Line::from(Span::styled(hint, Style::default().fg(theme::ACCENT))));
-    if !app.container_action_msg.is_empty() {
-        if app.container_action_at.map(|t| t.elapsed().as_secs() < 5).unwrap_or(false) {
-            lines.push(Line::from(Span::styled(
-                app.container_action_msg.clone(),
-                Style::default().fg(theme::CAUTION),
-            )));
-        }
-    }
-
-    let mut title = "CONTAINERS & SERVERS".to_string();
-    if focused {
-        title.push_str(" [focused]");
-    }
-    f.render_widget(Paragraph::new(lines).block(block(&title)), area);
+    f.render_widget(Paragraph::new(lines).block(block("PROC")), area);
 }
 
 fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
@@ -759,6 +818,15 @@ fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + area.height / 2;
     let rect = Rect { x, y, width: w, height: h };
+    // Real fix (2026-08-29, "ten panel co wyskakuje nachodzi sie na ten
+    // interfejs... rysuj go na wierzchu" - the popup rendered ON TOP in
+    // draw order, but without ratatui's own Clear widget first, any
+    // cell within its rect that the Block/Paragraph itself doesn't
+    // touch (border corners aside, text-less padding, etc) still shows
+    // whatever PROC/CONTAINERS content was drawn into that same buffer
+    // cell earlier in this SAME frame - a real, well-known ratatui
+    // popup gotcha, not a z-order bug).
+    f.render_widget(ratatui::widgets::Clear, rect);
     let text = format!("/{}", app.palette_input);
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(text, Style::default().fg(theme::PRIMARY))))
