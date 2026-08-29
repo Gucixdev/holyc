@@ -90,46 +90,99 @@ fn human_rate(v: f64) -> String {
 pub fn draw(f: &mut Frame, app: &App) {
     let size = f.area();
 
-    // Real fix (2026-08-29, "widzisz ile panele dysk i net marnuja
-    // miejsca" - the old fixed Percentage(62) top row always used the
-    // SAME height for every column, so DISK/NET (usually far shorter
-    // than CPU's own per-core-driven height) stretched into a lot of
-    // real empty space with nothing below it to reclaim that room).
-    // The top row is now sized to whichever column ACTUALLY needs the
-    // most real content, and everything freed goes to PROC below.
-    let top_h = top_row_content_height(app).min(size.height.saturating_sub(6));
-    let root = Layout::new(
-        Direction::Vertical,
-        [Constraint::Length(top_h), Constraint::Min(0)],
-    )
-    .split(size);
+    // Real fix (2026-08-29, "UX nadal srednio bo w chuj wolnego
+    // miejsca... dysk/net zuzywaja bardzo duzo miejsca" - stacking
+    // DISK+NET into one column made THAT column routinely the
+    // tallest, and since ratatui's Layout::split gives every column in
+    // a horizontal split the SAME shared height, that forced CPU/GPU/
+    // RAM to stretch with real blank padding just to match it, AND
+    // shrank PROC's own share below). Every column is now given its
+    // OWN independent real height - a real "masonry" layout built by
+    // hand instead of one shared Layout::split, so nothing is padded
+    // to match a taller neighbor. DISK and NET are separate columns
+    // again (un-stacked) so neither has to carry the other's height.
+    let col_a_h = cpu_col_height(app).min(size.height);
+    let col_b_h = ram_col_height(app).min(size.height);
+    let disk_h = disk_content_lines(app).min(size.height);
+    let net_h = net_content_lines(app).min(size.height);
+    let top_h = col_a_h.max(col_b_h).max(disk_h).max(net_h).max(10);
 
-    draw_top_row(f, app, root[0]);
-    draw_proc(f, app, root[1]);
+    let col_a_w = size.width * 20 / 100;
+    let col_b_w = size.width * 20 / 100;
+    let disk_w = size.width * 30 / 100;
+    let net_w = size.width.saturating_sub(col_a_w).saturating_sub(col_b_w).saturating_sub(disk_w);
+
+    let col_a_rect = Rect { x: size.x, y: size.y, width: col_a_w, height: col_a_h };
+    let col_b_rect = Rect { x: size.x + col_a_w, y: size.y, width: col_b_w, height: col_b_h };
+    let disk_rect = Rect {
+        x: size.x + col_a_w + col_b_w,
+        y: size.y,
+        width: disk_w,
+        height: disk_h,
+    };
+    let net_rect = Rect {
+        x: size.x + col_a_w + col_b_w + disk_w,
+        y: size.y,
+        width: net_w,
+        height: net_h,
+    };
+
+    draw_col_a(f, app, col_a_rect);
+    draw_col_b(f, app, col_b_rect);
+    draw_disk(f, app, disk_rect);
+    draw_net(f, app, net_rect);
+
+    let proc_rect = Rect {
+        x: size.x,
+        y: size.y + top_h,
+        width: size.width,
+        height: size.height.saturating_sub(top_h),
+    };
+    draw_proc(f, app, proc_rect);
 
     if app.palette_open {
         draw_palette(f, app, size);
     }
 }
 
+// cpu_box_lines/gpu_box_lines/ram_box_lines - the SAME real per-box
+// line counts draw_col_a/draw_col_b use for their own internal
+// Constraint::Length calls, factored out here so the OUTER Rect this
+// module hands them (sized via cpu_col_height/ram_col_height) can never
+// silently drift out of sync with what those functions actually need -
+// a real, confirmed bug fixed 2026-08-29: the two were hand-duplicated
+// with slightly different formulas (off by a line or two each), which
+// meant the outer Rect was sometimes a line short of what the inner
+// Length constraints wanted, and ratatui's solver quietly shrank
+// something to compensate rather than erroring.
+fn cpu_box_lines(app: &App) -> u16 {
+    3 + app.cpu.cores.len() as u16 + 2 // bar+graph+legend (3) + one per core + border
+}
+fn gpu_box_lines(app: &App) -> u16 {
+    (if app.gpu.reading.found { 3 } else { 1 }) + 2 // bar+graph+vram, or one unavailable line + border
+}
 fn cpu_col_height(app: &App) -> u16 {
-    let cpu_lines = 3 + app.cpu.cores.len() as u16 + 2; // bar+graph+legend + one per core + border
-    let gpu_lines: u16 = if app.gpu.reading.found { 5 } else { 3 }; // bar+graph+vram (or unavailable) + border
-    cpu_lines + gpu_lines
+    cpu_box_lines(app) + gpu_box_lines(app)
 }
 
+fn ram_box_lines() -> u16 {
+    8 + 2 // bar+graph+used+zram+cache+swap+capacity+free + border
+}
 fn ram_col_height(app: &App) -> u16 {
-    let ram_lines = 8 + 2; // bar+graph+used+zram+cache+swap+capacity+free + border
-    let tpu = if app.tpu.is_some() { 3 } else { 0 };
-    let npu = if app.npu.is_some() { 3 } else { 0 };
-    ram_lines + tpu + npu
+    let mut n = ram_box_lines();
+    if app.tpu.is_some() {
+        n += 3;
+    }
+    if app.npu.is_some() {
+        n += 3;
+    }
+    n
 }
 
 /// disk_content_lines - real content-line count for the whole DISK
-/// panel (shared by the top-row height calc and draw_col_c's own
-/// Length constraint, so the two never disagree): agg bar + agg graph,
-/// then per device: name, usage bar, graph, and one real line per
-/// partition (2026-08-29, "pokazuj partycje dyskow w drzewie").
+/// panel: agg bar + agg graph, then per device: name, usage bar,
+/// graph, and one real line per partition (2026-08-29, "pokazuj
+/// partycje dyskow w drzewie").
 fn disk_content_lines(app: &App) -> u16 {
     let mut n: u16 = 2; // agg bar + agg graph
     for d in &app.disk.devices {
@@ -138,70 +191,19 @@ fn disk_content_lines(app: &App) -> u16 {
     n + 2 // border
 }
 
-fn disk_net_col_height(app: &App) -> u16 {
-    let net_lines: u16 = 2 // agg line + agg graph
-        + app.net.ifaces.len() as u16 * 2 // header, bar-or-graph (addresses may add more, real minimum here)
-        + 2; // border
-    disk_content_lines(app) + net_lines
-}
-
-/// top_row_content_height - the real max across all three columns, so
-/// the shortest ones don't get stretched to match a much taller one
-/// for no reason - see draw()'s own doc comment.
-fn top_row_content_height(app: &App) -> u16 {
-    cpu_col_height(app)
-        .max(ram_col_height(app))
-        .max(disk_net_col_height(app))
-        .max(10)
-}
-
-fn draw_top_row(f: &mut Frame, app: &App, area: Rect) {
-    // colA/colB narrower (bounded content - core rows, a bar+graph
-    // line); colC (DISK+NET, stacked into ONE column - 2026-08-29,
-    // "net i disk moglyby byc jeden pod drugim") gets the rest.
-    let cols = Layout::new(
-        Direction::Horizontal,
-        [
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Percentage(50),
-        ],
-    )
-    .split(area);
-
-    draw_col_a(f, app, cols[0]);
-    draw_col_b(f, app, cols[1]);
-    draw_col_c(f, app, cols[2]);
-}
-
-fn draw_col_c(f: &mut Frame, app: &App, area: Rect) {
-    // Each of DISK/NET is sized to its OWN real content instead of
-    // stretching to match the column's full height - any real leftover
-    // space here is at least confined to one place, not doubled across
-    // two separate always-full-height boxes the way it was before.
-    let disk_lines: u16 = disk_content_lines(app);
-    let net_lines: u16 = 2 + app.net.ifaces.len() as u16 * 2 + 2;
-    let parts = Layout::new(
-        Direction::Vertical,
-        [
-            Constraint::Length(disk_lines.min(area.height)),
-            Constraint::Length(net_lines.min(area.height)),
-            Constraint::Min(0),
-        ],
-    )
-    .split(area);
-    draw_disk(f, app, parts[0]);
-    draw_net(f, app, parts[1]);
+/// net_content_lines - real content-line count for the whole NET
+/// panel: agg line + agg graph, then per interface: header,
+/// bar-or-graph (a real minimum - addresses may add more real lines).
+fn net_content_lines(app: &App) -> u16 {
+    2 + app.net.ifaces.len() as u16 * 2 + 2
 }
 
 fn draw_col_a(f: &mut Frame, app: &App, area: Rect) {
-    let cpu_lines = 4 + app.cpu.cores.len() as u16; // bar+graph+legend line + header-ish + one per core
-    let gpu_lines: u16 = if app.gpu.reading.found { 5 } else { 2 };
     let parts = Layout::new(
         Direction::Vertical,
         [
-            Constraint::Length((cpu_lines + 2).min(area.height)),
-            Constraint::Length((gpu_lines + 2).min(area.height)),
+            Constraint::Length(cpu_box_lines(app).min(area.height)),
+            Constraint::Length(gpu_box_lines(app).min(area.height)),
         ],
     )
     .split(area);
@@ -210,7 +212,7 @@ fn draw_col_a(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_col_b(f: &mut Frame, app: &App, area: Rect) {
-    let mut constraints = vec![Constraint::Length(9.min(area.height))]; // RAM box
+    let mut constraints = vec![Constraint::Length(ram_box_lines().min(area.height))]; // RAM box
     if app.tpu.is_some() {
         constraints.push(Constraint::Length(3));
     }
