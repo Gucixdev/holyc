@@ -1,0 +1,8 @@
+#!/bin/sh
+# real example command file - filename IS the command name, no .sh
+# extension (this project's own standing convention). Invoked from the
+# PROC panel's "/" command palette with the selected/marked pid(s) as
+# real positional arguments.
+for pid in "$@"; do
+	kill -9 "$pid"
+done

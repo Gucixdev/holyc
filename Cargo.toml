@@ -1,0 +1,20 @@
+[package]
+name = "bsc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "bsc"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+# libc: raw FFI only (statvfs, getifaddrs) - std exposes neither, and this
+# is the standard, minimal way to reach them, not a monitoring/abstraction
+# crate like sysinfo (which this project deliberately avoids - real /proc
+# and /sys reads throughout, same as the original Go version).
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
