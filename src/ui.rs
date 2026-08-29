@@ -161,15 +161,20 @@ fn cpu_box_lines(app: &App) -> u16 {
 fn gpu_box_lines(app: &App) -> u16 {
     (if app.gpu.reading.found { 3 } else { 1 }) + 2 // bar+graph+vram, or one unavailable line + border
 }
+// 2026-08-29, "ram i gpu mogly byc chyba jednak w jednej kolumnie... a
+// nie cpu gpu" - CPU now stands alone in col_a (it's the tallest real
+// box, one line per core), and RAM+GPU share col_b instead, since
+// they're closer in real size and RAM/GPU/VRAM read as one related
+// "memory-ish" group anyway.
 fn cpu_col_height(app: &App) -> u16 {
-    cpu_box_lines(app) + gpu_box_lines(app)
+    cpu_box_lines(app)
 }
 
 fn ram_box_lines() -> u16 {
     8 + 2 // bar+graph+used+zram+cache+swap+capacity+free + border
 }
 fn ram_col_height(app: &App) -> u16 {
-    let mut n = ram_box_lines();
+    let mut n = ram_box_lines() + gpu_box_lines(app);
     if app.tpu.is_some() {
         n += 3;
     }
@@ -199,20 +204,14 @@ fn net_content_lines(app: &App) -> u16 {
 }
 
 fn draw_col_a(f: &mut Frame, app: &App, area: Rect) {
-    let parts = Layout::new(
-        Direction::Vertical,
-        [
-            Constraint::Length(cpu_box_lines(app).min(area.height)),
-            Constraint::Length(gpu_box_lines(app).min(area.height)),
-        ],
-    )
-    .split(area);
-    draw_cpu(f, app, parts[0]);
-    draw_gpu(f, app, parts[1]);
+    draw_cpu(f, app, area);
 }
 
 fn draw_col_b(f: &mut Frame, app: &App, area: Rect) {
-    let mut constraints = vec![Constraint::Length(ram_box_lines().min(area.height))]; // RAM box
+    let mut constraints = vec![
+        Constraint::Length(ram_box_lines().min(area.height)), // RAM box
+        Constraint::Length(gpu_box_lines(app).min(area.height)), // GPU box
+    ];
     if app.tpu.is_some() {
         constraints.push(Constraint::Length(3));
     }
@@ -222,7 +221,8 @@ fn draw_col_b(f: &mut Frame, app: &App, area: Rect) {
     constraints.push(Constraint::Min(0));
     let parts = Layout::new(Direction::Vertical, constraints).split(area);
     draw_ram(f, app, parts[0]);
-    let mut idx = 1;
+    draw_gpu(f, app, parts[1]);
+    let mut idx = 2;
     if let Some(tpu) = &app.tpu {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
