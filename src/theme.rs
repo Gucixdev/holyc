@@ -11,7 +11,13 @@ pub const PRIMARY: Color = Color::Rgb(0, 255, 65); // green - default/active tex
 pub const WARN: Color = Color::Rgb(255, 0, 0); // red - genuine warning/critical only
 pub const CAUTION: Color = Color::Rgb(255, 255, 0); // yellow - medium severity
 pub const ACCENT: Color = Color::Rgb(153, 68, 255); // purple - borders/headers/accents/selected
-pub const NEUTRAL: Color = Color::Rgb(180, 180, 180); // light gray - "empty/available capacity", never used for a warning tier
+// 2026-08-29, "wkurwia mnie bialy kolor w progressbar" - NEUTRAL (the
+// "empty/available capacity" segment of every usage bar) used to be a
+// light gray that rendered as near-white in the user's terminal theme;
+// switched to a soft purple so it reads as "empty" without ever
+// looking white. Kept visually distinct from ACCENT (vivid) and
+// DISABLED (dim, muted) - this one sits between them.
+pub const NEUTRAL: Color = Color::Rgb(190, 150, 230); // soft purple - "empty/available capacity", never used for a warning tier
 pub const DISABLED: Color = Color::Rgb(120, 90, 160); // dim muted purple - unavailable/disabled
 
 /// tier_color - real, consistent severity coloring shared by every
