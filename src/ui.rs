@@ -773,11 +773,13 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
             .get(&g.name)
             .map(|h| h.as_u64())
             .unwrap_or_default();
-        // Real fix (2026-08-29, "graf obliczeniowy moze wszedzie na
-        // fioletowo") - purple, same as every other section's graph;
-        // selected rows keep black so it stays legible against the
-        // purple selection background instead of purple-on-purple.
-        let graph_color = if selected { ratatui::style::Color::Black } else { theme::ACCENT };
+        // Real fix (2026-08-29, "ten graf na jak proces jest selected
+        // dalej powinien byc fioletowy nie szary" - the earlier
+        // "selected rows use Black for contrast" choice rendered as a
+        // real gray in this user's own terminal color scheme, not
+        // black - many terminal themes remap ANSI black to a dark gray
+        // rather than true black). Purple always, selected or not.
+        let graph_color = theme::ACCENT;
         let mut spans = vec![Span::styled(fixed, style)];
         spans.extend(raw_percent_graph(&hist, 10, graph_color));
         if show_gpu {
