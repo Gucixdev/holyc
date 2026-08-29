@@ -798,8 +798,7 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
     // odwierzania") - +/- adjust app.tick_interval, shown here so the
     // current real value is visible, not just adjustable blind.
     let hint = format!(
-        "\u{2191}/\u{2193} select{scroll_hint}  \u{2190}\u{2192} mode:{}  space: mark  k: kill  /: command  +/-: refresh {}ms  r: record  a: anonymous",
-        app.procs.mode.label(),
+        "\u{2191}/\u{2193} select{scroll_hint}  \u{2190}\u{2192} mode  space: mark  k: kill  /: command  +/-: refresh {}ms  r: record  a: anonymous",
         app.tick_interval.as_millis()
     );
     lines.push(Line::from(Span::styled(hint, Style::default().fg(theme::ACCENT))));
@@ -843,7 +842,12 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let _ = inner_w;
-    f.render_widget(Paragraph::new(lines).block(block("PROC")), area);
+    // Real fix (2026-08-29, "indykator jaki to tryb proc powinien byc
+    // tam gdzie jest PROC" - the mode was only visible buried in the
+    // bottom hint line; now it's right in the title itself, where it's
+    // actually noticed).
+    let title = format!("PROC [{}]", app.procs.mode.label());
+    f.render_widget(Paragraph::new(lines).block(block(&title)), area);
 }
 
 fn draw_palette(f: &mut Frame, app: &App, area: Rect) {
