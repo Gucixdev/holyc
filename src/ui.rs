@@ -505,7 +505,13 @@ fn draw_disk(f: &mut Frame, app: &App, area: Rect) {
 
     for d in &app.disk.devices {
         let mut ident = d.name.clone();
-        if !d.model.is_empty() {
+        // Real anonymous-mode redaction (2026-08-29, "pod a jest
+        // anonymous... nie pokazuje i nie nagrywa wrazliwych danych") -
+        // a real drive model/serial string can help fingerprint one
+        // specific physical machine; the bare kernel device name (sda,
+        // sdb, ...) still shows, since that's not identifying on its
+        // own.
+        if !d.model.is_empty() && !app.anonymous {
             ident = format!("{} ({})", d.name, d.model);
         }
         if d.removable {
@@ -670,7 +676,19 @@ fn draw_net(f: &mut Frame, app: &App, area: Rect) {
                 .unwrap_or_default();
             lines.push(raw_rate_graph_line(&hist, inner_w));
         }
-        if !n.addrs.is_empty() {
+        // Real fix (2026-08-29, "pod a jest anonymous... nie pokazuje i
+        // nie nagrywa wrazliwych danych" - a real IP address is real,
+        // directly identifying data (network/location), the clearest
+        // case of "dane po ktorych mozemy zostac wykryci" in this whole
+        // app - redacted, not just blank, so it's obvious this is
+        // anonymous mode hiding something rather than a genuine "no
+        // addresses" state).
+        if app.anonymous {
+            lines.push(Line::from(Span::styled(
+                "  [hidden - anonymous mode]",
+                Style::default().fg(theme::NEUTRAL),
+            )));
+        } else if !n.addrs.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("  {}", n.addrs.join(", ")),
                 Style::default().fg(theme::ACCENT),
@@ -778,11 +796,23 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
     // odwierzania") - +/- adjust app.tick_interval, shown here so the
     // current real value is visible, not just adjustable blind.
     let hint = format!(
-        "\u{2191}/\u{2193} select{scroll_hint}  \u{2190}\u{2192} mode:{}  space: mark  k: kill  /: command  +/-: refresh {}ms  r: record",
+        "\u{2191}/\u{2193} select{scroll_hint}  \u{2190}\u{2192} mode:{}  space: mark  k: kill  /: command  +/-: refresh {}ms  r: record  a: anonymous",
         app.procs.mode.label(),
         app.tick_interval.as_millis()
     );
     lines.push(Line::from(Span::styled(hint, Style::default().fg(theme::ACCENT))));
+
+    // Real anonymous-mode indicator (2026-08-29, "pod a jest anonymous
+    // ... nie pokazuje i nie nagrywa wrazliwych danych") - shown
+    // alongside the recording indicator since the two are meant to be
+    // used together (recording/screenshotting something to share for
+    // help, e.g. on a forum, without leaking real identifying data).
+    if app.anonymous {
+        lines.push(Line::from(Span::styled(
+            "\u{25cf} anonymous mode - IPs and disk model/serial hidden",
+            Style::default().fg(theme::ACCENT).add_modifier(Modifier::BOLD),
+        )));
+    }
 
     // Real recording indicator (2026-08-29, "r for toggle record") -
     // shows the real file it's actually writing to, not just an

@@ -118,4 +118,48 @@ mod tests {
         }
         assert!(saw_color, "no styled (non-default-color) cell found in the rendered buffer");
     }
+
+    /// Real regression guard (2026-08-29, "pod a jest anonymous... nie
+    /// pokazuje... wrazliwych danych") - checks against the app's own
+    /// REAL collected addresses/models (whatever this actual host
+    /// happens to have), not a hardcoded fake value, so it stays
+    /// meaningful on any machine it runs on.
+    #[test]
+    fn anonymous_mode_redacts_identifying_data() {
+        let mut app = App::new();
+        app.tick();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        app.tick();
+        app.anonymous = true;
+
+        let backend = TestBackend::new(200, 60);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| ui::draw(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buffer.area().height {
+            for x in 0..buffer.area().width {
+                text.push_str(buffer[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+
+        for iface in &app.net.ifaces {
+            for addr in &iface.addrs {
+                assert!(
+                    !text.contains(addr.as_str()),
+                    "real IP address {addr} leaked while anonymous mode was on:\n{text}"
+                );
+            }
+        }
+        for dev in &app.disk.devices {
+            if !dev.model.is_empty() {
+                assert!(
+                    !text.contains(dev.model.as_str()),
+                    "real disk model {:?} leaked while anonymous mode was on:\n{text}",
+                    dev.model
+                );
+            }
+        }
+    }
 }

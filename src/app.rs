@@ -38,6 +38,16 @@ pub struct App {
     pub record_path: Option<String>,
     record_file: Option<std::fs::File>,
 
+    /// Real "a"-toggled anonymous mode (2026-08-29, "pod a jest
+    /// anonymous... nie pokazuje i nie nagrywa wrazliwych danych" - the
+    /// whole point is a dashboard someone could screenshot/share on a
+    /// forum for help without leaking identifying data): real IP
+    /// addresses and disk model/serial strings are redacted in the UI
+    /// while this is on. The CSV recording format never included either
+    /// field to begin with (only numeric cpu/mem/gpu/disk/net
+    /// aggregates), so recording was already anonymous by construction.
+    pub anonymous: bool,
+
     /// Real "/"-triggered command palette - typed name dispatches to
     /// commands/<name> against the current PROC selection/marks.
     pub palette_open: bool,
@@ -64,6 +74,7 @@ impl App {
             recording: false,
             record_path: None,
             record_file: None,
+            anonymous: false,
             palette_open: false,
             palette_input: String::new(),
             palette_result: String::new(),
@@ -200,6 +211,7 @@ impl App {
                 self.palette_input.clear();
             }
             K::Char('r') => self.toggle_record(),
+            K::Char('a') => self.anonymous = !self.anonymous,
             // Real refresh-interval control (2026-08-29, "zarzadzanie ms
             // odwierzania") - clamped to [100ms, 5s] so it can't be
             // tuned down into a real busy-loop or up into "never really
