@@ -100,7 +100,8 @@ impl App {
             dev.partitions = crate::procfs::list_partitions(&dev.name, &mounts);
         }
 
-        self.procs.refresh(self.mem.mem_total);
+        self.procs
+            .refresh(self.mem.mem_total, self.disk.agg_hist.last());
 
         self.record_tick();
     }

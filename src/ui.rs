@@ -725,12 +725,19 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
     };
     let end = (start + visible_rows).min(total);
 
+    // Real "%  value" column pairing (2026-08-29, "a tak powinno byc %
+    // dla cpu gpu ram disk i obok wartosci" - extends the MEM%/MEM
+    // pattern that already existed to DISK and, when a real GPU was
+    // found, GPU too). DISK% is this row's real disk_bps as a share of
+    // the real system-wide aggregate disk_bps this tick (see
+    // apply_pct_columns in proc_list.rs) - 0% when there's genuinely no
+    // disk I/O happening system-wide, never a fabricated number.
     let mut header = format!(
-        "{:<3}{:<22}{:>6} {:>6} {:>9} {:>10} {:<10}",
-        "", "NAME", "CPU%", "MEM%", "MEM", "DISK", "ACTIVITY"
+        "{:<3}{:<22}{:>6} {:>6} {:>9} {:>6} {:>10} {:<10}",
+        "", "NAME", "CPU%", "MEM%", "MEM", "DISK%", "DISK", "ACTIVITY"
     );
     if show_gpu {
-        header.push_str(&format!("{:>8}", "GPU"));
+        header.push_str(&format!("{:>6} {:>8}", "GPU%", "GPU"));
     }
     header.push_str(" PROCS");
     let mut lines = vec![Line::from(Span::styled(
@@ -761,10 +768,11 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
 
         let name = trunc_chars(&g.name, 22);
         let fixed = format!(
-            "{marker:<2} {name:<22}{:>5.1}% {:>5.1}% {:>8}M {:>10}",
+            "{marker:<2} {name:<22}{:>5.1}% {:>5.1}% {:>8}M {:>5.1}% {:>10}",
             g.cpu_pct,
             g.mem_pct,
             g.mem_mb,
+            g.disk_pct,
             human_rate(g.disk_bps)
         );
         let hist = app
@@ -783,7 +791,10 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
         let mut spans = vec![Span::styled(fixed, style)];
         spans.extend(raw_percent_graph(&hist, 10, graph_color));
         if show_gpu {
-            spans.push(Span::styled(format!("{:>8}M", g.gpu_mb), style));
+            spans.push(Span::styled(
+                format!("{:>5.1}% {:>8}M", g.gpu_pct, g.gpu_mb),
+                style,
+            ));
         }
         spans.push(Span::styled(format!("{:>5}", g.count), style));
         lines.push(Line::from(spans));

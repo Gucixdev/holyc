@@ -37,6 +37,13 @@ pub struct CpuCollector {
     /// the real core->hwmon mapping isn't stable/guessable and has to be
     /// searched for (see resolve_core_temp_paths).
     temp_paths: Option<HashMap<usize, String>>,
+    /// package_temp_path - real AMD k10temp fallback: k10temp doesn't
+    /// expose true per-core sensors the way Intel's coretemp does, only
+    /// a package-level Tctl/Tdie reading, so every core honestly shares
+    /// this one real sensor when no true per-core entry exists in
+    /// temp_paths (2026-08-29, "zrob zeby dzialalo wszedzie... kazde
+    /// cpu" - this was the confirmed AMD gap: every core showed "--C").
+    package_temp_path: Option<Option<String>>,
 }
 
 /// parse_stat_line - real /proc/stat field layout: name user nice
@@ -131,9 +138,20 @@ impl CpuCollector {
 
     fn core_temp(&mut self, core_idx: usize) -> Option<i32> {
         if self.temp_paths.is_none() {
-            self.temp_paths = Some(resolve_core_temp_paths());
+            let (per_core, package) = resolve_core_temp_paths();
+            self.temp_paths = Some(per_core);
+            self.package_temp_path = Some(package);
         }
-        let path = self.temp_paths.as_ref()?.get(&core_idx)?;
+        // Real per-core sensor (Intel coretemp "Core N" labels) wins
+        // when it exists.
+        if let Some(path) = self.temp_paths.as_ref().and_then(|m| m.get(&core_idx)) {
+            let raw: i32 = fs::read_to_string(path).ok()?.trim().parse().ok()?;
+            return Some(raw / 1000);
+        }
+        // Real AMD k10temp fallback - one real package-level sensor
+        // (Tctl/Tdie) applied to every core, honestly coarser than true
+        // per-core but still a real measured value, never fabricated.
+        let path = self.package_temp_path.as_ref()?.as_ref()?;
         let raw: i32 = fs::read_to_string(path).ok()?.trim().parse().ok()?;
         Some(raw / 1000)
     }
@@ -149,14 +167,20 @@ fn read_core_freq(core_idx: usize) -> Option<u32> {
 
 /// resolve_core_temp_paths - real coretemp/k10temp hwmon search: scan
 /// every /sys/class/hwmon/hwmon*, and for each real tempN_label file
-/// containing "Core <N>", record that hwmon's tempN_input path for
-/// core N. Not every core has its own real sensor (many CPUs only
-/// expose one or a few package-level sensors) - cores with none simply
-/// don't get an entry, and render an honest "--C" (see ui.rs).
-fn resolve_core_temp_paths() -> HashMap<usize, String> {
+/// containing "Core <N>" (Intel coretemp), record that hwmon's
+/// tempN_input path for core N. Not every core has its own real sensor
+/// - AMD's k10temp driver never exposes true per-core labels this way,
+/// only a package-level "Tctl" (preferred - it's the real value AMD's
+/// own tools/`sensors` treat as "the" CPU temp) or "Tdie" reading, which
+/// is returned separately as a real, honest fallback (see core_temp) -
+/// applied to every core rather than fabricating per-core numbers that
+/// don't exist. A CPU with neither gets a real "--C" (see ui.rs).
+fn resolve_core_temp_paths() -> (HashMap<usize, String>, Option<String>) {
     let mut map = HashMap::new();
+    let mut tctl: Option<String> = None;
+    let mut tdie: Option<String> = None;
     let Ok(entries) = fs::read_dir("/sys/class/hwmon") else {
-        return map;
+        return (map, None);
     };
     for entry in entries.flatten() {
         let hwmon_dir = entry.path();
@@ -176,19 +200,26 @@ fn resolve_core_temp_paths() -> HashMap<usize, String> {
                 continue;
             };
             let label = label.trim();
-            let Some(core_str) = label.strip_prefix("Core ") else {
-                continue;
-            };
-            let Ok(core_idx) = core_str.parse::<usize>() else {
-                continue;
-            };
             let input_path = hwmon_dir.join(format!("temp{n}_input"));
-            if input_path.exists() {
-                map.insert(core_idx, input_path.to_string_lossy().into_owned());
+            if let Some(core_str) = label.strip_prefix("Core ") {
+                if let Ok(core_idx) = core_str.parse::<usize>() {
+                    if input_path.exists() {
+                        map.insert(core_idx, input_path.to_string_lossy().into_owned());
+                    }
+                }
+                continue;
+            }
+            if !input_path.exists() {
+                continue;
+            }
+            match label {
+                "Tctl" => tctl = Some(input_path.to_string_lossy().into_owned()),
+                "Tdie" if tdie.is_none() => tdie = Some(input_path.to_string_lossy().into_owned()),
+                _ => {}
             }
         }
     }
-    map
+    (map, tctl.or(tdie))
 }
 
 // ---------- Memory ----------

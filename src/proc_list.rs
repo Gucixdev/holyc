@@ -3,11 +3,14 @@
 //! real VmRSS, DISK from a real /proc/[pid]/io byte-count delta (0 for
 //! a process this user can't read - another user's - which is an
 //! honest "unmeasurable", not a fabricated zero-usage claim), GPU from
-//! real nvidia-smi --query-compute-apps (only ever shown as a column at
-//! all when a real NVIDIA GPU was actually detected). NET is
-//! deliberately not tracked per-process anywhere in this file - there
-//! is no honest per-process byte-count source on Linux without eBPF or
-//! netlink TCP_INFO plumbing.
+//! real `nvidia-smi pmon` per-process sm%/fb (only ever shown as a
+//! column at all when a real NVIDIA GPU was actually detected - AMD/
+//! Intel have no real per-process GPU accounting source on Linux
+//! without vendor-specific eBPF plumbing this project doesn't have, so
+//! that column is honestly NVIDIA-only rather than faked for other
+//! vendors). NET is deliberately not tracked per-process anywhere in
+//! this file - there is no honest per-process byte-count source on
+//! Linux without eBPF or netlink TCP_INFO plumbing.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -30,6 +33,7 @@ pub struct ProcEntry {
     pub cpu_pct: f64,
     pub mem_mb: u64,
     pub disk_bps: f64,
+    pub gpu_pct: f64,
     pub gpu_mb: u64,
     pub is_kernel: bool,
 }
@@ -41,7 +45,9 @@ pub struct ProcGroup {
     pub cpu_pct: f64,
     pub mem_pct: f64,
     pub mem_mb: u64,
+    pub disk_pct: f64,
     pub disk_bps: f64,
+    pub gpu_pct: f64,
     pub gpu_mb: u64,
     pub pids: Vec<u32>,
     pub is_divider: bool,
@@ -79,7 +85,30 @@ impl ProcMode {
     }
 }
 
-fn group_by_name(procs: &[ProcEntry], mem_total_bytes: u64) -> Vec<ProcGroup> {
+/// apply_pct_columns - real post-aggregation "% of system total" fill-in
+/// shared by every grouping mode, same shape as the original mem_pct
+/// calc: MEM% = this group's MB / total system MB; DISK% = this
+/// group's real disk_bps / the real system-wide aggregate disk_bps
+/// (from DiskCollector.agg_hist, so it's this process's honest share of
+/// what's actually happening on disk right now, not a fabricated
+/// bound). Either total being 0 (no mem info yet, or genuinely no disk
+/// I/O happening system-wide) honestly leaves the %s at 0 rather than
+/// dividing by zero.
+fn apply_pct_columns(groups: &mut [ProcGroup], mem_total_bytes: u64, total_disk_bps: f64) {
+    if mem_total_bytes > 0 {
+        let mem_total_mb = mem_total_bytes as f64 / 1024.0 / 1024.0;
+        for g in groups.iter_mut() {
+            g.mem_pct = g.mem_mb as f64 / mem_total_mb * 100.0;
+        }
+    }
+    if total_disk_bps > 0.0 {
+        for g in groups.iter_mut() {
+            g.disk_pct = g.disk_bps / total_disk_bps * 100.0;
+        }
+    }
+}
+
+fn group_by_name(procs: &[ProcEntry], mem_total_bytes: u64, total_disk_bps: f64) -> Vec<ProcGroup> {
     let mut idx: HashMap<&str, usize> = HashMap::new();
     let mut groups: Vec<ProcGroup> = Vec::new();
     for p in procs {
@@ -89,6 +118,7 @@ fn group_by_name(procs: &[ProcEntry], mem_total_bytes: u64) -> Vec<ProcGroup> {
             g.cpu_pct += p.cpu_pct;
             g.mem_mb += p.mem_mb;
             g.disk_bps += p.disk_bps;
+            g.gpu_pct += p.gpu_pct;
             g.gpu_mb += p.gpu_mb;
             g.pids.push(p.pid);
         } else {
@@ -99,23 +129,19 @@ fn group_by_name(procs: &[ProcEntry], mem_total_bytes: u64) -> Vec<ProcGroup> {
                 cpu_pct: p.cpu_pct,
                 mem_mb: p.mem_mb,
                 disk_bps: p.disk_bps,
+                gpu_pct: p.gpu_pct,
                 gpu_mb: p.gpu_mb,
                 pids: vec![p.pid],
                 ..Default::default()
             });
         }
     }
-    if mem_total_bytes > 0 {
-        let mem_total_mb = mem_total_bytes as f64 / 1024.0 / 1024.0;
-        for g in &mut groups {
-            g.mem_pct = g.mem_mb as f64 / mem_total_mb * 100.0;
-        }
-    }
+    apply_pct_columns(&mut groups, mem_total_bytes, total_disk_bps);
     groups.sort_by(|a, b| b.cpu_pct.partial_cmp(&a.cpu_pct).unwrap());
     groups
 }
 
-fn build_raw_groups(procs: &[ProcEntry], mem_total_bytes: u64) -> Vec<ProcGroup> {
+fn build_raw_groups(procs: &[ProcEntry], mem_total_bytes: u64, total_disk_bps: f64) -> Vec<ProcGroup> {
     let mut groups: Vec<ProcGroup> = procs
         .iter()
         .map(|p| ProcGroup {
@@ -124,26 +150,22 @@ fn build_raw_groups(procs: &[ProcEntry], mem_total_bytes: u64) -> Vec<ProcGroup>
             cpu_pct: p.cpu_pct,
             mem_mb: p.mem_mb,
             disk_bps: p.disk_bps,
+            gpu_pct: p.gpu_pct,
             gpu_mb: p.gpu_mb,
             pids: vec![p.pid],
             ..Default::default()
         })
         .collect();
-    if mem_total_bytes > 0 {
-        let mem_total_mb = mem_total_bytes as f64 / 1024.0 / 1024.0;
-        for g in &mut groups {
-            g.mem_pct = g.mem_mb as f64 / mem_total_mb * 100.0;
-        }
-    }
+    apply_pct_columns(&mut groups, mem_total_bytes, total_disk_bps);
     groups.sort_by(|a, b| b.cpu_pct.partial_cmp(&a.cpu_pct).unwrap());
     groups
 }
 
-fn build_kind_groups(procs: &[ProcEntry], mem_total_bytes: u64) -> Vec<ProcGroup> {
+fn build_kind_groups(procs: &[ProcEntry], mem_total_bytes: u64, total_disk_bps: f64) -> Vec<ProcGroup> {
     let (user_procs, kernel_procs): (Vec<_>, Vec<_>) =
         procs.iter().cloned().partition(|p| !p.is_kernel);
-    let mut user_groups = group_by_name(&user_procs, mem_total_bytes);
-    let mut kernel_groups = group_by_name(&kernel_procs, mem_total_bytes);
+    let mut user_groups = group_by_name(&user_procs, mem_total_bytes, total_disk_bps);
+    let mut kernel_groups = group_by_name(&kernel_procs, mem_total_bytes, total_disk_bps);
     user_groups.truncate(KIND_SECTION_CAP);
     kernel_groups.truncate(KIND_SECTION_CAP);
 
@@ -192,7 +214,7 @@ pub struct ProcCollector {
 fn read_proc_entries(mem_total_bytes: u64, prev_jiffies: &HashMap<u32, u64>,
                       prev_io: &HashMap<u32, u64>, dt: Option<f64>) -> (Vec<ProcEntry>, HashMap<u32, u64>, HashMap<u32, u64>) {
     let hz = user_hz();
-    let gpu_mem = crate::gpu::real_nvidia_proc_mem();
+    let gpu_stats = crate::gpu::real_nvidia_proc_stats();
     let mut out = Vec::new();
     let mut cur_jiffies = HashMap::new();
     let mut cur_io = HashMap::new();
@@ -263,6 +285,7 @@ fn read_proc_entries(mem_total_bytes: u64, prev_jiffies: &HashMap<u32, u64>,
         };
 
         let is_kernel = fs::read_link(base.join("exe")).is_err();
+        let (gpu_pct, gpu_mb) = gpu_stats.get(&pid).copied().unwrap_or((0.0, 0));
 
         out.push(ProcEntry {
             pid,
@@ -270,7 +293,8 @@ fn read_proc_entries(mem_total_bytes: u64, prev_jiffies: &HashMap<u32, u64>,
             cpu_pct,
             mem_mb: mem_kb / 1024,
             disk_bps,
-            gpu_mb: gpu_mem.get(&pid).copied().unwrap_or(0),
+            gpu_pct,
+            gpu_mb,
             is_kernel,
         });
     }
@@ -279,16 +303,20 @@ fn read_proc_entries(mem_total_bytes: u64, prev_jiffies: &HashMap<u32, u64>,
 }
 
 impl ProcCollector {
-    pub fn refresh(&mut self, mem_total_bytes: u64) {
+    /// total_disk_bps - the real system-wide aggregate disk byte rate
+    /// (from DiskCollector.agg_hist.last()) this tick, used only to
+    /// compute each row's honest DISK% share; 0.0 (no I/O happening, or
+    /// not sampled yet) just leaves DISK% at 0 for every row.
+    pub fn refresh(&mut self, mem_total_bytes: u64, total_disk_bps: f64) {
         let now = Instant::now();
         let dt = self.prev_at.map(|p| now.duration_since(p).as_secs_f64());
         let (procs, cur_jiffies, cur_io) =
             read_proc_entries(mem_total_bytes, &self.prev_jiffies, &self.prev_io, dt);
 
         let mut groups = match self.mode {
-            ProcMode::App => group_by_name(&procs, mem_total_bytes),
-            ProcMode::Raw => build_raw_groups(&procs, mem_total_bytes),
-            ProcMode::Kind => build_kind_groups(&procs, mem_total_bytes),
+            ProcMode::App => group_by_name(&procs, mem_total_bytes, total_disk_bps),
+            ProcMode::Raw => build_raw_groups(&procs, mem_total_bytes, total_disk_bps),
+            ProcMode::Kind => build_kind_groups(&procs, mem_total_bytes, total_disk_bps),
         };
 
         // Real anti-jitter: keep the PREVIOUS tick's row order unless
