@@ -711,10 +711,12 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
 
     // Real scroll-follows-cursor (2026-08-29, "chociaz z 10 linijek...
     // albo chociaz tak ze strzalki gora dol przesuwaja ta liste" - a
-    // real terminal is often shorter than DISPLAY_CAP's full 15 rows;
+    // real terminal is often shorter than the full real process list;
     // the visible window now follows the cursor via up/down instead of
     // silently clipping off whatever didn't fit, which could leave the
-    // cursor's own row scrolled out of view entirely).
+    // cursor's own row scrolled out of view entirely). `total` is the
+    // REAL total group count now (2026-08-30: the old hard 15/6 caps
+    // that silently hid real processes below the cutoff were removed).
     let reserved = 4u16; // border(2) + header(1) + hint(1)
     let visible_rows = area.height.saturating_sub(reserved).max(1) as usize;
     let total = app.procs.groups.len();
@@ -735,14 +737,17 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
     // the real system-wide aggregate disk_bps this tick (see
     // apply_pct_columns in proc_list.rs) - 0% when there's genuinely no
     // disk I/O happening system-wide, never a fabricated number.
+    // 2026-08-30, "activity na samym koncu" - ACTIVITY moved to be the
+    // very last column (after PROCS too), rather than sitting between
+    // DISK and GPU/PROCS.
     let mut header = format!(
-        "{:<3}{:<22}{:>6} {:>6} {:>9} {:>6} {:>10} {:<10}",
-        "", "NAME", "CPU%", "MEM%", "MEM", "DISK%", "DISK", "ACTIVITY"
+        "{:<3}{:<22}{:>6} {:>6} {:>9} {:>6} {:>10}",
+        "", "NAME", "CPU%", "MEM%", "MEM", "DISK%", "DISK"
     );
     if show_gpu {
         header.push_str(&format!("{:>6} {:>8}", "GPU%", "GPU"));
     }
-    header.push_str(" PROCS");
+    header.push_str(&format!(" {:>5} {}", "PROCS", "ACTIVITY"));
     let mut lines = vec![Line::from(Span::styled(
         header,
         Style::default().fg(theme::ACCENT),
@@ -763,10 +768,21 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
             " "
         };
         let selected = i == app.procs.cursor;
-        let style = if selected {
-            Style::default().fg(ratatui::style::Color::Black).bg(theme::ACCENT).add_modifier(Modifier::BOLD)
+        // Real fix applied here too (2026-08-30): the graph's own
+        // "Color::Black renders as gray in this user's terminal" bug
+        // (fixed 2026-08-29 for the ACTIVITY graph) was still present
+        // for the row's own fixed text - switched to Modifier::REVERSED
+        // so the highlight always uses the row's own real color rather
+        // than a hardcoded contrast color that isn't true black
+        // everywhere.
+        let style = if g.is_ghost {
+            Style::default().fg(theme::GHOST)
         } else {
-            Style::default().fg(theme::tier_color(g.cpu_pct))
+            let mut s = Style::default().fg(theme::tier_color(g.cpu_pct));
+            if selected {
+                s = s.add_modifier(Modifier::REVERSED | Modifier::BOLD);
+            }
+            s
         };
 
         let name = trunc_chars(&g.name, 22);
@@ -785,21 +801,18 @@ fn draw_proc(f: &mut Frame, app: &App, area: Rect) {
             .map(|h| h.as_u64())
             .unwrap_or_default();
         // Real fix (2026-08-29, "ten graf na jak proces jest selected
-        // dalej powinien byc fioletowy nie szary" - the earlier
-        // "selected rows use Black for contrast" choice rendered as a
-        // real gray in this user's own terminal color scheme, not
-        // black - many terminal themes remap ANSI black to a dark gray
-        // rather than true black). Purple always, selected or not.
-        let graph_color = theme::ACCENT;
+        // dalej powinien byc fioletowy nie szary"). A ghost row's graph
+        // is gray too, matching the rest of its own row.
+        let graph_color = if g.is_ghost { theme::GHOST } else { theme::ACCENT };
         let mut spans = vec![Span::styled(fixed, style)];
-        spans.extend(raw_percent_graph(&hist, 10, graph_color));
         if show_gpu {
             spans.push(Span::styled(
                 format!("{:>5.1}% {:>8}M", g.gpu_pct, g.gpu_mb),
                 style,
             ));
         }
-        spans.push(Span::styled(format!("{:>5}", g.count), style));
+        spans.push(Span::styled(format!(" {:>5} ", g.count), style));
+        spans.extend(raw_percent_graph(&hist, 10, graph_color));
         lines.push(Line::from(spans));
     }
 

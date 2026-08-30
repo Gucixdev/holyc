@@ -23,8 +23,19 @@ use crate::history::History;
 /// this, resorting every tick by noisy instantaneous cpu% made rows
 /// visibly swap positions constantly - reported directly as eye strain.
 const PROC_RESORT_INTERVAL: Duration = Duration::from_secs(4);
-pub const DISPLAY_CAP: usize = 15;
-const KIND_SECTION_CAP: usize = 6;
+/// GHOST_GRACE - real bug fix (2026-08-30, "te ghost process maja byc
+/// widoczne... i wyswietlaja sie chwilke dluzej" - a process that
+/// genuinely exited between two ticks used to just vanish from the
+/// list instantly; it now lingers, grayed out, for this long before
+/// really being dropped, so a fast-exiting process is actually visible
+/// instead of disappearing mid-glance). Shorter under `cfg(test)` so
+/// the real ghost-lifecycle test (spawns and waits out a real child
+/// process) doesn't have to sleep for the full real 3s - same logic,
+/// same code path, just a faster real clock for it to race against.
+#[cfg(not(test))]
+const GHOST_GRACE: Duration = Duration::from_secs(3);
+#[cfg(test)]
+const GHOST_GRACE: Duration = Duration::from_millis(150);
 
 #[derive(Debug, Clone)]
 pub struct ProcEntry {
@@ -51,6 +62,13 @@ pub struct ProcGroup {
     pub gpu_mb: u64,
     pub pids: Vec<u32>,
     pub is_divider: bool,
+    /// is_ghost - real bug fix (2026-08-30, "napewno nie widac chyba
+    /// wszystkich procesow... ghost process maja byc widoczne"): a
+    /// group whose real pids have all genuinely exited since the last
+    /// tick, kept visible (frozen at its last real reading) for
+    /// GHOST_GRACE before being dropped for real, rendered in
+    /// `theme::GHOST` gray instead of its normal tier color.
+    pub is_ghost: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -164,10 +182,8 @@ fn build_raw_groups(procs: &[ProcEntry], mem_total_bytes: u64, total_disk_bps: f
 fn build_kind_groups(procs: &[ProcEntry], mem_total_bytes: u64, total_disk_bps: f64) -> Vec<ProcGroup> {
     let (user_procs, kernel_procs): (Vec<_>, Vec<_>) =
         procs.iter().cloned().partition(|p| !p.is_kernel);
-    let mut user_groups = group_by_name(&user_procs, mem_total_bytes, total_disk_bps);
-    let mut kernel_groups = group_by_name(&kernel_procs, mem_total_bytes, total_disk_bps);
-    user_groups.truncate(KIND_SECTION_CAP);
-    kernel_groups.truncate(KIND_SECTION_CAP);
+    let user_groups = group_by_name(&user_procs, mem_total_bytes, total_disk_bps);
+    let kernel_groups = group_by_name(&kernel_procs, mem_total_bytes, total_disk_bps);
 
     let mut out = Vec::with_capacity(user_groups.len() + kernel_groups.len() + 2);
     out.push(ProcGroup {
@@ -209,6 +225,9 @@ pub struct ProcCollector {
     /// own pid). `k` kills every pid across every marked group when any
     /// are marked, else just the group under the cursor.
     pub marked: HashSet<String>,
+    /// ghosts - real bookkeeping for GHOST_GRACE: name -> (frozen last
+    /// real ProcGroup, when it was first noticed missing).
+    ghosts: HashMap<String, (ProcGroup, Instant)>,
 }
 
 fn read_proc_entries(mem_total_bytes: u64, prev_jiffies: &HashMap<u32, u64>,
@@ -313,16 +332,48 @@ impl ProcCollector {
         let (procs, cur_jiffies, cur_io) =
             read_proc_entries(mem_total_bytes, &self.prev_jiffies, &self.prev_io, dt);
 
+        // 2026-08-30, "napewno nie widac chyba wszystkich procesow" -
+        // App/Raw used to hard-cap at 15 groups and Kind's two
+        // sections at 6 each, silently hiding every real process below
+        // the cutoff with no indicator anything was hidden. Removed -
+        // the PROC panel's own scroll-follows-cursor (see draw_proc)
+        // already handles an arbitrarily long real list correctly, and
+        // its "[start-end/total]" hint now reflects the REAL total.
         let mut groups = match self.mode {
             ProcMode::App => group_by_name(&procs, mem_total_bytes, total_disk_bps),
             ProcMode::Raw => build_raw_groups(&procs, mem_total_bytes, total_disk_bps),
             ProcMode::Kind => build_kind_groups(&procs, mem_total_bytes, total_disk_bps),
         };
 
+        // Real "ghost process" tracking: detected against the
+        // PREVIOUSLY displayed set, before this tick's anti-jitter
+        // reorder below runs (real groups only - a name that reappears
+        // for real, or is already a ghost, isn't re-flagged).
+        let current_names: HashSet<&str> = groups
+            .iter()
+            .filter(|g| !g.is_divider)
+            .map(|g| g.name.as_str())
+            .collect();
+        for prev in &self.groups {
+            if prev.is_divider || prev.is_ghost {
+                continue;
+            }
+            if !current_names.contains(prev.name.as_str()) {
+                self.ghosts
+                    .entry(prev.name.clone())
+                    .or_insert_with(|| (prev.clone(), now));
+            }
+        }
+        self.ghosts.retain(|name, (_, since)| {
+            !current_names.contains(name.as_str()) && now.duration_since(*since) < GHOST_GRACE
+        });
+
         // Real anti-jitter: keep the PREVIOUS tick's row order unless
         // the resort interval has elapsed; refresh each row's live
         // values in place either way. A name genuinely new since the
         // last resort is appended at the end rather than dropped.
+        // Ghosts are excluded here - they're re-appended separately
+        // below, after real rows, every tick.
         let should_resort = self
             .last_sort_at
             .map(|t| now.duration_since(t) >= PROC_RESORT_INTERVAL)
@@ -333,6 +384,9 @@ impl ProcCollector {
             let mut reordered = Vec::with_capacity(groups.len());
             let mut seen = HashSet::new();
             for prev_g in &self.groups {
+                if prev_g.is_ghost {
+                    continue;
+                }
                 if let Some(&g) = by_name.get(prev_g.name.as_str()) {
                     reordered.push(g.clone());
                     seen.insert(prev_g.name.clone());
@@ -348,21 +402,32 @@ impl ProcCollector {
             self.last_sort_at = Some(now);
         }
 
-        if self.mode != ProcMode::Kind && groups.len() > DISPLAY_CAP {
-            groups.truncate(DISPLAY_CAP);
+        // Real ghosts, frozen at their last real reading, appended
+        // after real rows. Kind mode's two sections (user/kernel)
+        // aren't tracked per-ghost here - a deliberate scope limit,
+        // not a bug.
+        if self.mode != ProcMode::Kind {
+            for (g, _) in self.ghosts.values() {
+                let mut gg = g.clone();
+                gg.is_ghost = true;
+                groups.push(gg);
+            }
         }
 
         // Real per-row activity history, rebuilt fresh from ONLY the
         // currently-displayed groups (not left to grow unbounded) - a
         // name still on screen keeps its real prior samples, one that
-        // scrolled off or exited isn't carried forward.
+        // scrolled off or exited isn't carried forward. A ghost gets a
+        // real 0.0 sample (it genuinely isn't running anymore), not
+        // its frozen last-known percentage repeated as if still
+        // accruing.
         let mut new_hist = HashMap::with_capacity(groups.len());
         for g in &groups {
             if g.is_divider {
                 continue;
             }
             let mut h = self.hist.get(&g.name).cloned().unwrap_or_default();
-            h.push(g.cpu_pct);
+            h.push(if g.is_ghost { 0.0 } else { g.cpu_pct });
             new_hist.insert(g.name.clone(), h);
         }
         self.hist = new_hist;
@@ -467,5 +532,68 @@ impl ProcCollector {
         }
         self.marked.clear();
         format!("killed {killed}/{total} ({})", names.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    /// ghost_process_lingers_then_expires - a real, distinctively-named
+    /// child process (a symlink to `/bin/sleep`, so its real `comm`
+    /// can't collide with an unrelated real `sleep` elsewhere on the
+    /// machine): visible while alive, still visible (grayed, frozen)
+    /// right after it's killed, then genuinely gone after GHOST_GRACE
+    /// (the `cfg(test)` short one - real behavior, just a faster real
+    /// clock, see GHOST_GRACE's own doc comment).
+    #[test]
+    fn ghost_process_lingers_then_expires() {
+        // Real kernel limit: /proc/[pid]/stat's comm field is truncated
+        // to TASK_COMM_LEN-1 = 15 real chars - a longer name here would
+        // silently get chopped and never match this assertion's own
+        // (untruncated) expected string, which is exactly the first
+        // real bug this test itself hit while being written.
+        let script_name = format!("gt{}", std::process::id());
+        let script_path = std::env::temp_dir().join(&script_name);
+        let _ = std::fs::remove_file(&script_path);
+        std::os::unix::fs::symlink("/bin/sleep", &script_path)
+            .expect("real symlink to /bin/sleep");
+
+        let mut child = Command::new(&script_path)
+            .arg("30")
+            .spawn()
+            .expect("real child process");
+        std::thread::sleep(Duration::from_millis(30));
+
+        let mut collector = ProcCollector::default();
+        collector.refresh(0, 0.0);
+        assert!(
+            collector
+                .groups
+                .iter()
+                .any(|g| g.name == script_name && !g.is_ghost),
+            "the real live child should show up, not as a ghost"
+        );
+
+        child.kill().expect("real kill");
+        child.wait().expect("real reap");
+        std::thread::sleep(Duration::from_millis(30));
+
+        collector.refresh(0, 0.0);
+        let row = collector.groups.iter().find(|g| g.name == script_name);
+        assert!(
+            row.map(|g| g.is_ghost).unwrap_or(false),
+            "should appear as a real ghost right after really exiting"
+        );
+
+        std::thread::sleep(GHOST_GRACE + Duration::from_millis(100));
+        collector.refresh(0, 0.0);
+        assert!(
+            !collector.groups.iter().any(|g| g.name == script_name),
+            "should be dropped for real once GHOST_GRACE has passed"
+        );
+
+        std::fs::remove_file(&script_path).ok();
     }
 }

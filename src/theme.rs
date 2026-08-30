@@ -18,6 +18,12 @@ pub const ACCENT: Color = Color::Rgb(153, 68, 255); // purple - borders/headers/
 // so NEUTRAL is now literally ACCENT, not a separate shade.
 pub const NEUTRAL: Color = ACCENT; // same purple as everything else - "empty/available capacity", never used for a warning tier
 pub const DISABLED: Color = Color::Rgb(120, 90, 160); // dim muted purple - unavailable/disabled
+// 2026-08-30, "te ghost process maja byc widoczne ale moze w szarym
+// kolorze" - a genuinely different semantic from NEUTRAL/DISABLED
+// above (a process that just exited, not "empty capacity" or "this
+// hardware isn't present") - the one deliberate real gray in the
+// theme, used nowhere else.
+pub const GHOST: Color = Color::Rgb(120, 120, 120); // dim gray - a process that just exited, shown briefly before it's dropped
 
 /// tier_color - real, consistent severity coloring shared by every
 /// section: green under 60%, yellow 60-85%, red above 85%. The one
