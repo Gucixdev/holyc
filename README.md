@@ -193,6 +193,10 @@ inspiration, and to the various contributors to the project, including:
   and for helping to keep the project running
 - Stivvo for output management and fullscreen support, and patch maintenance
 
+Also, thanks to our current lead developers:
+
+- @thanatos
+- @guidocella
 
 [wlroots]: https://gitlab.freedesktop.org/wlroots
 [dwm]: https://dwm.suckless.org/
