@@ -68,7 +68,7 @@
 #   different terminal window will be used ($NNN_TERMINAL).
 #
 #   Kitty users need something similar to the following in their kitty.conf:
-#   - `allow_remote_control yes`
+#   - `allow_remote_control socket-only`
 #   - `listen_on unix:$TMPDIR/kitty`
 #   - `enabled_layouts splits` (optional)
 #   With ImageMagick installed, this terminal can use the icat kitten to display images.
