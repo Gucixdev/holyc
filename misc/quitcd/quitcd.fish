@@ -29,8 +29,13 @@ function n --wraps nnn --description 'support nnn quit and change directory'
     # making an infinitely recursive alias
     command nnn $argv
 
-    if test -e $NNN_TMPFILE
-        source $NNN_TMPFILE
-        rm -- $NNN_TMPFILE
+    if test -e "$NNN_TMPFILE"
+        # nnn writes POSIX shell syntax, whose quoting differs from fish.
+        # NUL separation preserves paths containing (or ending in) newlines.
+        set -l lastdir (command sh -c '. "$1" && printf "%s\000" "$PWD"' sh "$NNN_TMPFILE" | string split0)
+        if set -q lastdir[1]
+            cd -- "$lastdir"
+        end
+        rm -- "$NNN_TMPFILE"
     end
 end
