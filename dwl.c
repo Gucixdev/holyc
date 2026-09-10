@@ -84,7 +84,7 @@
 /* enums */
 enum { CurNormal, CurPressed, CurMove, CurResize }; /* cursor */
 enum { XDGShell, LayerShell, X11 }; /* client types */
-enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrBlock, NUM_LAYERS }; /* scene layers */
+enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrIMPopup, LyrBlock, NUM_LAYERS }; /* scene layers */
 
 typedef union {
 	int i;
@@ -150,6 +150,7 @@ typedef struct {
 
 typedef struct {
 	struct wlr_keyboard_group *wlr_group;
+	struct wlr_keyboard *virtual_keyboard;
 
 	int nsyms;
 	const xkb_keysym_t *keysyms; /* invalid if nsyms == 0 */
@@ -456,6 +457,8 @@ static struct wlr_xwayland *xwayland;
 /* attempt to encapsulate suck into one file */
 #include "client.h"
 
+#include "ime.h"
+
 /* function implementations */
 void
 applybounds(Client *c, struct wlr_box *bbox)
@@ -713,6 +716,8 @@ cleanup(void)
 	wlr_xcursor_manager_destroy(cursor_mgr);
 
 	destroykeyboardgroup(&kb_group->destroy, NULL);
+
+	input_method_relay_finish(input_method_relay);
 
 	/* If it's not destroyed manually, it will cause a use-after-free of wlr_seat.
 	 * Destroy it until it's fixed on the wlroots side */
@@ -1465,12 +1470,15 @@ focusclient(Client *c, int lift)
 
 	if (!c) {
 		/* With no client, all we have left is to clear focus */
+		input_method_relay_set_focus(input_method_relay, NULL);
 		wlr_seat_keyboard_notify_clear_focus(seat);
 		return;
 	}
 
 	/* Change cursor surface */
 	motionnotify(0, NULL, 0, 0, 0, 0);
+
+	input_method_relay_set_focus(input_method_relay, client_surface(c));
 
 	/* Have a client, so focus its top-level wlr_surface */
 	client_notify_enter(client_surface(c), wlr_seat_get_keyboard(seat));
@@ -1674,7 +1682,7 @@ keypress(struct wl_listener *listener, void *data)
 		wl_event_source_timer_update(group->key_repeat_source, 0);
 	}
 
-	if (handled)
+	if (handled || input_method_keyboard_grab_forward_key(group, event))
 		return;
 
 	if (consumed[event->keycode]) {
@@ -1694,6 +1702,9 @@ keypressmod(struct wl_listener *listener, void *data)
 	/* This event is raised when a modifier key, such as shift or alt, is
 	 * pressed. We simply communicate this to the client. */
 	KeyboardGroup *group = wl_container_of(listener, group, modifiers);
+
+	if (input_method_keyboard_grab_forward_modifiers(group))
+		return;
 
 	wlr_seat_set_keyboard(seat, &group->wlr_group->keyboard);
 	/* Send modifiers to the client. */
@@ -2659,6 +2670,11 @@ setup(void)
 	wl_signal_add(&output_mgr->events.apply, &output_mgr_apply);
 	wl_signal_add(&output_mgr->events.test, &output_mgr_test);
 
+	input_method_manager = wlr_input_method_manager_v2_create(dpy);
+	text_input_manager = wlr_text_input_manager_v3_create(dpy);
+	input_method_relay = ecalloc(1, sizeof(*input_method_relay));
+	input_method_relay = input_method_relay_create();
+
 	/* Make sure XWayland clients don't connect to the parent X server,
 	 * e.g when running in the x11 backend or the wayland backend and the
 	 * compositor has Xwayland support */
@@ -3002,6 +3018,7 @@ virtualkeyboard(struct wl_listener *listener, void *data)
 	struct wlr_virtual_keyboard_v1 *kb = data;
 	/* virtual keyboards shouldn't share keyboard group */
 	KeyboardGroup *group = createkeyboardgroup();
+	group->virtual_keyboard = &kb->keyboard;
 	/* Set the keymap to match the group keymap */
 	wlr_keyboard_set_keymap(&kb->keyboard, group->wlr_group->keyboard.keymap);
 	LISTEN(&kb->keyboard.base.events.destroy, &group->destroy, destroykeyboardgroup);
@@ -3039,7 +3056,8 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 	int layer;
 
 	for (layer = NUM_LAYERS - 1; !surface && layer >= 0; layer--) {
-		if (!(node = wlr_scene_node_at(&layers[layer]->node, x, y, nx, ny)))
+		if (layer == LyrIMPopup ||
+				!(node = wlr_scene_node_at(&layers[layer]->node, x, y, nx, ny)))
 			continue;
 
 		if (node->type == WLR_SCENE_NODE_BUFFER)

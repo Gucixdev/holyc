@@ -166,9 +166,6 @@ indiscriminately. We will try to keep the code as small as possible.
 Features under consideration (possibly as patches) are:
 
 - Protocols made trivial by wlroots
-- Implement the text-input and input-method protocols to support IME once ibus
-  implements input-method v2 (see https://github.com/ibus/ibus/pull/2256 and
-  https://codeberg.org/dwl/dwl/pulls/235)
 
 Feature *non-goals* for the main codebase include:
 
