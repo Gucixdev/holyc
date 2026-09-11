@@ -3049,10 +3049,8 @@ void
 xytonode(double x, double y, struct wlr_surface **psurface,
 		Client **pc, LayerSurface **pl, double *nx, double *ny)
 {
-	struct wlr_scene_node *node, *pnode;
+	struct wlr_scene_node *node;
 	struct wlr_surface *surface = NULL;
-	Client *c = NULL;
-	LayerSurface *l = NULL;
 	int layer;
 
 	for (layer = NUM_LAYERS - 1; !surface && layer >= 0; layer--) {
@@ -3063,18 +3061,10 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 		if (node->type == WLR_SCENE_NODE_BUFFER)
 			surface = wlr_scene_surface_try_from_buffer(
 					wlr_scene_buffer_from_node(node))->surface;
-		/* Walk the tree to find a node that knows the client */
-		for (pnode = node; pnode && !c; pnode = &pnode->parent->node)
-			c = pnode->data;
-		if (c && c->type == LayerShell) {
-			c = NULL;
-			l = pnode->data;
-		}
 	}
 
 	if (psurface) *psurface = surface;
-	if (pc) *pc = c;
-	if (pl) *pl = l;
+	toplevel_from_wlr_surface(surface, pc, pl);
 }
 
 void
