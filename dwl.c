@@ -27,6 +27,7 @@
 #include <wlr/types/wlr_ext_data_control_v1.h>
 #include <wlr/types/wlr_ext_image_capture_source_v1.h>
 #include <wlr/types/wlr_ext_image_copy_capture_v1.h>
+#include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
@@ -119,6 +120,7 @@ typedef struct {
 		struct wlr_xwayland_surface *xwayland;
 	} surface;
 	struct wlr_xdg_toplevel_decoration_v1 *decoration;
+	struct wlr_ext_foreign_toplevel_handle_v1 *foreign_toplevel_handle;
 	struct wl_listener commit;
 	struct wl_listener map;
 	struct wl_listener maximize;
@@ -383,6 +385,7 @@ static struct wlr_virtual_keyboard_manager_v1 *virtual_keyboard_mgr;
 static struct wlr_virtual_pointer_manager_v1 *virtual_pointer_mgr;
 static struct wlr_cursor_shape_manager_v1 *cursor_shape_mgr;
 static struct wlr_output_power_manager_v1 *power_mgr;
+static struct wlr_ext_foreign_toplevel_list_v1 *foreign_toplevel_list;
 
 static struct wlr_pointer_constraints_v1 *pointer_constraints;
 static struct wlr_relative_pointer_manager_v1 *relative_pointer_mgr;
@@ -1788,6 +1791,11 @@ mapnotify(struct wl_listener *listener, void *data)
 	Monitor *m;
 	int i;
 
+	struct wlr_ext_foreign_toplevel_handle_v1_state foreign_toplevel_state = {
+		.app_id = client_get_appid(c),
+		.title = client_get_title(c),
+	};
+
 	/* Create scene tree for this client and its border */
 	c->scene = client_surface(c)->data = wlr_scene_tree_create(layers[LyrTile]);
 	/* Enabled later by a call to arrange() */
@@ -1826,6 +1834,10 @@ mapnotify(struct wl_listener *listener, void *data)
 	/* Insert this client into client lists. */
 	wl_list_insert(&clients, &c->link);
 	wl_list_insert(&fstack, &c->flink);
+
+	c->foreign_toplevel_handle = wlr_ext_foreign_toplevel_handle_v1_create(
+			foreign_toplevel_list, &foreign_toplevel_state);
+	c->foreign_toplevel_handle->data = c;
 
 	/* Set initial monitor, tags, floating status, and focus:
 	 * we always consider floating, clients that have parent and thus
@@ -2617,6 +2629,8 @@ setup(void)
 			(float [4]){0.1f, 0.1f, 0.1f, 1.0f});
 	wlr_scene_node_set_enabled(&locked_bg->node, 0);
 
+	foreign_toplevel_list = wlr_ext_foreign_toplevel_list_v1_create(dpy,1);
+
 	/* Use decoration protocols to negotiate server-side decorations */
 	wlr_server_decoration_manager_set_default_mode(
 			wlr_server_decoration_manager_create(dpy),
@@ -2880,6 +2894,10 @@ unmapnotify(struct wl_listener *listener, void *data)
 		wl_list_remove(&c->flink);
 	}
 
+	if (c->foreign_toplevel_handle) {
+		wlr_ext_foreign_toplevel_handle_v1_destroy(c->foreign_toplevel_handle);
+		c->foreign_toplevel_handle = NULL;
+	}
 	wlr_scene_node_destroy(&c->scene->node);
 	client_surface(c)->data = NULL;
 	printstatus();
@@ -3001,6 +3019,15 @@ updatetitle(struct wl_listener *listener, void *data)
 	Client *c = wl_container_of(listener, c, set_title);
 	if (c == focustop(c->mon))
 		printstatus();
+
+	if (c->foreign_toplevel_handle) {
+		struct wlr_ext_foreign_toplevel_handle_v1_state foreign_toplevel_state = {
+			.app_id = client_get_appid(c),
+			.title = client_get_title(c),
+		};
+		wlr_ext_foreign_toplevel_handle_v1_update_state(c->foreign_toplevel_handle,
+				&foreign_toplevel_state);
+	}
 }
 
 void
