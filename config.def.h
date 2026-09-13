@@ -170,3 +170,8 @@ static const Button buttons[] = {
 	{ MODKEY, BTN_MIDDLE, togglefloating, {0} },
 	{ MODKEY, BTN_RIGHT,  moveresize,     {.ui = CurResize} },
 };
+
+static const Axis axes[] = {
+	{ MODKEY, AxisUp,   spawn, SHCMD("volume-up_EXAMPLE") },
+	{ MODKEY, AxisDown, spawn, SHCMD("volume-down_EXAMPLE") },
+};

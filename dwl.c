@@ -86,6 +86,7 @@
 enum { CurNormal, CurPressed, CurMove, CurResize }; /* cursor */
 enum { XDGShell, LayerShell, X11 }; /* client types */
 enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay, LyrIMPopup, LyrBlock, NUM_LAYERS }; /* scene layers */
+enum { AxisUp, AxisRight, AxisDown, AxisLeft };
 
 typedef union {
 	int i;
@@ -93,6 +94,13 @@ typedef union {
 	float f;
 	const void *v;
 } Arg;
+
+typedef struct {
+	unsigned int mod;
+	unsigned int dir;
+	void (*func)(const Arg *);
+	const Arg arg;
+} Axis;
 
 typedef struct {
 	unsigned int mod;
@@ -628,9 +636,26 @@ axisnotify(struct wl_listener *listener, void *data)
 	/* This event is forwarded by the cursor when a pointer emits an axis event,
 	 * for example when you move the scroll wheel. */
 	struct wlr_pointer_axis_event *event = data;
+	const Axis *a;
+	unsigned int adir;
+	struct wlr_keyboard *keyboard;
+	uint32_t mods;
+
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
-	/* TODO: allow usage of scroll wheel for mousebindings, it can be implemented
-	 * by checking the event's orientation and the delta of the event */
+
+	if (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL)
+		adir = event->delta > 0 ? AxisDown : AxisUp;
+	else
+		adir = event->delta > 0 ? AxisRight : AxisLeft;
+	keyboard = wlr_seat_get_keyboard(seat);
+	mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
+	for (a = axes; a < END(axes); a++) {
+		if (CLEANMASK(mods) == CLEANMASK(a->mod) && adir == a->dir && a->func) {
+			a->func(&a->arg);
+			return;
+		}
+	}
+
 	/* Notify the client with pointer focus of the axis event. */
 	wlr_seat_pointer_notify_axis(seat,
 			event->time_msec, event->orientation, event->delta,
