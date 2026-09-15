@@ -956,8 +956,6 @@ commitnotify(struct wl_listener *listener, void *data)
 					WLR_EDGE_RIGHT);
 		return;
 	}
-
-	resize(c, c->geom, (c->isfloating && !c->isfullscreen));
 }
 
 void
