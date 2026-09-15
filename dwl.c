@@ -1749,6 +1749,7 @@ keypress(struct wl_listener *listener, void *data)
 				consumed[event->keycode] = 1;
 				key->func(&key->arg);
 				handled = 1;
+				break;
 			}
 		}
 	}
@@ -1807,8 +1808,10 @@ keyrepeat(void *data)
 
 	for (i = 0; i < group->nsyms; i++) {
 		const Key *key = keybinding(group->mods, group->keysyms[i]);
-		if (key)
+		if (key) {
 			key->func(&key->arg);
+			break;
+		}
 	}
 
 	return 0;
