@@ -377,6 +377,7 @@ static void zoom(const Arg *arg);
 static pid_t child_pid = -1;
 static int locked;
 static void *exclusive_focus;
+static Client *focused_client;
 static struct wl_display *dpy;
 static struct wl_event_loop *event_loop;
 static struct wlr_backend *backend;
@@ -1523,6 +1524,9 @@ focusclient(Client *c, int lift)
 			wlr_xdg_popup_destroy(popup);
 	}
 
+	if (old_c && old_c == exclusive_focus && client_wants_focus(old_c))
+		exclusive_focus = NULL;
+
 	/* Put the new client atop the focus stack and select its monitor */
 	if (c && !client_is_unmanaged(c)) {
 		wl_list_remove(&c->flink);
@@ -1536,24 +1540,23 @@ focusclient(Client *c, int lift)
 			client_set_border_color(c, focuscolor);
 	}
 
-	/* Deactivate old client if focus is changing */
-	if (old && (!c || client_surface(c) != old)) {
-		/* If an overlay is focused, don't focus or activate the client,
-		 * but only update its position in fstack to render its border with focuscolor
-		 * and focus it after the overlay is closed. */
-		if (old_client_type == LayerShell && wlr_scene_node_coords(
-					&old_l->scene->node, &unused_lx, &unused_ly)
-				&& old_l->layer_surface->current.layer >= ZWLR_LAYER_SHELL_V1_LAYER_TOP
-				&& old_l->layer_surface->current.keyboard_interactive == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE) {
-			return;
-		} else if (old_c && old_c == exclusive_focus && client_wants_focus(old_c)) {
-			return;
-		} else if (old_c && !client_is_unmanaged(old_c)) {
-			if (c && !client_is_unmanaged(c))
-				client_set_border_color(old_c, bordercolor);
+	/* If an overlay is focused, don't focus or activate the client,
+	 * but only update its position in fstack to render its border with focuscolor
+	 * and focus it after the overlay is closed. */
+	if (old && (!c || client_surface(c) != old)
+			&& old_client_type == LayerShell && wlr_scene_node_coords(
+				&old_l->scene->node, &unused_lx, &unused_ly)
+			&& old_l->layer_surface->current.layer >= ZWLR_LAYER_SHELL_V1_LAYER_TOP
+			&& old_l->layer_surface->current.keyboard_interactive == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)
+		return;
 
-			client_activate_surface(old, 0);
-		}
+	if (focused_client && focused_client != c && !(c && client_is_unmanaged(c))) {
+		struct wlr_surface *s = client_surface(focused_client);
+		if (c)
+			client_set_border_color(focused_client, bordercolor);
+		if (s && s->mapped)
+			client_activate_surface(s, 0);
+		focused_client = NULL;
 	}
 	printstatus();
 
@@ -1574,6 +1577,9 @@ focusclient(Client *c, int lift)
 
 	/* Activate the new client */
 	client_activate_surface(client_surface(c), 1);
+
+	if (!client_is_unmanaged(c))
+		focused_client = c;
 }
 
 void
@@ -2980,6 +2986,8 @@ unmapnotify(struct wl_listener *listener, void *data)
 		cursor_mode = CurNormal;
 		grabc = NULL;
 	}
+	if (c == focused_client)
+		focused_client = NULL;
 
 	if (client_is_unmanaged(c)) {
 		if (c == exclusive_focus) {
