@@ -170,8 +170,9 @@ typedef struct {
 	struct wlr_keyboard_group *wlr_group;
 	struct wlr_keyboard *virtual_keyboard;
 
-	xkb_keysym_t keysyms[2];
-	uint32_t mods;
+	int nsyms;
+	const xkb_keysym_t *keysyms; /* invalid if nsyms == 0 */
+	uint32_t mods; /* invalid if nsyms == 0 */
 	struct wl_event_source *key_repeat_source;
 
 	struct wl_listener modifiers;
@@ -1710,8 +1711,11 @@ keybinding(uint32_t mods, xkb_keysym_t sym)
 	 */
 	const Key *k;
 	for (k = keys; k < END(keys); k++) {
-		if (CLEANMASK(mods) == CLEANMASK(k->mod) && sym == k->keysym && k->func)
+		if (CLEANMASK(mods) == CLEANMASK(k->mod)
+				&& xkb_keysym_to_lower(sym) == xkb_keysym_to_lower(k->keysym)
+				&& k->func) {
 			return k;
+		}
 	}
 	return NULL;
 }
@@ -1719,30 +1723,28 @@ keybinding(uint32_t mods, xkb_keysym_t sym)
 void
 keypress(struct wl_listener *listener, void *data)
 {
+	int i;
 	/* This event is raised when a key is pressed or released. */
 	KeyboardGroup *group = wl_container_of(listener, group, key);
 	struct wlr_keyboard_key_event *event = data;
 
 	/* Translate libinput keycode -> xkbcommon */
 	uint32_t keycode = event->keycode + 8;
-	struct wlr_keyboard *kb = &group->wlr_group->keyboard;
-	xkb_layout_index_t layout = xkb_state_key_get_layout(kb->xkb_state, keycode);
-	int handled = 0;
+	/* Get a list of keysyms based on the keymap for this keyboard */
+	const xkb_keysym_t *syms;
+	int nsyms = xkb_state_key_get_syms(
+			group->wlr_group->keyboard.xkb_state, keycode, &syms);
 
-	// Get the keysyms for level 0 (normal) and level 1 (shifted)
-	// Only one keysym for each level:
-	// multiple keysyms per keycode don't really exist in the real world
-	for (int i = 0; i < 2; i++)
-		group->keysyms[i] = keymap_get_one_sym_by_level(kb->keymap, keycode, layout, i);
-	group->mods = wlr_keyboard_get_modifiers(&group->wlr_group->keyboard);
+	int handled = 0;
+	uint32_t mods = wlr_keyboard_get_modifiers(&group->wlr_group->keyboard);
 
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 
 	/* On _press_ if there is no active screen locker,
 	 * attempt to process a compositor keybinding. */
 	if (!locked && event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-		for (int i = 0; i < 2; i++) {
-			const Key *key = keybinding(group->mods, group->keysyms[i]);
+		for (i = 0; i < nsyms; i++) {
+			const Key *key = keybinding(mods, syms[i]);
 			if (key) {
 				consumed[event->keycode] = 1;
 				key->func(&key->arg);
@@ -1751,11 +1753,16 @@ keypress(struct wl_listener *listener, void *data)
 		}
 	}
 
-	if (handled && group->wlr_group->keyboard.repeat_info.delay > 0)
+	if (handled && group->wlr_group->keyboard.repeat_info.delay > 0) {
+		group->mods = mods;
+		group->keysyms = syms;
+		group->nsyms = nsyms;
 		wl_event_source_timer_update(group->key_repeat_source,
 				group->wlr_group->keyboard.repeat_info.delay);
-	else
+	} else {
+		group->nsyms = 0;
 		wl_event_source_timer_update(group->key_repeat_source, 0);
+	}
 
 	if (handled || input_method_keyboard_grab_forward_key(group, event))
 		return;
@@ -1791,13 +1798,14 @@ int
 keyrepeat(void *data)
 {
 	KeyboardGroup *group = data;
-	if (group->wlr_group->keyboard.repeat_info.rate <= 0)
+	int i;
+	if (!group->nsyms || group->wlr_group->keyboard.repeat_info.rate <= 0)
 		return 0;
 
 	wl_event_source_timer_update(group->key_repeat_source,
 			1000 / group->wlr_group->keyboard.repeat_info.rate);
 
-	for (int i = 0; i < 2; i++) {
+	for (i = 0; i < group->nsyms; i++) {
 		const Key *key = keybinding(group->mods, group->keysyms[i]);
 		if (key)
 			key->func(&key->arg);
