@@ -625,7 +625,7 @@ void
 input_method_relay_set_focus(struct input_method_relay *relay,
 		struct wlr_surface *surface)
 {
-	if (relay->focused_surface == surface)
+	if (!relay || relay->focused_surface == surface)
 		return;
 
 	if (relay->focused_surface)

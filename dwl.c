@@ -792,6 +792,7 @@ cleanup(void)
 	destroykeyboardgroup(&kb_group->destroy, NULL);
 
 	input_method_relay_finish(input_method_relay);
+	input_method_relay = NULL;
 
 	/* If it's not destroyed manually, it will cause a use-after-free of wlr_seat.
 	 * Destroy it until it's fixed on the wlroots side */
