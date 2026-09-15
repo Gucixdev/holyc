@@ -549,7 +549,9 @@ arrange(Monitor *m)
 	wl_list_for_each(c, &clients, link) {
 		if (c->mon == m) {
 			wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, m));
-			client_set_suspended(c, !VISIBLEON(c, m));
+			client_set_suspended(c, !VISIBLEON(c, m) &&
+					(!c->image_capture_source ||
+					wl_list_empty(&c->image_capture_source->resources)));
 		}
 	}
 
@@ -749,6 +751,8 @@ capturerequest(struct wl_listener *listener, void *data)
 
 	wlr_ext_foreign_toplevel_image_capture_source_manager_v1_request_accept(
 		request, view->image_capture_source);
+
+	client_set_suspended(view, 0);
 }
 
 void
@@ -2998,6 +3002,8 @@ unmapnotify(struct wl_listener *listener, void *data)
 #endif
 
 	wlr_scene_node_destroy(&c->image_capture_scene->tree.node);
+	c->image_capture_scene = NULL;
+	c->image_capture_source = NULL;
 	wlr_scene_node_destroy(&c->scene->node);
 	client_surface(c)->data = NULL;
 	printstatus();
