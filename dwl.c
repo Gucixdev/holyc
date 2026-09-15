@@ -933,29 +933,28 @@ commitnotify(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, commit);
 
-	if (c->surface.xdg->initial_commit) {
-		/*
-		 * Get the monitor this client will be rendered on
-		 * Note that if the user set a rule in which the client is placed on
-		 * a different monitor based on its title, this will likely select
-		 * a wrong monitor.
-		 */
-		applyrules(c);
-		if (c->mon) {
-			client_set_scale(client_surface(c), c->mon->wlr_output->scale);
-		}
-		setmon(c, NULL, 0); /* Make sure to reapply rules in mapnotify() */
-
-		wlr_xdg_toplevel_set_wm_capabilities(c->surface.xdg->toplevel,
-				WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN);
-		if (c->decoration)
-			requestdecorationmode(&c->set_decoration_mode, c->decoration);
-		wlr_xdg_toplevel_set_size(c->surface.xdg->toplevel, 0, 0);
-		if (!c->isfloating)
-			client_set_tiled(c, WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT |
-					WLR_EDGE_RIGHT);
+	if (!c->surface.xdg->initial_commit)
 		return;
-	}
+
+	/*
+	 * Get the monitor this client will be rendered on
+	 * Note that if the user set a rule in which the client is placed on
+	 * a different monitor based on its title, this will likely select
+	 * a wrong monitor.
+	 */
+	applyrules(c);
+	if (c->mon)
+		client_set_scale(client_surface(c), c->mon->wlr_output->scale);
+	setmon(c, NULL, 0); /* Make sure to reapply rules in mapnotify() */
+
+	wlr_xdg_toplevel_set_wm_capabilities(c->surface.xdg->toplevel,
+			WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN);
+	if (c->decoration)
+		requestdecorationmode(&c->set_decoration_mode, c->decoration);
+	wlr_xdg_toplevel_set_size(c->surface.xdg->toplevel, 0, 0);
+	if (!c->isfloating)
+		client_set_tiled(c, WLR_EDGE_TOP | WLR_EDGE_BOTTOM | WLR_EDGE_LEFT |
+				WLR_EDGE_RIGHT);
 }
 
 void
