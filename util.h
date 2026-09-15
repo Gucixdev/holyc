@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <xkbcommon/xkbcommon.h>
 
 #define MAX(A, B)               ((A) > (B) ? (A) : (B))
 #define MIN(A, B)               ((A) < (B) ? (A) : (B))
@@ -13,6 +14,8 @@
 static void die(const char *fmt, ...);
 static void *ecalloc(size_t nmemb, size_t size);
 static int fd_set_nonblock(int fd);
+xkb_keysym_t keymap_get_one_sym_by_level(struct xkb_keymap *keymap,
+        xkb_keycode_t key, xkb_layout_index_t layout, xkb_level_index_t level);
 
 void
 die(const char *fmt, ...) {
@@ -55,4 +58,13 @@ fd_set_nonblock(int fd) {
 	}
 
 	return 0;
+}
+
+xkb_keysym_t
+keymap_get_one_sym_by_level(struct xkb_keymap *keymap, xkb_keycode_t key,
+        xkb_layout_index_t layout, xkb_level_index_t level)
+{
+    const xkb_keysym_t *syms;
+    int count = xkb_keymap_key_get_syms_by_level(keymap, key, layout, level, &syms);
+    return count ? syms[0] : XKB_KEY_NoSymbol;
 }
