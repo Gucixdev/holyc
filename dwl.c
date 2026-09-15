@@ -1539,9 +1539,7 @@ focusclient(Client *c, int lift)
 			return;
 		} else if (old_c && old_c == exclusive_focus && client_wants_focus(old_c)) {
 			return;
-		/* Don't deactivate old client if the new one wants focus, as this causes issues with winecfg
-		 * and probably other clients */
-		} else if (old_c && !client_is_unmanaged(old_c) && (!c || !client_wants_focus(c))) {
+		} else if (old_c && !client_is_unmanaged(old_c)) {
 			client_set_border_color(old_c, bordercolor);
 
 			client_activate_surface(old, 0);
