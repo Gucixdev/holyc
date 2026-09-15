@@ -1540,7 +1540,8 @@ focusclient(Client *c, int lift)
 		} else if (old_c && old_c == exclusive_focus && client_wants_focus(old_c)) {
 			return;
 		} else if (old_c && !client_is_unmanaged(old_c)) {
-			client_set_border_color(old_c, bordercolor);
+			if (c && !client_is_unmanaged(c))
+				client_set_border_color(old_c, bordercolor);
 
 			client_activate_surface(old, 0);
 		}
