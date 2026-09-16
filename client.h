@@ -248,12 +248,12 @@ client_is_float_type(Client *c)
 			return 1;
 		}
 
-		return min.width && min.height &&
+		return min.width > 0 && min.height > 0 &&
 			(min.width == max.width || min.height == max.height);
 	}
 #endif
 
-	return c->surface.xdg->toplevel->parent || (min.width && min.height &&
+	return c->surface.xdg->toplevel->parent || (min.width > 0 && min.height > 0 &&
 			(min.width == max.width || min.height == max.height));
 }
 
