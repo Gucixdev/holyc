@@ -488,6 +488,10 @@ static struct wlr_xwayland *xwayland;
 void
 applybounds(Client *c, struct wlr_box *bbox)
 {
+	/* set minimum client size to 1 */
+	c->geom.width = MAX(1 + 2 * (int)c->bw, c->geom.width);
+	c->geom.height = MAX(1 + 2 * (int)c->bw, c->geom.height);
+
 	if (!c->isfullscreen) {
 		struct wlr_box min = {0}, max = {0};
 		client_get_size_hints(c, &max, &min);
