@@ -2814,7 +2814,6 @@ setup(void)
 
 	input_method_manager = wlr_input_method_manager_v2_create(dpy);
 	text_input_manager = wlr_text_input_manager_v3_create(dpy);
-	input_method_relay = ecalloc(1, sizeof(*input_method_relay));
 	input_method_relay = input_method_relay_create();
 
 	/* Make sure XWayland clients don't connect to the parent X server,
