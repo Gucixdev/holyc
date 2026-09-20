@@ -6,14 +6,19 @@ ifneq "$(GIT_DESC)" ""
 	VERSION=$(GIT_DESC)
 endif
 
+# real Wayland port (2026-08-24): wayland-client (windowing/input) and
+# fontconfig + freetype2 (real font resolution/rasterization via the
+# same drw.c this project shares with dmenu), via pkg-config.
+WLPKGS = wayland-client fontconfig freetype2
+
 CC	?= gcc
-CFLAGS += -Wall -std=c99 -Os -DVERSION="\"$(VERSION)\"" -D_GNU_SOURCE
-LDFLAGS += -lxcb -lxcb-xinerama -lxcb-randr
+CFLAGS += -Wall -std=c99 -Os -DVERSION="\"$(VERSION)\"" -D_GNU_SOURCE `pkg-config --cflags $(WLPKGS)`
+LDFLAGS += `pkg-config --libs $(WLPKGS)`
 CFDEBUG = -g3 -pedantic -Wall -Wunused-parameter -Wlong-long \
           -Wsign-conversion -Wconversion -Wimplicit-function-declaration
 
 EXEC = lemonbar
-SRCS = lemonbar.c utils.c
+SRCS = lemonbar.c utils.c util.c drw.c wlr-layer-shell-unstable-v1-protocol.c xdg-shell-protocol.c
 OBJS = ${SRCS:.c=.o}
 
 PREFIX?=/usr
