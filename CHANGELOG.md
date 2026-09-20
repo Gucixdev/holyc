@@ -1,12 +1,13 @@
 # Changelog
 
-* [Unreleased](#unreleased)
+* [0.8](#0.8)
 * [0.7](#0.7)
 * [0.6](#0.6)
 * [0.5](#0.5)
 
 
-## Unreleased
+## 0.8
+
 ### Added
 
 * Support for the linux-drm-syncobj-v1 protocol ([wlroots!4715][wlroots!4715], [#685][685])
@@ -17,15 +18,12 @@
 [646]: https://codeberg.org/dwl/dwl/pulls/646
 
 
-### Changed
-### Deprecated
-### Removed
 ### Fixed
 
 * Crash when a client is created while all outputs are disabled.
 
-### Security
-### Contributors
+
+Most changes in this release are not listed. See the commits for details.
 
 
 ## 0.7
