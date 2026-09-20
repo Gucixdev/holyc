@@ -1,4 +1,4 @@
-_VERSION = 0.9-dev
+_VERSION = 0.10-dev
 VERSION  = `git describe --tags --dirty 2>/dev/null || echo $(_VERSION)`
 
 PKG_CONFIG = pkg-config
