@@ -3,7 +3,7 @@
 
 include config.mk
 
-SRC = drw.c dmenu.c stest.c util.c
+SRC = drw.c dmenu.c stest.c util.c wlr-layer-shell-unstable-v1-protocol.c xdg-shell-protocol.c
 OBJ = $(SRC:.c=.o)
 
 all: dmenu stest
@@ -16,8 +16,12 @@ config.h:
 
 $(OBJ): arg.h config.h config.mk drw.h
 
-dmenu: dmenu.o drw.o util.o
-	$(CC) -o $@ dmenu.o drw.o util.o $(LDFLAGS)
+# xdg-shell-protocol.o is linked only to satisfy `xdg_popup_interface` -
+# real reference wlr-layer-shell-unstable-v1's own generated code makes
+# internally (positioning a layer surface relative to an xdg_popup) -
+# dmenu.c itself never uses xdg_popup directly.
+dmenu: dmenu.o drw.o util.o wlr-layer-shell-unstable-v1-protocol.o xdg-shell-protocol.o
+	$(CC) -o $@ dmenu.o drw.o util.o wlr-layer-shell-unstable-v1-protocol.o xdg-shell-protocol.o $(LDFLAGS)
 
 stest: stest.o
 	$(CC) -o $@ stest.o $(LDFLAGS)
