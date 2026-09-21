@@ -235,6 +235,7 @@ typedef struct {
 	const Layout *lt;
 	enum wl_output_transform rr;
 	int x, y;
+	unsigned int deftag; /* 1-based default tag for this output, 0 = tag 1 (unset) */
 } MonitorRule;
 
 typedef struct {
@@ -306,6 +307,8 @@ static Monitor *dirtomon(enum wlr_direction dir);
 static void focusclient(Client *c, int lift);
 static void focusmon(const Arg *arg);
 static void focusstack(const Arg *arg);
+static void focusdir(const Arg *arg);
+static void movedir(const Arg *arg);
 static Client *focustop(Monitor *m);
 static void fullscreennotify(struct wl_listener *listener, void *data);
 static void gpureset(struct wl_listener *listener, void *data);
@@ -355,6 +358,8 @@ static void startdrag(struct wl_listener *listener, void *data);
 static void tag(const Arg *arg);
 static void tagmon(const Arg *arg);
 static void tile(Monitor *m);
+static void deck(Monitor *m);
+static void grid(Monitor *m);
 static void togglefloating(const Arg *arg);
 static void togglefullscreen(const Arg *arg);
 static void toggletag(const Arg *arg);
@@ -366,6 +371,8 @@ static void updatemons(struct wl_listener *listener, void *data);
 static void updatetitle(struct wl_listener *listener, void *data);
 static void urgent(struct wl_listener *listener, void *data);
 static void view(const Arg *arg);
+static void shiftview(const Arg *arg);
+static void tagshiftview(const Arg *arg);
 static void virtualkeyboard(struct wl_listener *listener, void *data);
 static void virtualpointer(struct wl_listener *listener, void *data);
 static Monitor *xytomon(double x, double y);
@@ -1162,6 +1169,8 @@ createmon(struct wl_listener *listener, void *data)
 			m->m.y = r->y;
 			m->mfact = r->mfact;
 			m->nmaster = r->nmaster;
+			if (r->deftag)
+				m->tagset[0] = m->tagset[1] = 1 << (r->deftag - 1);
 			m->lt[0] = r->lt;
 			m->lt[1] = &layouts[LENGTH(layouts) > 1 && r->lt != &layouts[1]];
 			strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
@@ -1622,6 +1631,105 @@ focusstack(const Arg *arg)
 	}
 	/* If only one client is visible on selmon, then c == sel */
 	focusclient(c, 1);
+}
+
+/* focusdir/movedir: real geometry-based directional focus/swap, added
+ * to match the user's own Hyprland movefocus/movewindow l/r/u/d
+ * keybindings - dwm/dwl's native focusstack() only cycles tiling
+ * order (next/prev), it has no concept of spatial direction, so this
+ * compares client geometry centers instead (same real approach the
+ * well-known dwm "focusdir"/"movestack" community patches use). */
+/* focusdir/movedir: real geometry-based directional focus/swap, added
+ * to match the user's own Hyprland movefocus/movewindow l/r/u/d
+ * keybindings - dwm/dwl's native focusstack() only cycles tiling
+ * order (next/prev), it has no concept of spatial direction, so this
+ * compares client geometry centers instead (same real approach the
+ * well-known dwm "focusdir"/"movestack" community patches use). */
+void
+focusdir(const Arg *arg)
+{
+	Client *sel = focustop(selmon), *c, *best = NULL;
+	int dx, dy, bx, by, cx, cy;
+	double dist, bestdist = 1e18;
+
+	if (!sel)
+		return;
+	dx = (arg->i == WLR_DIRECTION_LEFT) ? -1 : (arg->i == WLR_DIRECTION_RIGHT) ? 1 : 0;
+	dy = (arg->i == WLR_DIRECTION_UP) ? -1 : (arg->i == WLR_DIRECTION_DOWN) ? 1 : 0;
+	bx = sel->geom.x + sel->geom.width / 2;
+	by = sel->geom.y + sel->geom.height / 2;
+	wl_list_for_each(c, &clients, link) {
+		if (c == sel || !VISIBLEON(c, selmon))
+			continue;
+		cx = c->geom.x + c->geom.width / 2;
+		cy = c->geom.y + c->geom.height / 2;
+		if (dx && (cx - bx) * dx <= 0)
+			continue;
+		if (dy && (cy - by) * dy <= 0)
+			continue;
+		dist = (double)(cx - bx) * (cx - bx) + (double)(cy - by) * (cy - by);
+		if (dist < bestdist) {
+			bestdist = dist;
+			best = c;
+		}
+	}
+	if (best)
+		focusclient(best, 1);
+}
+
+void
+movedir(const Arg *arg)
+{
+	Client *sel = focustop(selmon), *c, *target = NULL;
+	struct wl_list *selprev, *targetprev;
+	int dx, dy, bx, by, cx, cy;
+	double dist, bestdist = 1e18;
+
+	if (!sel || sel->isfullscreen || sel->isfloating)
+		return;
+	dx = (arg->i == WLR_DIRECTION_LEFT) ? -1 : (arg->i == WLR_DIRECTION_RIGHT) ? 1 : 0;
+	dy = (arg->i == WLR_DIRECTION_UP) ? -1 : (arg->i == WLR_DIRECTION_DOWN) ? 1 : 0;
+	bx = sel->geom.x + sel->geom.width / 2;
+	by = sel->geom.y + sel->geom.height / 2;
+	wl_list_for_each(c, &clients, link) {
+		if (c == sel || !VISIBLEON(c, selmon) || c->isfloating)
+			continue;
+		cx = c->geom.x + c->geom.width / 2;
+		cy = c->geom.y + c->geom.height / 2;
+		if (dx && (cx - bx) * dx <= 0)
+			continue;
+		if (dy && (cy - by) * dy <= 0)
+			continue;
+		dist = (double)(cx - bx) * (cx - bx) + (double)(cy - by) * (cy - by);
+		if (dist < bestdist) {
+			bestdist = dist;
+			target = c;
+		}
+	}
+	if (!target)
+		return;
+	/* swap sel and target's tiling-order list positions, handling the
+	 * adjacent-neighbour case separately since removing one before
+	 * reinserting the other would otherwise corrupt the prev pointer
+	 * of a node that IS the one just removed */
+	selprev = sel->link.prev;
+	targetprev = target->link.prev;
+	if (targetprev == &sel->link) {
+		/* order: sel, target -> target, sel */
+		wl_list_remove(&sel->link);
+		wl_list_insert(&target->link, &sel->link);
+	} else if (selprev == &target->link) {
+		/* order: target, sel -> sel, target */
+		wl_list_remove(&target->link);
+		wl_list_insert(&sel->link, &target->link);
+	} else {
+		wl_list_remove(&sel->link);
+		wl_list_insert(targetprev, &sel->link);
+		wl_list_remove(&target->link);
+		wl_list_insert(selprev, &target->link);
+	}
+	focusclient(sel, 1);
+	arrange(selmon);
 }
 
 /* We probably should change the name of this: it sounds like it
@@ -2914,6 +3022,81 @@ tile(Monitor *m)
 }
 
 void
+deck(Monitor *m)
+{
+	/* i3-style "stacking": nmaster clients tile in the master column,
+	 * every other client fills the whole stack column at once (only the
+	 * focused one is visible, raised to top). */
+	unsigned int i, n = 0, mw, my, nm = m->nmaster > 0 ? (unsigned int)m->nmaster : 0;
+	Client *c;
+
+	wl_list_for_each(c, &clients, link)
+		if (VISIBLEON(c, m) && !c->isfloating && !c->isfullscreen)
+			n++;
+	if (n == 0)
+		return;
+
+	if (n > nm)
+		mw = nm ? (unsigned int)(m->w.width * m->mfact) : 0;
+	else
+		mw = m->w.width;
+	i = my = 0;
+	wl_list_for_each(c, &clients, link) {
+		if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
+			continue;
+		if (i < nm) {
+			resize(c, (struct wlr_box){.x = m->w.x, .y = m->w.y + my, .width = mw,
+				.height = (m->w.height - my) / (MIN(n, nm) - i)}, 0);
+			my += c->geom.height;
+		} else {
+			resize(c, (struct wlr_box){.x = m->w.x + mw, .y = m->w.y,
+				.width = m->w.width - mw, .height = m->w.height}, 0);
+		}
+		i++;
+	}
+	if ((c = focustop(m)))
+		wlr_scene_node_raise_to_top(&c->scene->node);
+}
+
+void
+grid(Monitor *m)
+{
+	/* even grid of all tiled clients (classic dwm grid patch). */
+	unsigned int i = 0, n = 0, cols, rows, col, row, cw, ch, cx, cy, rr;
+	Client *c;
+
+	wl_list_for_each(c, &clients, link)
+		if (VISIBLEON(c, m) && !c->isfloating && !c->isfullscreen)
+			n++;
+	if (n == 0)
+		return;
+
+	for (cols = 0; cols <= n / 2; cols++)
+		if (cols * cols >= n)
+			break;
+	if (n == 5)
+		cols = 2;
+	rows = cols ? (n + cols - 1) / cols : n;
+	cw = cols ? (unsigned int)m->w.width / cols : (unsigned int)m->w.width;
+
+	wl_list_for_each(c, &clients, link) {
+		if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
+			continue;
+		col = i / rows;
+		row = i % rows;
+		rr = (n - col * rows) < rows ? (n - col * rows) : rows;
+		ch = (unsigned int)m->w.height / (rr ? rr : 1u);
+		cx = m->w.x + col * cw;
+		cy = m->w.y + row * ch;
+		resize(c, (struct wlr_box){
+			.x = cx, .y = cy,
+			.width  = (col == cols - 1) ? (m->w.x + m->w.width  - cx) : cw,
+			.height = (row == rr   - 1) ? (m->w.y + m->w.height - cy) : ch}, 0);
+		i++;
+	}
+}
+
+void
 togglefloating(const Arg *arg)
 {
 	Client *sel = focustop(selmon);
@@ -3176,6 +3359,59 @@ view(const Arg *arg)
 	focusclient(focustop(selmon), 1);
 	arrange(selmon);
 	printstatus();
+}
+
+/* shiftview/tagshiftview: real replacement for the user's own real
+ * Hyprland setup, a custom $HOME/.config/src/workspcswitch script
+ * bound to Z/X (prev/next) and Shift+Z/X (move client, then follow) -
+ * that script's own real, documented behaviour is "oba monitory
+ * jednoczesnie" (both monitors simultaneously): every connected
+ * output's active tag shifts together by the same delta, not just
+ * selmon's. dwl's tags are natively per-output already (each Monitor
+ * has its own tagset[]), so this walks the real `mons` list instead
+ * of only touching selmon, matching that synchronized-shift
+ * behaviour for real rather than approximating it. */
+void
+shiftview(const Arg *arg)
+{
+	Monitor *m;
+	unsigned int cur, next;
+
+	wl_list_for_each(m, &mons, link) {
+		cur = m->tagset[m->seltags];
+		if (arg->i > 0)
+			next = (cur == (1u << (TAGCOUNT - 1))) ? 1u : cur << 1;
+		else
+			next = (cur == 1u) ? (1u << (TAGCOUNT - 1)) : cur >> 1;
+		m->seltags ^= 1;
+		m->tagset[m->seltags] = next;
+		arrange(m);
+	}
+	focusclient(focustop(selmon), 1);
+	printstatus();
+}
+
+void
+tagshiftview(const Arg *arg)
+{
+	Client *sel = focustop(selmon);
+	unsigned int cur, next;
+
+	if (!sel)
+		return;
+	cur = sel->tags & TAGMASK;
+	if (!cur)
+		return;
+	if (arg->i > 0)
+		next = (cur == (1u << (TAGCOUNT - 1))) ? 1u : cur << 1;
+	else
+		next = (cur == 1u) ? (1u << (TAGCOUNT - 1)) : cur >> 1;
+	sel->tags = next;
+	arrange(selmon);
+	/* move AND follow, matching the real script's own move_prev/
+	 * move_next naming (a plain tag-move without shifting the view
+	 * would leave the just-moved client invisible on selmon) */
+	shiftview(arg);
 }
 
 void

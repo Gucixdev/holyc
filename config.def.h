@@ -33,7 +33,9 @@ static const Layout layouts[] = {
 	/* symbol     arrange function */
 	{ "[]=",      tile },
 	{ "><>",      NULL },    /* no layout function means floating behavior */
-	{ "[M]",      monocle },
+	{ "[M]",      monocle },    /* i3 "tabbed" */
+	{ "[D]",      deck },       /* i3 "stacking" */
+	{ "HHH",      grid },
 };
 
 /* monitors */
@@ -41,10 +43,10 @@ static const Layout layouts[] = {
  * WARNING: negative values other than (-1, -1) cause problems with Xwayland clients due to
  * https://gitlab.freedesktop.org/xorg/xserver/-/issues/899 */
 static const MonitorRule monrules[] = {
-   /* name        mfact  nmaster scale layout       rotate/reflect                x    y
+   /* name        mfact  nmaster scale layout       rotate/reflect                x    y  deftag
     * example of a HiDPI laptop monitor:
     { "eDP-1",    0.5f,  1,      2,    &layouts[0], WL_OUTPUT_TRANSFORM_NORMAL,   -1,  -1 }, */
-	{ NULL,       0.55f, 1,      1,    &layouts[0], WL_OUTPUT_TRANSFORM_NORMAL,   -1,  -1 },
+	{ NULL,       0.55f, 1,      1,    &layouts[0], WL_OUTPUT_TRANSFORM_NORMAL,   -1,  -1,  0 },
 	/* default monitor rule: can be changed but cannot be eliminated; at least one monitor rule must exist */
 };
 
@@ -131,6 +133,23 @@ static const Key keys[] = {
 	{ MODKEY,                    XKB_KEY_l,           setmfact,         {.f = +0.05f} },
 	{ MODKEY,                    XKB_KEY_Return,      zoom,             {0} },
 	{ MODKEY,                    XKB_KEY_Tab,         view,             {0} },
+	/* i3 layouts: split / floating / tabbed are t f m above; stacking and grid: */
+	{ MODKEY,                    XKB_KEY_s,          setlayout,      {.v = &layouts[3]} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_T,          setlayout,      {.v = &layouts[4]} },
+	/* directional focus / move (all four directions - Up and Down were missing before) */
+	{ MODKEY,                    XKB_KEY_Left,       focusdir,       {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY,                    XKB_KEY_Right,      focusdir,       {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY,                    XKB_KEY_Up,         focusdir,       {.i = WLR_DIRECTION_UP} },
+	{ MODKEY,                    XKB_KEY_Down,       focusdir,       {.i = WLR_DIRECTION_DOWN} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Left,       movedir,        {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Right,      movedir,        {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Up,         movedir,        {.i = WLR_DIRECTION_UP} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Down,       movedir,        {.i = WLR_DIRECTION_DOWN} },
+	/* workspaces: previous / next tag, and move the window along */
+	{ MODKEY,                    XKB_KEY_z,          shiftview,      {.i = -1} },
+	{ MODKEY,                    XKB_KEY_x,          shiftview,      {.i = +1} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Z,          tagshiftview,   {.i = -1} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_X,          tagshiftview,   {.i = +1} },
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_c,           killclient,       {0} },
 	{ MODKEY,                    XKB_KEY_t,           setlayout,        {.v = &layouts[0]} },
 	{ MODKEY,                    XKB_KEY_f,           setlayout,        {.v = &layouts[1]} },
