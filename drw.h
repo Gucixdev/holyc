@@ -15,7 +15,8 @@
 #include FT_FREETYPE_H
 
 typedef struct Fnt {
-	unsigned int h;      /* real line height, in pixels */
+	unsigned int h;      /* real line height, in pixels (already multiplied by scale) */
+	int scale;           /* integer upscale of a bitmap (.bdf) font whose strike is smaller than asked for, else 1 */
 	FT_Face face;
 	FcPattern *pattern;
 	struct Fnt *next;

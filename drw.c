@@ -104,7 +104,7 @@ xfont_create(Drw *drw, const char *fontname, FcPattern *fontpattern)
 	FcResult result;
 	FcChar8 *file;
 	double size = 12;
-	int index = 0;
+	int index = 0, scale;
 
 	(void)drw;
 	if (fontname) {
@@ -139,12 +139,31 @@ xfont_create(Drw *drw, const char *fontname, FcPattern *fontpattern)
 		fprintf(stderr, "error, cannot load font file: '%s'\n", file);
 		goto fail;
 	}
-	FT_Set_Pixel_Sizes(face, 0, (FT_UInt)size);
+	scale = 1;
+	if (FT_HAS_FIXED_SIZES(face) && !FT_IS_SCALABLE(face)) {
+		/* bitmap font (.bdf/.pcf): only the strikes it ships exist. Take the biggest one that is not
+		 * larger than asked for (else the smallest) and scale it up by a whole factor, so an 8x8 font
+		 * requested at 16 px is drawn as crisp 2x2 blocks. */
+		int i, best = 0, bestpx = 0;
+		for (i = 0; i < face->num_fixed_sizes; i++) {
+			int px = face->available_sizes[i].height;
+			if ((px <= (int)size && px > bestpx) || (bestpx == 0) || (bestpx > (int)size && px < bestpx)) {
+				best = i;
+				bestpx = px;
+			}
+		}
+		FT_Select_Size(face, best);
+		if (bestpx > 0 && size >= bestpx * 2)
+			scale = (int)(size / bestpx);
+	} else {
+		FT_Set_Pixel_Sizes(face, 0, (FT_UInt)size);
+	}
 
 	font = ecalloc(1, sizeof(Fnt));
 	font->face = face;
+	font->scale = scale;
 	/* real ascent+descent, in pixels (26.6 fixed point -> integer) */
-	font->h = (unsigned int)((face->size->metrics.ascender - face->size->metrics.descender) >> 6);
+	font->h = (unsigned int)(((face->size->metrics.ascender - face->size->metrics.descender) >> 6) * scale);
 	font->pattern = (match == fontpattern) ? NULL : match;
 	if (pattern && pattern != match)
 		FcPatternDestroy(pattern);
@@ -302,29 +321,39 @@ drw_rect(Drw *drw, int x, int y, unsigned int w, unsigned int h, int filled, int
 }
 
 static void
-drawglyph(Drw *drw, FT_Face face, long codepoint, int pen_x, int baseline_y, Clr fg)
+drawglyph(Drw *drw, FT_Face face, int scale, long codepoint, int pen_x, int baseline_y, Clr fg)
 {
 	FT_UInt gi = FT_Get_Char_Index(face, (FT_ULong)codepoint);
 	FT_Bitmap *bm;
-	int gx, gy, bx, by;
+	int gx, gy, bx, by, sx, sy;
 
 	if (FT_Load_Glyph(face, gi, FT_LOAD_RENDER))
 		return;
 	bm = &face->glyph->bitmap;
-	gx = pen_x + face->glyph->bitmap_left;
-	gy = baseline_y - face->glyph->bitmap_top;
+	gx = pen_x + face->glyph->bitmap_left * scale;
+	gy = baseline_y - face->glyph->bitmap_top * scale;
 	for (by = 0; by < (int)bm->rows; by++)
-		for (bx = 0; bx < (int)bm->width; bx++)
-			blendpixel(drw, gx + bx, gy + by, fg, bm->buffer[by * bm->pitch + bx]);
+		for (bx = 0; bx < (int)bm->width; bx++) {
+			unsigned char a;
+			if (bm->pixel_mode == FT_PIXEL_MODE_MONO)   /* 1 bit per pixel, MSB first: bitmap fonts */
+				a = (bm->buffer[by * bm->pitch + (bx >> 3)] >> (7 - (bx & 7))) & 1 ? 255 : 0;
+			else
+				a = bm->buffer[by * bm->pitch + bx];
+			if (!a)
+				continue;
+			for (sy = 0; sy < scale; sy++)
+				for (sx = 0; sx < scale; sx++)
+					blendpixel(drw, gx + bx * scale + sx, gy + by * scale + sy, fg, a);
+		}
 }
 
 static unsigned int
-glyphadvance(FT_Face face, long codepoint)
+glyphadvance(FT_Face face, int scale, long codepoint)
 {
 	FT_UInt gi = FT_Get_Char_Index(face, (FT_ULong)codepoint);
 	if (FT_Load_Glyph(face, gi, FT_LOAD_DEFAULT))
 		return 0;
-	return (unsigned int)(face->glyph->advance.x >> 6);
+	return (unsigned int)((face->glyph->advance.x >> 6) * scale);
 }
 
 int
@@ -405,11 +434,11 @@ drw_text(Drw *drw, int x, int y, unsigned int w, unsigned int h, unsigned int lp
 			if (render) {
 				const char *p = utf8str;
 				int px = x;
-				ty = y + (int)(h - usedfont->h) / 2 + (int)(usedfont->face->size->metrics.ascender >> 6);
+				ty = y + (int)(h - usedfont->h) / 2 + (int)(usedfont->face->size->metrics.ascender >> 6) * usedfont->scale;
 				while (p < utf8str + utf8strlen) {
 					long cp; int err, n = utf8decode(p, &cp, &err);
-					drawglyph(drw, usedfont->face, cp, px, ty, drw->scheme[invert ? ColBg : ColFg]);
-					px += (int)glyphadvance(usedfont->face, cp);
+					drawglyph(drw, usedfont->face, usedfont->scale, cp, px, ty, drw->scheme[invert ? ColBg : ColFg]);
+					px += (int)glyphadvance(usedfont->face, usedfont->scale, cp);
 					p += n;
 				}
 			}
@@ -516,7 +545,7 @@ drw_font_getexts(Fnt *font, const char *text, unsigned int len, unsigned int *w,
 
 	while (i < len && text[i]) {
 		n = utf8decode(text + i, &cp, &err);
-		width += glyphadvance(font->face, cp);
+		width += glyphadvance(font->face, font->scale, cp);
 		i += (unsigned)n;
 	}
 	if (w)
