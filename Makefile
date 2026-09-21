@@ -6,7 +6,7 @@ include config.mk
 SRC = drw.c dmenu.c stest.c util.c wlr-layer-shell-unstable-v1-protocol.c xdg-shell-protocol.c
 OBJ = $(SRC:.c=.o)
 
-all: dmenu stest
+all: dmenu stest dmenu_menu
 
 .c.o:
 	$(CC) -c $(CFLAGS) $<
@@ -26,8 +26,12 @@ dmenu: dmenu.o drw.o util.o wlr-layer-shell-unstable-v1-protocol.o xdg-shell-pro
 stest: stest.o
 	$(CC) -o $@ stest.o $(LDFLAGS)
 
+# the main menu (apps, games, scripts, calculator, clipboard) on top of dmenu; plain C + libm
+dmenu_menu: dmenu_menu.c
+	$(CC) -std=gnu11 -O2 -Wall -Wextra -o $@ dmenu_menu.c -lm
+
 clean:
-	rm -f dmenu stest $(OBJ) dmenu-$(VERSION).tar.gz
+	rm -f dmenu stest dmenu_menu $(OBJ) dmenu-$(VERSION).tar.gz
 
 dist: clean
 	mkdir -p dmenu-$(VERSION)
@@ -40,7 +44,8 @@ dist: clean
 
 install: all
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	cp -f dmenu dmenu_path dmenu_run stest $(DESTDIR)$(PREFIX)/bin
+	cp -f dmenu dmenu_menu dmenu_path dmenu_run stest $(DESTDIR)$(PREFIX)/bin
+	chmod 755 $(DESTDIR)$(PREFIX)/bin/dmenu_menu
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/dmenu
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/dmenu_path
 	chmod 755 $(DESTDIR)$(PREFIX)/bin/dmenu_run
@@ -55,6 +60,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/dmenu\
 		$(DESTDIR)$(PREFIX)/bin/dmenu_path\
 		$(DESTDIR)$(PREFIX)/bin/dmenu_run\
+		$(DESTDIR)$(PREFIX)/bin/dmenu_menu\
 		$(DESTDIR)$(PREFIX)/bin/stest\
 		$(DESTDIR)$(MANPREFIX)/man1/dmenu.1\
 		$(DESTDIR)$(MANPREFIX)/man1/stest.1
