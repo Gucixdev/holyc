@@ -8518,48 +8518,86 @@ static void preview_pane(const char *path)
 	}
 
 	const char *name = pdents[cur].name;
-	char *argv[12] = {NULL};
-	char *out = NULL;
 
-	/* Files that are not text: ask a tool for information; fall back to `file` */
+	/* Files that are not text: a block of file information, then whatever a tool can tell about the content */
 	if (!is_text_file(fpath)) {
-		if (has_ext(name, ".mp3 .flac .ogg .opus .wav .m4a .aac .wma .mp4 .mkv .webm .avi .mov .m4v ")) {
-			char *a[] = {"ffprobe", "-v", "error", "-show_entries",
-				"format=format_long_name,duration,bit_rate:format_tags",
-				"-of", "default=noprint_wrappers=1", fpath, NULL};
-			memcpy(argv, a, sizeof(a));
-		} else if (has_ext(name, ".zip .tar .tgz .gz .xz .bz2 .zst .7z .rar .iso .cpio ")) {
-			char *a[] = {"bsdtar", "-tf", fpath, NULL};
-			memcpy(argv, a, sizeof(a));
-		} else if (has_ext(name, ".pdf ")) {
-			char *a[] = {"pdftotext", "-l", "1", "-layout", fpath, "-", NULL};
-			memcpy(argv, a, sizeof(a));
-		}
-
+		char *info = malloc(PREVIEW_MAX_LINE), *tool = NULL;
 		int st = 0;
 
-		if (argv[0]) {
-			out = capture_cmd(argv, 16384, 3000, &st);
-			if (out && (st != 0 || !*out)) { /* tool missing or failed */
-				free(out);
-				out = NULL;
-			}
-		}
-		if (!out) {
-			char *a[] = {"file", "-b", fpath, NULL};
+		if (!info)
+			return;
 
-			out = capture_cmd(a, 2048, 2000, &st);
-			if (out && (st != 0 || !*out)) {
-				free(out);
-				out = NULL;
-			}
+		struct passwd *pw = getpwuid(sb.st_uid);
+		struct group *gr = getgrgid(sb.st_gid);
+		char mtime[24], atime[24], ctime_[24], rwx[11] = "----------";
+		struct tm t;
+
+		localtime_r(&sb.st_mtime, &t);
+		strftime(mtime, sizeof(mtime), "%Y-%m-%d %H:%M:%S", &t);
+		localtime_r(&sb.st_atime, &t);
+		strftime(atime, sizeof(atime), "%Y-%m-%d %H:%M:%S", &t);
+		localtime_r(&sb.st_ctime, &t);
+		strftime(ctime_, sizeof(ctime_), "%Y-%m-%d %H:%M:%S", &t);
+		for (int i = 0; i < 9; ++i)
+			if (sb.st_mode & (0400 >> i))
+				rwx[i + 1] = "rwxrwxrwx"[i];
+
+		char *fa[] = {"file", "-b", "--mime-type", fpath, NULL}, *fb[] = {"file", "-b", fpath, NULL};
+		char *mime = capture_cmd(fa, 256, 2000, &st), *type = capture_cmd(fb, 1024, 2000, &st);
+
+		for (char *q = mime; q && *q; ++q)
+			if (*q == '\n')
+				*q = '\0';
+		snprintf(info, PREVIEW_MAX_LINE,
+			 "Size      %s (%lld bytes)\n"
+			 "Mode      %03o  %s\n"
+			 "Owner     %s:%s   Links %ju   Inode %ju\n"
+			 "Modified  %s\n"
+			 "Accessed  %s\n"
+			 "Changed   %s\n"
+			 "MIME      %s\n"
+			 "Type      %s",
+			 coolsize(sb.st_size), (long long)sb.st_size, (unsigned)(sb.st_mode & 0777), rwx,
+			 pw ? pw->pw_name : xitoa(sb.st_uid), gr ? gr->gr_name : xitoa(sb.st_gid),
+			 (uintmax_t)sb.st_nlink, (uintmax_t)sb.st_ino,
+			 mtime, atime, ctime_, mime ? mime : "?", type ? type : "?\n");
+		free(mime);
+		free(type);
+
+		/* content information: the first tool that is installed and succeeds */
+#define TRY(...) do { \
+			char *a_[] = {__VA_ARGS__, NULL}; \
+			if (!tool) { \
+				tool = capture_cmd(a_, 16384, 3000, &st); \
+				if (tool && (st != 0 || !*tool)) { free(tool); tool = NULL; } \
+			} \
+		} while (0)
+		if (has_ext(name, ".jpg .jpeg .png .gif .webp .tif .tiff .bmp .heic .heif .avif .ico .svg .cr2 .nef .arw .dng .raw .psd .xcf ")) {
+			TRY("exiftool", "-S", "-q", "-fast2", "-x", "FileName", "-x", "Directory", "-x", "FilePermissions",
+			    "-x", "FileModifyDate", "-x", "FileAccessDate", "-x", "FileInodeChangeDate", "-x", "ExifToolVersion", fpath);
+			TRY("identify", "-format", "Format      %m\nGeometry    %w x %h\nDepth       %z-bit\nColorspace  %[colorspace]\n"
+			    "Type        %[type]\nAlpha       %A\nResolution  %x x %y %U\nCompression %C\nQuality     %Q\nFrames      %n\n"
+			    "%[EXIF:*]", fpath);
+		} else if (has_ext(name, ".mp3 .flac .ogg .oga .opus .wav .m4a .aac .wma .aiff .mka .mp4 .mkv .webm .avi .mov .m4v .flv .wmv .mpg .mpeg .ts ")) {
+			TRY("ffprobe", "-v", "error", "-show_entries",
+			    "format=format_long_name,duration,size,bit_rate:format_tags:stream=codec_type,codec_name,width,height,"
+			    "r_frame_rate,sample_rate,channels,bit_rate", "-of", "default=noprint_wrappers=1", fpath);
+			TRY("mediainfo", fpath);
+		} else if (has_ext(name, ".pdf ")) {
+			TRY("pdfinfo", fpath);
+		} else if (has_ext(name, ".zip .tar .tgz .gz .xz .bz2 .zst .7z .rar .iso .cpio .deb .rpm .jar .apk ")) {
+			TRY("bsdtar", "-tvf", fpath);
 		}
-		if (out) {
-			mvprintw(row, PREVIEW_COL, "[%s]", coolsize(sb.st_size));
-			draw_text_block(out, row + 1, maxrows, previewwidth);
-			free(out);
-		} else
-			mvprintw(row, PREVIEW_COL, "[binary %s]", coolsize(sb.st_size));
+#undef TRY
+
+		int r = draw_text_block(info, row, maxrows, previewwidth);
+
+		free(info);
+		if (tool) {
+			if (r + 1 < maxrows)
+				draw_text_block(tool, r + 1, maxrows, previewwidth);
+			free(tool);
+		}
 		return;
 	}
 
