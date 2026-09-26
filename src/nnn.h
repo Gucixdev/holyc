@@ -83,7 +83,6 @@ enum action {
 	SEL_CHMODX,
 	SEL_ARCHIVE,
 	SEL_SORT,
-	SEL_SORTMENU,
 	SEL_REDRAW,
 	SEL_SEL,
 	SEL_SELMUL,
@@ -127,7 +126,6 @@ enum action {
 
 /* Private key code for Alt+q (outside the Unicode range, never typed) */
 #define KEY_ALT_Q 0x110001
-#define KEY_ALT_T 0x110002
 
 /* Associate a pressed key to an action */
 struct key {
@@ -286,8 +284,6 @@ static struct key bindings[] = {
 	{ CONTROL('Q'),   SEL_QUIT },
 	/* Alt+q: quit without changing the shell's directory (nextsel() turns Alt+q into this key) */
 	{ KEY_ALT_Q,      SEL_QUITNOCD },
-	/* Alt+t: the old sort prompt (disk usage, version, ...) */
-	{ KEY_ALT_T,      SEL_SORTMENU },
 	/* Quit with an error code */
 	{ 'Q',            SEL_QUITERR },
 #ifndef NOMOUSE

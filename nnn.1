@@ -425,10 +425,12 @@ runs in the terminal and waits for Enter. Batch rename moved to \fBR\fR.
 The preview pane shows text, directory listings, and for other files the output of a tool: \fBffprobe\fR for audio/video
 (tags, duration), \fBbsdtar\fR for archives, \fBpdftotext\fR for PDF, otherwise \fBfile\fR. It is text only (no pixels).
 .Pp
-.Sh CYCLING THE SORT ORDER
-\fBt\fR (or \fB^T\fR) cycles: name A-Z, name Z-A, size big-small, size small-big, time new-old, time old-new, extension.
-Directories always come first and the current order is shown in the status bar. \fBAlt+t\fR opens the old order prompt
-(disk usage, version order, ...).
+.Sh SORT MENU
+\fBt\fR (or \fB^T\fR) opens a box listing every order with a line saying what it does; press the key of the one you want,
+\fBEsc\fR cancels: \fBn\fR name A-Z, \fBN\fR name Z-A, \fBv\fR version (file2 before file10), \fBs\fR/\fBS\fR size big/small first,
+\fBt\fR/\fBT\fR time new/old first (\fBT\fR in the main list picks which time), \fBe\fR extension, \fBd\fR disk usage, \fBa\fR apparent size.
+Directories always come first. The current order is inverse in the box and written in the status bar. In a window too
+short for the box the same keys are offered in one line.
 .Pp
 .Sh QUITTING
 With \fBNNN_TMPFILE\fR set (cd on quit) every normal quit (\fBq\fR in the last context, \fB^Q\fR) writes the

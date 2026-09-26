@@ -3706,8 +3706,6 @@ try_quit:
 					c = 'q'; /* Quit context */
 				else if (c == 'q')
 					c = KEY_ALT_Q; /* Alt+q: quit without cd */
-				else if (c == 't')
-					c = KEY_ALT_T; /* Alt+t: sort prompt */
 				else {
 					unget_wch(c);
 					c = ';';
@@ -6423,7 +6421,7 @@ static void show_help(const char *path)
 	      "8Alt ;  Select plugin%11=  Launch app\n"
 	       "9! ^]  Shell%19]  Cmd prompt\n"
 		  "cc  Connect remote%10u  Unmount remote/archive\n"
-	       "9t ^T  Cycle sort%13s  Manage session\n"
+	       "9t ^T  Sort menu%14s  Manage session\n"
 		  "cT  Set time type%110  Lock\n"
 		 "b^L  Redraw%18?  Help, conf\n"
 	};
@@ -7928,39 +7926,107 @@ static int set_sort_flags(int r)
 }
 
 /*
- * One key cycles through the sort orders that matter (directories always come first):
- *   name A-Z, name Z-A, size big-small, size small-big, time new-old, time old-new, extension
- * The current one is written in the status bar (sortlabel). Alt+t opens the old prompt for the rest.
+ * The sort menu (key t): every order is one key, with a line saying what it does. The current order is marked
+ * and shown in the status bar (sortlabel). Directories always come first.
  */
-static int sortmode(void)
+static const struct sortopt {
+	char key;
+	const char *steps;  /* set_sort_flags() keys: 'c' clears first */
+	const char *label, *what;
+} sortopts[] = {
+	{ 'n', "c",   "Name A-Z",        "alphabetical, ignoring case (the default)" },
+	{ 'N', "cr",  "Name Z-A",        "reverse alphabetical" },
+	{ 'v', "cv",  "Version",         "natural numbers: file2 comes before file10" },
+	{ 's', "cs",  "Size, big first", "largest files first" },
+	{ 'S', "csr", "Size, small first", "smallest files first" },
+	{ 't', "ct",  "Time, new first", "newest first (which time it is: key T)" },
+	{ 'T', "ctr", "Time, old first", "oldest first" },
+	{ 'e', "ce",  "Extension",       "grouped by extension, then by name" },
+	{ 'd', "cd",  "Disk usage",      "space used on disk, directories included" },
+	{ 'a', "ca",  "Apparent size",   "size as ls -l shows it, dirs included" },
+};
+
+static int sortcur(void) /* index into sortopts of the order that is active now */
 {
+	if (cfg.blkorder)
+		return cfg.apparentsz ? 9 : 8;
 	if (cfg.timeorder)
-		return cfg.reverse ? 5 : 4;
+		return cfg.reverse ? 6 : 5;
 	if (cfg.sizeorder)
-		return cfg.reverse ? 3 : 2;
+		return cfg.reverse ? 4 : 3;
 	if (cfg.extnorder)
-		return 6;
+		return 7;
+	if (cfg.version)
+		return 2;
 	return cfg.reverse ? 1 : 0;
 }
 
 static const char *sortlabel(void)
 {
-	static const char *const names[] = {
-		"name A-Z", "name Z-A", "size big-small", "size small-big", "time new-old", "time old-new", "ext A-Z",
-	};
-
-	return names[sortmode()];
+	return sortopts[sortcur()].label;
 }
 
-static int sort_cycle(void)
+/* Returns the key set_sort_flags() ended with, or 0 when cancelled. */
+static int sort_menu(void)
 {
-	static const char *const steps[] = {"", "r", "s", "sr", "t", "tr", "e"};
-	int next = (cfg.blkorder || cfg.apparentsz) ? 0 : (sortmode() + 1) % 7;
-	int r = set_sort_flags('c');
+	const int n = (int)ELEMENTS(sortopts), h = n + 4, w = MIN(xcols - 2, 76);
+	WINDOW *win;
+	wint_t ch = 0;
+	int r = 0, curopt = sortcur();
 
-	for (const char *k = steps[next]; *k; ++k)
-		r = set_sort_flags(*k);
-	return r ? r : 'c';
+	if (h > xlines || w < 40) {
+		/* too small for the box: one line with the same keys */
+		char line[512] = "sort:";
+
+		for (int i = 0; i < n; ++i)
+			snprintf(line + strlen(line), sizeof(line) - strlen(line), "  %c %s", sortopts[i].key, sortopts[i].label);
+		wint_t k = (wint_t)get_input(line);
+
+		for (int i = 0; i < n; ++i)
+			if ((wint_t)sortopts[i].key == k) {
+				for (const char *st = sortopts[i].steps; *st; ++st)
+					r = set_sort_flags(*st);
+				return r;
+			}
+		return 0;
+	}
+
+	win = newwin(h, w, (xlines - h) / 2, (xcols - w) / 2);
+	if (!win)
+		return 0;
+	keypad(win, TRUE);
+
+	for (;;) {
+		werase(win);
+		box(win, 0, 0);
+		mvwprintw(win, 0, 2, " Sort by ");
+		for (int i = 0; i < n; ++i) {
+			if (i == curopt)
+				wattron(win, A_REVERSE);
+			mvwprintw(win, i + 1, 1, " %c  %-18s %-*.*s", sortopts[i].key, sortopts[i].label,
+				  w - 26, w - 26, sortopts[i].what);
+			if (i == curopt)
+				wattroff(win, A_REVERSE);
+		}
+		mvwprintw(win, h - 2, 2, "press the key of an order   Esc: cancel   (inverse = current)");
+		wrefresh(win);
+
+		if (get_wch(&ch) == ERR)
+			continue;
+		if (ch == 27 || ch == 'q' || ch == CONTROL('Q'))
+			break;
+		for (int i = 0; i < n; ++i) {
+			if ((wint_t)sortopts[i].key != ch)
+				continue;
+			for (const char *k = sortopts[i].steps; *k; ++k)
+				r = set_sort_flags(*k);
+			goto done;
+		}
+	}
+done:
+	delwin(win);
+	touchwin(stdscr);
+	return r;
 }
 
 static bool set_time_type(int *presel)
@@ -8007,7 +8073,7 @@ static const struct hint {
 	{ 0, "a", "toggle all" },         { 0, "m", "multi" },       { 0, "p", "copy" },
 	{ 0, "v", "move" },        { 0, "x", "trash" },       { 0, "r", "run" },         { 0, "R", "batch rename" },
 	{ 0, "n", "new" },         { 0, "o", "open with" },   { 0, "e", "edit" },
-	{ 0, "t", "cycle sort" },
+	{ 0, "t", "sort menu" },
 	{ 0, "s", "sessions" },    { 0, "1-8", "context" },
 	{ HM_CTRL, "^A", "top" },       { HM_CTRL, "^E", "end" },        { HM_CTRL, "^D", "page down" },
 	{ HM_CTRL, "^U", "page up" },   { HM_CTRL, "^F", "file info" },  { HM_CTRL, "^N", "filter mode" },
@@ -8020,7 +8086,7 @@ static const struct hint {
 	{ HM_SHIFT, "J", "jump" },       { HM_SHIFT, "P", "preview" },    { HM_SHIFT, "Q", "quit (err)" },
 	{ HM_SHIFT, "S", "sel size" },   { HM_SHIFT, "T", "time type" },  { HM_SHIFT, "X", "rm -rf" },
 	{ HM_SHIFT, "Tab", "prev ctx" },
-	{ HM_ALT, "q", "quit, no cd" },     { HM_ALT, "t", "sort menu" },     { HM_ALT, ";", "plugin" },       { HM_ALT, "Esc", "quit ctx" },
+	{ HM_ALT, "q", "quit, no cd" },     { HM_ALT, ";", "plugin" },       { HM_ALT, "Esc", "quit ctx" },
 };
 
 static void draw_hints(void)
@@ -9507,7 +9573,6 @@ nochange:
 		case SEL_SYMLINK: // fallthrough
 		case SEL_DETAIL: // fallthrough
 		case SEL_PREVIEW: // fallthrough
-		case SEL_SORTMENU: // fallthrough
 		case SEL_SORT:
 			switch (sel) {
 			case SEL_MFLTR:
@@ -9544,11 +9609,9 @@ nochange:
 				cfg.preview ^= 1;
 				continue;
 			default: /* SEL_SORT */
-				r = (sel == SEL_SORTMENU) ? set_sort_flags(get_input(messages[MSG_ORDER])) : sort_cycle();
-				if (!r) {
-					printwait(messages[MSG_INVALID_KEY], &presel);
-					goto nochange;
-				}
+				r = sort_menu();
+				if (!r) /* cancelled */
+					continue;
 			}
 
 			if (cfg.filtermode || filterset())
