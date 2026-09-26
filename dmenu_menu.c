@@ -586,9 +586,34 @@ mainmenu(void)
 	free(r);
 }
 
+/* Use the dmenu that sits next to this binary (a source-tree build that was never installed) unless
+ * DMENU_CMD says otherwise; without one, fall back to whatever "dmenu" is in PATH. */
+static void
+default_picker(void)
+{
+	char exe[4096], cmd[4200];
+	ssize_t n;
+	char *slash;
+
+	if (getenv("DMENU_CMD") && *getenv("DMENU_CMD"))
+		return;
+	n = readlink("/proc/self/exe", exe, sizeof(exe) - 8);
+	if (n <= 0)
+		return;
+	exe[n] = '\0';
+	if (!(slash = strrchr(exe, '/')))
+		return;
+	strcpy(slash + 1, "dmenu");
+	if (access(exe, X_OK) != 0)
+		return;
+	snprintf(cmd, sizeof(cmd), "'%s' -i", exe);
+	setenv("DMENU_CMD", cmd, 0);
+}
+
 int
 main(int argc, char *argv[])
 {
+	default_picker();
 	if (argc >= 3 && !strcmp(argv[1], "--eval")) {
 		double v = evaluate(argv[2]);
 		if (v != v) {
