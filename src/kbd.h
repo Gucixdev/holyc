@@ -319,7 +319,20 @@ static void kb_csi(void)
 	if (f == 'u') {
 		/* modifier / lock keys only change the held state */
 		if ((key >= 57441 && key <= 57454) || (key >= 57358 && key <= 57360)) {
-			kb_set_mods(event == 3 ? mods : mods);
+			/*
+			 * Track the modifier key itself, not the modifier field of its own event: some terminals report
+			 * that field one step late (old state on press, new state on release), which would make the
+			 * bar change only when the key is let go.
+			 */
+			unsigned char bit = 0;
+
+			switch (key) {
+			case 57441: case 57447: bit = HM_SHIFT; break; /* left / right shift */
+			case 57442: case 57448: bit = HM_CTRL; break;
+			case 57443: case 57449: bit = HM_ALT; break;
+			}
+			if (bit)
+				kb_set_mods(event == 3 ? (unsigned char)(hint_mods & ~bit) : (unsigned char)(hint_mods | bit));
 			return;
 		}
 		kb_set_mods(mods);
