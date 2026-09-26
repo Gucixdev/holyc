@@ -15,7 +15,7 @@
  *
  * environment:
  *   DMENU_CMD      picker command (default "dmenu -i"); a prompt is added as -p
- *   DMENU_SCRIPTS  colon separated script directories
+ *   DMENU_SCRIPTS  colon separated script directories (default: ~/dev/repos/setup/bash, see DEFAULT_SCRIPTS)
  *                  (default ~/.config/src:~/.local/bin)
  *   DMENU_TERMINAL terminal for Terminal=true apps and scripts (default foot)
  *
@@ -343,6 +343,9 @@ menu_apps(int games)
 }
 
 /* ---- scripts ----------------------------------------------------------- */
+/* The folder the "Skrypty" entry lists (relative to $HOME): the bash tools collection. */
+#define DEFAULT_SCRIPTS "/dev/repos/setup/bash"
+
 static void
 menu_scripts(void)
 {
@@ -354,9 +357,7 @@ menu_scripts(void)
 	if (env && *env) {
 		dirs = xstrdup(env);
 	} else {
-		char *a = join(home(), "/.config/src", ""), *b = join(home(), "/.local/bin", "");
-		dirs = join(a, ":", b);
-		free(a); free(b);
+		dirs = join(home(), DEFAULT_SCRIPTS, ""); /* one designated folder, not every binary in ~/.local/bin */
 	}
 	for (t = strtok_r(dirs, ":", &save); t; t = strtok_r(NULL, ":", &save)) {
 		DIR *d = opendir(t);
