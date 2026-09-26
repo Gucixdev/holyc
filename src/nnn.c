@@ -7966,7 +7966,7 @@ static const struct hint {
 	{ 0, "j/k", "move" },      { 0, "Left", "back" },     { 0, "Right/Enter", "open" },
 	{ 0, "/", "filter" },      { 0, "h", "hidden" },      { 0, "l", "symlinks" },
 	{ 0, "d", "detail" },      { 0, "P", "preview" },     { 0, "Space", "select" },
-	{ 0, "a", "all" },         { 0, "m", "multi" },       { 0, "p", "copy" },
+	{ 0, "a", "toggle all" },         { 0, "m", "multi" },       { 0, "p", "copy" },
 	{ 0, "v", "move" },        { 0, "x", "trash" },       { 0, "r", "rename" },
 	{ 0, "n", "new" },         { 0, "o", "open with" },   { 0, "e", "edit" },
 	{ 0, ",", "mark" },        { 0, "b", "to mark" },     { 0, "t", "sort" },
@@ -9486,6 +9486,16 @@ nochange:
 
 				selstartid = 0;
 				selendid = ndents - 1;
+
+				/* select all is a toggle: when every entry is already selected, deselect them */
+				if (sel == SEL_SELALL) {
+					int i = 0;
+
+					while (i < ndents && (pdents[i].flags & FILE_SELECTED))
+						++i;
+					if (i == ndents)
+						sel = SEL_SELINV; /* inverting an all-selected dir selects none */
+				}
 			}
 
 			if ((nselected > LARGESEL) || (nselected && (ndents > LARGESEL))) {
