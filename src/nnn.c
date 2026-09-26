@@ -57,6 +57,8 @@
 #else
 #include <sys/sysmacros.h>
 #endif
+#include <ctype.h>
+#include <poll.h>
 #include <sys/wait.h>
 
 #ifdef __linux__ /* Fix failure due to mvaddnwstr() */
@@ -886,7 +888,7 @@ static haiku_nm_h haiku_hnd;
 /* Function macros */
 #define tolastln() move(xlines - 1, 0)
 #define tocursor() move(cur + 2 - curscroll, 0)
-#define exitcurses() do { kb_off(); endwin(); } while (0)
+#define exitcurses() do { kb_off(); move(xlines, 0); clrtoeol(); refresh(); endwin(); } while (0)
 #define istopdir(path) ((path)[1] == '\0' && (path)[0] == '/')
 #define settimeout() timeout(1000)
 #define cleartimeout() timeout(-1)
@@ -5109,6 +5111,7 @@ static inline void printent_name(const struct entry *ent, uint_t namecols)
 #define DETAIL_LEG  32
 #define DETAIL_NAME_MIN 20
 static uchar_t detail_lvl = 1; /* 1 with seconds, 0 compact */
+static bool detail_fit = TRUE; /* the detail columns fit the window (never flip cfg.showdetail for that) */
 
 static void print_time_full(const time_t *timep, const uchar_t flags)
 {
@@ -5131,7 +5134,7 @@ static void printent(int pdents_index, uint_t namecols, bool sel)
 	char ind = '\0';
 	int attrs;
 
-	if (cfg.showdetail) {
+	if (cfg.showdetail && detail_fit) {
 		int type = ent->mode & S_IFMT;
 		char perms[6] = {' ', ' ', (char)('0' + ((ent->mode >> 6) & 7)),
 				(char)('0' + ((ent->mode >> 3) & 7)),
@@ -6405,7 +6408,7 @@ static void show_help(const char *path)
 	"1FILES\n"
 	       "9o ^O  Open with%15n  Create new/link\n"
 	       "9f ^F  File stats%14P  Preview toggle\n"
-		 "b^R  Rename/dup%14r  Batch rename\n"
+		 "b^R  Rename/dup%14r  Run file%5R  Batch rename\n"
 		  "cz  Archive%17e  Edit file\n"
 		  "c*  Toggle exe%14>  Export list\n"
 	    "6Space +  (Un)select%12m-m  Select range/clear\n"
@@ -7967,7 +7970,7 @@ static const struct hint {
 	{ 0, "/", "filter" },      { 0, "h", "hidden" },      { 0, "l", "symlinks" },
 	{ 0, "d", "detail" },      { 0, "P", "preview" },     { 0, "Space", "select" },
 	{ 0, "a", "toggle all" },         { 0, "m", "multi" },       { 0, "p", "copy" },
-	{ 0, "v", "move" },        { 0, "x", "trash" },       { 0, "r", "rename" },
+	{ 0, "v", "move" },        { 0, "x", "trash" },       { 0, "r", "run" },         { 0, "R", "batch rename" },
 	{ 0, "n", "new" },         { 0, "o", "open with" },   { 0, "e", "edit" },
 	{ 0, ",", "mark" },        { 0, "b", "to mark" },     { 0, "t", "sort" },
 	{ 0, "s", "sessions" },    { 0, "1-8", "context" },   { 0, "?", "help" },
@@ -7979,7 +7982,7 @@ static const struct hint {
 	{ HM_CTRL, "^T", "sort" },      { HM_CTRL, "^Y", "next new" },   { HM_CTRL, "^J", "auto-next" },
 	{ HM_CTRL, "^G", "quit+cd" },   { HM_CTRL, "^Q", "quit" },       { HM_CTRL, "^L", "redraw" },
 	{ HM_CTRL, "^/", "to mark" },   { HM_CTRL, "^]", "shell" },
-	{ HM_SHIFT, "A", "invert sel" }, { HM_SHIFT, "E", "edit sel" },   { HM_SHIFT, "G", "end" },
+	{ HM_SHIFT, "R", "batch rename" }, { HM_SHIFT, "A", "invert sel" }, { HM_SHIFT, "E", "edit sel" },   { HM_SHIFT, "G", "end" },
 	{ HM_SHIFT, "J", "jump" },       { HM_SHIFT, "P", "preview" },    { HM_SHIFT, "Q", "quit (err)" },
 	{ HM_SHIFT, "S", "sel size" },   { HM_SHIFT, "T", "time type" },  { HM_SHIFT, "X", "rm -rf" },
 	{ HM_SHIFT, "Tab", "prev ctx" },
@@ -7996,7 +7999,8 @@ static void draw_hints(void)
 	move(xlines, 0);
 	clrtoeol();
 	for (size_t i = 0; i < ELEMENTS(hints); ++i) {
-		if (hints[i].mods != hint_mods)
+		/* plain keys when nothing is held, else the hints of every modifier that is held */
+		if (hint_mods ? (!hints[i].mods || (hints[i].mods & ~hint_mods)) : hints[i].mods)
 			continue;
 
 		int kl = (int)xstrlen(hints[i].key) - 1, dl = (int)xstrlen(hints[i].desc) - 1;
@@ -8140,7 +8144,7 @@ static inline void markhovered(void)
 #define PREVIEW_BORDER_COL (xcols / 2)
 #define PREVIEW_COL        (PREVIEW_BORDER_COL + 2)
 #define PREVIEW_WIDTH      (xcols - PREVIEW_COL - 1)
-#define MIN_PREVIEW_COLS   40
+#define MIN_PREVIEW_COLS   24
 #define PREVIEW_MAX_LINE   4096
 
 /* Check if a file is likely text by reading initial bytes */
@@ -8205,9 +8209,197 @@ static bool is_text_file(const char *fpath)
 }
 
 /*
+ * Run a command and capture stdout+stderr (stdin is /dev/null), at most max bytes and timeout_ms.
+ * Returns a malloc'ed NUL-terminated buffer (caller frees) or NULL if it could not be started.
+ * *status gets the exit status (128+signal when killed, 124 on timeout).
+ */
+static char *capture_cmd(char *const argv[], size_t max, int timeout_ms, int *status)
+{
+	int pfd[2];
+
+	if (pipe(pfd) == -1)
+		return NULL;
+
+	pid_t pid = fork();
+
+	if (pid < 0) {
+		close(pfd[0]);
+		close(pfd[1]);
+		return NULL;
+	}
+	if (pid == 0) {
+		setpgid(0, 0); /* own group: a timeout kills the whole tree */
+		int nul = open("/dev/null", O_RDONLY);
+
+		if (nul >= 0)
+			dup2(nul, STDIN_FILENO);
+		dup2(pfd[1], STDOUT_FILENO);
+		dup2(pfd[1], STDERR_FILENO);
+		close(pfd[0]);
+		close(pfd[1]);
+		execvp(argv[0], argv);
+		_exit(127);
+	}
+	close(pfd[1]);
+
+	char *buf = malloc(max + 1);
+	size_t len = 0;
+	bool eof = FALSE, timedout = FALSE;
+	struct timespec t0, t1;
+
+	if (!buf) {
+		close(pfd[0]);
+		kill(-pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		return NULL;
+	}
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	while (len < max) {
+		clock_gettime(CLOCK_MONOTONIC, &t1);
+		int left = timeout_ms - (int)((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000);
+
+		if (left <= 0) {
+			timedout = TRUE;
+			break;
+		}
+		struct pollfd pf = {.fd = pfd[0], .events = POLLIN};
+		int n = poll(&pf, 1, left);
+
+		if (n < 0 && errno == EINTR)
+			continue;
+		if (n <= 0) {
+			timedout = (n == 0);
+			break;
+		}
+		ssize_t r = read(pfd[0], buf + len, max - len);
+
+		if (r <= 0) {
+			eof = TRUE;
+			break;
+		}
+		len += (size_t)r;
+	}
+	close(pfd[0]);
+	buf[len] = '\0';
+
+	int st = 0;
+
+	if (!eof)
+		kill(-pid, SIGKILL); /* timeout or output limit reached */
+	waitpid(pid, &st, 0);
+	if (status)
+		*status = timedout ? 124 : (WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st));
+	return buf;
+}
+
+/* Draw text in the preview pane: control/ANSI sequences dropped, tabs -> spaces, long lines wrapped. */
+static int draw_text_block(const char *buf, int row, int maxrows, int width)
+{
+	char line[PREVIEW_MAX_LINE];
+	const unsigned char *p = (const unsigned char *)buf;
+
+	while (*p && row < maxrows) {
+		size_t n = 0;
+
+		while (*p && *p != '\n' && n < sizeof(line) - 1) {
+			if (*p == 033) { /* skip ESC [ ... final */
+				++p;
+				if (*p == '[') {
+					++p;
+					while (*p && !(*p >= 0x40 && *p <= 0x7e))
+						++p;
+					if (*p)
+						++p;
+				}
+				continue;
+			}
+			line[n++] = (*p == '\t') ? ' ' : (*p < 0x20 || *p == 0x7f) ? ' ' : (char)*p;
+			++p;
+		}
+		line[n] = '\0';
+		if (*p == '\n')
+			++p;
+		else
+			while (*p && *p != '\n')
+				++p; /* over-long line: rest is dropped */
+
+		int off = 0;
+
+		do {
+			int chunk = (int)n - off;
+
+			if (chunk > width) {
+				chunk = width;
+				while (chunk > 0 && ((unsigned char)line[off + chunk] & 0xC0) == 0x80)
+					--chunk; /* do not cut a UTF-8 sequence in half */
+				if (chunk == 0)
+					chunk = width;
+			}
+			mvaddnstr(row, PREVIEW_COL, line + off, chunk);
+			++row;
+			off += chunk;
+		} while (off < (int)n && row < maxrows);
+	}
+	return row;
+}
+
+static bool has_ext(const char *name, const char *list) /* list: ".png .jpg " */
+{
+	const char *dot = strrchr(name, '.');
+	char key[32];
+
+	if (!dot || strlen(dot) > 10)
+		return FALSE;
+	snprintf(key, sizeof(key), "%s ", dot);
+	for (char *k = key; *k; ++k)
+		*k = (char)tolower((unsigned char)*k);
+	return strstr(list, key) != NULL;
+}
+
+/* run (key r): a bash script decides how to run the file. Its output shows in the preview pane. */
+static char *runout;
+static char runpath[PATH_MAX];
+static int runstatus;
+
+static const char runscript_src[] =
+	"#!/usr/bin/env bash\n"
+	"# nnn key r: run the hovered file ($1), in the listing directory.\n"
+	"# The output goes to the preview pane (preview on) or to the terminal. Edit freely: nnn only\n"
+	"# writes this file when it is missing.\n"
+	"f=$1\n"
+	"[ -f \"$f\" ] || { echo \"not a file: $f\"; exit 1; }\n"
+	"[ -x \"$f\" ] && exec \"$f\"\n"
+	"read -r first <\"$f\"\n"
+	"case $first in\n"
+	"\t'#!'*) interp=${first#'#!'}; exec $interp \"$f\" ;; # unquoted on purpose: \"/usr/bin/env bash\"\n"
+	"esac\n"
+	"case $f in\n"
+	"\t*.sh|*.bash) exec bash \"$f\" ;;\n"
+	"\t*.py) exec python3 \"$f\" ;;\n"
+	"esac\n"
+	"echo \"not runnable: $f\"\n"
+	"exit 1\n";
+
+static bool run_script_path(char *out)
+{
+	mkpath(plgpath, "run", out);
+	if (access(out, X_OK) == 0)
+		return TRUE;
+
+	FILE *f = fopen(out, "w");
+
+	if (!f)
+		return FALSE;
+	fputs(runscript_src, f);
+	fclose(f);
+	return chmod(out, 0755) == 0;
+}
+
+/*
  * Draw the preview pane for the currently hovered file
- * If the plugin .npreview is found, it is used.
- * Otherwise, the built-in previewer is used.
+ * - the output of the last `r` (run) when it is for this very file
+ * - the plugin .npreview when it exists
+ * - otherwise by type: text, directory, image/audio/video/archive/pdf info, binary
  */
 static void preview_pane(const char *path)
 {
@@ -8227,7 +8419,22 @@ static void preview_pane(const char *path)
 	}
 
 	char fpath[PATH_MAX];
+	int maxrows = xlines - 2; /* rows 1 .. maxrows-1 */
+
 	mkpath(path, pdents[cur].name, fpath);
+
+	if (runout) {
+		if (strcmp(runpath, fpath) == 0) {
+			attron(A_BOLD);
+			mvprintw(1, PREVIEW_COL, "[run: %s]", runstatus == 0 ? "ok"
+				 : (runstatus == 124 ? "timeout" : xitoa(runstatus)));
+			attroff(A_BOLD);
+			draw_text_block(runout, 2, maxrows, previewwidth);
+			return;
+		}
+		free(runout); /* moved to another entry */
+		runout = NULL;
+	}
 
 	/* Auto-detect .npreview plugin */
 	if (!previewer) {
@@ -8242,86 +8449,43 @@ static void preview_pane(const char *path)
 	}
 
 	if (previewer) {
-		int pipefd[2];
-		if (pipe(pipefd) == -1)
-			return;
-
 		char widthbuf[16], heightbuf[16];
+
 		snprintf(widthbuf, sizeof(widthbuf), "%d", previewwidth);
 		snprintf(heightbuf, sizeof(heightbuf), "%d", xlines - 2);
 
 		char *argv[] = {previewer, fpath, widthbuf, heightbuf, NULL};
-		pid_t pid;
-		int spawn_status = spawn_redirected(previewer, argv, pipefd[0], pipefd[1], &pid);
-		close(pipefd[1]);
+		char *out = capture_cmd(argv, 16384, 2000, NULL);
 
-		if (spawn_status == 0) {
-			FILE *fp = fdopen(pipefd[0], "r");
-			if (fp) {
-				char line[PREVIEW_MAX_LINE];
-				int row = 1;
-				int maxrows = xlines - 2;
-
-				while (row < maxrows && fgets(line, sizeof(line), fp)) {
-					size_t len = xstrlen(line);
-					if (len > 0 && line[len - 1] == '\n')
-						line[--len] = '\0';
-					if (len > 0 && line[len - 1] == '\r')
-						line[--len] = '\0';
-
-					/* Replace tabs with spaces */
-					for (size_t i = 0; i < len; ++i)
-						if (line[i] == '\t')
-							line[i] = ' ';
-
-					/* Wrap long lines across multiple rows */
-					int off = 0;
-					do {
-						char save = '\0';
-						if ((int)(len - off) > previewwidth) {
-							save = line[off + previewwidth];
-							line[off + previewwidth] = '\0';
-						}
-						mvaddstr(row, PREVIEW_COL, line + off);
-						if (save)
-							line[off + previewwidth] = save;
-						++row;
-						off += previewwidth;
-					} while (off < (int)len && row < maxrows);
-				}
-				fclose(fp);
-			} else {
-				close(pipefd[0]);
-			}
-			waitpid(pid, NULL, 0);
-		} else
-			close(pipefd[0]);
+		if (out) {
+			draw_text_block(out, 1, maxrows, previewwidth);
+			free(out);
+		}
 		return;
 	}
 
 	struct stat sb;
+
 	if (lstat(fpath, &sb) == -1)
 		return;
 
-	/* For directories, show entry count */
+	/* Directories: list the entries */
 	if (S_ISDIR(sb.st_mode)) {
 		DIR *dirp = opendir(fpath);
+
 		if (!dirp)
 			return;
 
 		int count = 0;
 		struct dirent *dp;
 		char namebuf[PATH_MAX];
-		int maxlines = xlines - 4; /* Leave header and status lines */
 
 		mvaddstr(1, PREVIEW_COL, "[directory]");
-
-		while ((dp = readdir(dirp)) && count < maxlines) {
+		while ((dp = readdir(dirp)) && 2 + count < maxrows) {
 			if (dp->d_name[0] == '.' && (!dp->d_name[1]
 			    || (dp->d_name[1] == '.' && !dp->d_name[2])))
 				continue;
-			snprintf(namebuf, sizeof(namebuf), "%.*s",
-				 previewwidth, dp->d_name);
+			snprintf(namebuf, sizeof(namebuf), "%.*s", previewwidth, dp->d_name);
 			mvaddstr(2 + count, PREVIEW_COL, namebuf);
 			++count;
 		}
@@ -8329,74 +8493,92 @@ static void preview_pane(const char *path)
 		return;
 	}
 
-	/* For symlinks, resolve and show target */
+	/* Symlinks: show the target, then preview what it points to */
+	int row = 1;
+
 	if (S_ISLNK(sb.st_mode)) {
 		char target[PATH_MAX];
 		ssize_t len = readlink(fpath, target, sizeof(target) - 1);
+
 		if (len > 0) {
 			target[len] = '\0';
 			mvprintw(1, PREVIEW_COL, "-> %.*s", previewwidth - 3, target);
+			row = 2;
 		}
-		/* Resolve symlink for further preview */
-		if (stat(fpath, &sb) == -1)
-			return;
-		if (!S_ISREG(sb.st_mode))
+		if (stat(fpath, &sb) == -1 || !S_ISREG(sb.st_mode))
 			return;
 	}
 
-	/* For regular files, show content preview if text */
-	if (S_ISREG(sb.st_mode)) {
-		if (sb.st_size == 0) {
-			mvaddstr(1, PREVIEW_COL, "[empty file]");
-			return;
-		}
+	if (!S_ISREG(sb.st_mode))
+		return;
 
-		if (!is_text_file(fpath)) {
-			char szbuf[32];
-			mvprintw(1, PREVIEW_COL, "[binary %s]",
-				 coolsize(sb.st_size));
-			(void)szbuf;
-			return;
-		}
-
-		FILE *fp = fopen(fpath, "r");
-		if (!fp)
-			return;
-
-		char line[PREVIEW_MAX_LINE];
-		int row = 1;
-		int maxrows = xlines - 2; /* Leave top and bottom lines */
-
-		while (row < maxrows && fgets(line, sizeof(line), fp)) {
-			/* Strip trailing newline */
-			size_t len = xstrlen(line);
-			if (len > 0 && line[len - 1] == '\n')
-				line[--len] = '\0';
-			if (len > 0 && line[len - 1] == '\r')
-				line[--len] = '\0';
-
-			/* Replace tabs with spaces for consistent display */
-			for (size_t i = 0; i < len; ++i)
-				if (line[i] == '\t')
-					line[i] = ' ';
-
-			/* Wrap long lines across multiple rows */
-			int off = 0;
-			do {
-				char save = '\0';
-				if ((int)(len - off) > previewwidth) {
-					save = line[off + previewwidth];
-					line[off + previewwidth] = '\0';
-				}
-				mvaddstr(row, PREVIEW_COL, line + off);
-				if (save)
-					line[off + previewwidth] = save;
-				++row;
-				off += previewwidth;
-			} while (off < (int)len && row < maxrows);
-		}
-		fclose(fp);
+	if (sb.st_size == 0) {
+		mvaddstr(row, PREVIEW_COL, "[empty file]");
+		return;
 	}
+
+	const char *name = pdents[cur].name;
+	char *argv[12] = {NULL};
+	char *out = NULL;
+
+	/* Files that are not text: ask a tool for information; fall back to `file` */
+	if (!is_text_file(fpath)) {
+		if (has_ext(name, ".mp3 .flac .ogg .opus .wav .m4a .aac .wma .mp4 .mkv .webm .avi .mov .m4v ")) {
+			char *a[] = {"ffprobe", "-v", "error", "-show_entries",
+				"format=format_long_name,duration,bit_rate:format_tags",
+				"-of", "default=noprint_wrappers=1", fpath, NULL};
+			memcpy(argv, a, sizeof(a));
+		} else if (has_ext(name, ".zip .tar .tgz .gz .xz .bz2 .zst .7z .rar .iso .cpio ")) {
+			char *a[] = {"bsdtar", "-tf", fpath, NULL};
+			memcpy(argv, a, sizeof(a));
+		} else if (has_ext(name, ".pdf ")) {
+			char *a[] = {"pdftotext", "-l", "1", "-layout", fpath, "-", NULL};
+			memcpy(argv, a, sizeof(a));
+		}
+
+		int st = 0;
+
+		if (argv[0]) {
+			out = capture_cmd(argv, 16384, 3000, &st);
+			if (out && (st != 0 || !*out)) { /* tool missing or failed */
+				free(out);
+				out = NULL;
+			}
+		}
+		if (!out) {
+			char *a[] = {"file", "-b", fpath, NULL};
+
+			out = capture_cmd(a, 2048, 2000, &st);
+			if (out && (st != 0 || !*out)) {
+				free(out);
+				out = NULL;
+			}
+		}
+		if (out) {
+			mvprintw(row, PREVIEW_COL, "[%s]", coolsize(sb.st_size));
+			draw_text_block(out, row + 1, maxrows, previewwidth);
+			free(out);
+		} else
+			mvprintw(row, PREVIEW_COL, "[binary %s]", coolsize(sb.st_size));
+		return;
+	}
+
+	/* Text: the first bytes */
+	FILE *fp = fopen(fpath, "r");
+
+	if (!fp)
+		return;
+
+	char *text = malloc(16385);
+
+	if (text) {
+		size_t n = fread(text, 1, 16384, fp);
+
+		text[n] = '\0';
+		draw_text_block(text, row, maxrows, previewwidth);
+		free(text);
+	}
+	fclose(fp);
 }
 
 static int adjust_cols(int n)
@@ -8405,12 +8587,13 @@ static int adjust_cols(int n)
 #ifdef ICONS_ENABLED
 	n -= (g_state.oldcolor ? 0 : ICON_SIZE + ICON_PADDING_LEFT_LEN + ICON_PADDING_RIGHT_LEN);
 #endif
+	detail_fit = TRUE;
 	if (cfg.showdetail) {
 		/* widest detail level that still leaves room for the names, else the legacy one */
 		if (n >= DETAIL_SEC + DETAIL_NAME_MIN)
 			detail_lvl = 1, n -= DETAIL_SEC;
-		else if (n < 36) /* fallback to light mode if less than 35 columns */
-			cfg.showdetail ^= 1;
+		else if (n < 36) /* too narrow: hide the columns for now, they come back when the window grows */
+			detail_fit = FALSE;
 		else /* 2 more accounted for below */
 			detail_lvl = 0, n -= DETAIL_LEG;
 	}
@@ -9341,6 +9524,29 @@ nochange:
 				}
 			}
 			break;
+		case SEL_RUN:
+		{
+			char script[PATH_MAX], fpath[PATH_MAX];
+
+			if (!ndents)
+				goto nochange;
+			if (!run_script_path(script)) {
+				printwait("cannot write the run script", &presel);
+				goto nochange;
+			}
+			mkpath(path, pdents[cur].name, fpath);
+
+			if (cfg.preview && xcols >= ((MIN_PREVIEW_COLS * 2) + 1)) {
+				/* preview pane visible: capture the output into it (no input, 10 s, 64 KB) */
+				char *argv[] = {script, fpath, NULL};
+
+				free(runout);
+				runout = capture_cmd(argv, 65536, 10000, &runstatus);
+				xstrsncpy(runpath, fpath, sizeof(runpath));
+			} else /* no pane: run in the terminal and wait for a key */
+				spawn(script, fpath, NULL, NULL, F_NORMAL | F_CONFIRM);
+			continue;
+		}
 		case SEL_REDRAW: // fallthrough
 		case SEL_RENAMEMUL: // fallthrough
 		case SEL_HELP: // fallthrough

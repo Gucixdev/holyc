@@ -100,6 +100,7 @@ enum action {
 	SEL_NEW,
 	SEL_RENAME,
 	SEL_RENAMEMUL,
+	SEL_RUN,
 	SEL_UMOUNT,
 	SEL_HELP,
 	SEL_AUTONEXT,
@@ -251,7 +252,8 @@ static struct key bindings[] = {
 	/* Show rename prompt */
 	{ CONTROL('R'),   SEL_RENAME },
 	/* Rename contents of current dir */
-	{ 'r',            SEL_RENAMEMUL },
+	{ 'r',            SEL_RUN },
+	{ 'R',            SEL_RENAMEMUL },
 	/* Disconnect a SSHFS mount point */
 	{ 'u',            SEL_UMOUNT },
 	/* Show help */

@@ -18,6 +18,7 @@
 #define KBD_H
 
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
@@ -35,6 +36,8 @@ static bool kb_on, kb_pushed;        /* protocol negotiated / flags pushed in th
 static int kb_timeout = -1;          /* mirrors curses timeout(): -1 block, 0 poll, >0 ms */
 
 static void draw_hints(void);
+
+static int kb_logfd = -1; /* NNN_KBLOG=/path: every decoded escape sequence is appended there (debugging) */
 
 /* ---- decoded events waiting to be handed out ---- */
 struct kb_ev { wint_t ch; int type; };
@@ -88,7 +91,7 @@ static int kb_byte(int ms)
 static void kb_push(void)
 {
 	if (kb_on && !kb_pushed) {
-		(void)!write(1, "\033[>" KB_FLAGS "u", 6);
+		(void)!write(1, "\033[>" KB_FLAGS "u\033[?1004h", 14); /* + focus in/out reports */
 		kb_pushed = TRUE;
 	}
 }
@@ -96,7 +99,7 @@ static void kb_push(void)
 static void kb_off(void)
 {
 	if (kb_pushed) {
-		(void)!write(1, "\033[<u", 4);
+		(void)!write(1, "\033[?1004l\033[<u", 12);
 		kb_pushed = FALSE;
 	}
 	hint_mods = 0;
@@ -104,7 +107,7 @@ static void kb_off(void)
 
 static void kb_sig(int sig)
 {
-	(void)!write(1, "\033[<u", 4);
+	(void)!write(1, "\033[?1004l\033[<u", 12);
 	signal(sig, SIG_DFL);
 	raise(sig);
 }
@@ -115,6 +118,9 @@ static void kb_init(void)
 
 	if ((e && e[0] == '0') || !isatty(0) || !isatty(1))
 		return;
+
+	if ((e = getenv("NNN_KBLOG")) && *e)
+		kb_logfd = open(e, O_WRONLY | O_CREAT | O_APPEND, 0600);
 
 	/* CSI ? u = query the protocol flags; CSI c = "primary attributes", answered by every terminal */
 	(void)!write(1, "\033[?u\033[c", 7);
@@ -173,6 +179,9 @@ static int kb_read_csi(struct kb_csi *p)
 		} else if (c == '<' || c == '?' || c == '>' || c == '=') {
 			p->lead = (char)c;
 		} else if (c >= 0x40 && c <= 0x7e) {
+			if (kb_logfd >= 0)
+				dprintf(kb_logfd, "CSI %c %d:%d:%d;%d:%d;%d:%d final=%c held=%d\n", p->lead ? p->lead : '-',
+					p->v[0][0], p->v[0][1], p->v[0][2], p->v[1][0], p->v[1][1], p->v[2][0], p->v[2][1], c, hint_mods);
 			return c; /* final byte */
 		}
 	}
@@ -297,6 +306,11 @@ static void kb_csi(void)
 	}
 	if (p.lead)
 		return; /* an answer to some query: not a key */
+
+	if (f == 'I' || f == 'O') { /* focus in / out: key releases are lost while unfocused */
+		kb_set_mods(0);
+		return;
+	}
 
 	unsigned char mods = kb_map_mods(p.v[1][0]);
 	int event = p.v[1][1] ? p.v[1][1] : 1;

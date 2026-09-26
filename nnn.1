@@ -416,6 +416,15 @@ file. Press \fB-\fR to return to the listing dir. Press \fBEnter\fR to open the 
 .Pp
 Listing input stream can be scripted. It can be extended to pick (option -p)
 selected entries from the listed results.
+.Sh RUN AND PREVIEW
+\fBr\fR runs the hovered file with the bash script \fB~/.config/nnn/plugins/run\fR (nnn writes a default one when it is
+missing: executables run directly, files with a shebang through it, \fB.sh\fR with bash, \fB.py\fR with python3). With the preview
+pane on (\fBP\fR) the output (10 s, 64 KB, no input) is shown in the pane together with the exit status; without the pane it
+runs in the terminal and waits for Enter. Batch rename moved to \fBR\fR.
+.Pp
+The preview pane shows text, directory listings, and for other files the output of a tool: \fBffprobe\fR for audio/video
+(tags, duration), \fBbsdtar\fR for archives, \fBpdftotext\fR for PDF, otherwise \fBfile\fR. It is text only (no pixels).
+.Pp
 .Sh QUITTING
 With \fBNNN_TMPFILE\fR set (cd on quit) every normal quit (\fBq\fR in the last context, \fB^Q\fR) writes the
 last directory. \fBAlt+q\fR quits without writing it, so the shell stays where it was.
