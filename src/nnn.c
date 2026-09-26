@@ -886,10 +886,14 @@ static haiku_nm_h haiku_hnd;
 /* Function macros */
 #define tolastln() move(xlines - 1, 0)
 #define tocursor() move(cur + 2 - curscroll, 0)
-#define exitcurses() endwin()
+#define exitcurses() do { kb_off(); endwin(); } while (0)
 #define istopdir(path) ((path)[1] == '\0' && (path)[0] == '/')
 #define settimeout() timeout(1000)
 #define cleartimeout() timeout(-1)
+
+/* input through the kitty keyboard protocol when the terminal has it (held-modifier hint bar) */
+#include "kbd.h"
+
 #define errexit() printerr(__LINE__)
 #define setdirwatch() (cfg.filtermode ? (presel = FILTER) : (watch = TRUE))
 #define filterset() (g_ctx[cfg.curctx].c_fltr[1])
@@ -2410,6 +2414,7 @@ static bool initcurses(void *oldmask)
 	nonl();
 	//intrflush(stdscr, FALSE);
 	keypad(stdscr, TRUE);
+	kb_init();
 #ifndef NOMOUSE
 #if NCURSES_MOUSE_VERSION <= 1
 	mousemask(BUTTON1_PRESSED | BUTTON1_DOUBLE_CLICKED | BUTTON2_PRESSED | BUTTON3_PRESSED,
@@ -3697,6 +3702,8 @@ try_quit:
 			if (i != ERR) {
 				if (c == ESC)
 					c = 'q'; /* Quit context */
+				else if (c == 'q')
+					c = KEY_ALT_Q; /* Alt+q: quit without cd */
 				else {
 					unget_wch(c);
 					c = ';';
@@ -5095,37 +5102,13 @@ static inline void printent_name(const struct entry *ent, uint_t namecols)
 #endif
 
 /*
- * Detail columns, widest first; adjust_cols() picks the widest level that leaves room for names.
- *   2: time(s) perms owner group size   3: time(s) perms size   1: legacy (time, octal perms, size)
- * Widths include the leading space and the separators.
+ * Detail columns: time, octal perms (the chmod number), size. adjust_cols() uses the seconds variant when
+ * there is room for the names, the compact one (no seconds) otherwise. Widths include separators.
  */
-#ifndef NOUG
-#define DETAIL_FULL 60
-#else
-#define DETAIL_FULL 0
-#endif
-#define DETAIL_MID  42
+#define DETAIL_SEC  35
 #define DETAIL_LEG  32
 #define DETAIL_NAME_MIN 20
-static uchar_t detail_lvl = 2; /* 2 full, 1 mid, 0 legacy */
-
-/* "drwxr-xr-x" incl. setuid/setgid/sticky, out must hold 11 bytes */
-static void fmt_perms(mode_t mode, char *out)
-{
-	static const char types[] = "?pc?d?b?-?l?s???"; /* indexed by (mode & S_IFMT) >> 12 */
-	static const char rwx[] = "rwxrwxrwx";
-
-	out[0] = types[(mode & S_IFMT) >> 12];
-	for (int i = 0; i < 9; ++i)
-		out[i + 1] = (mode & (0400 >> i)) ? rwx[i] : '-';
-	if (mode & S_ISUID)
-		out[3] = (mode & 0100) ? 's' : 'S';
-	if (mode & S_ISGID)
-		out[6] = (mode & 0010) ? 's' : 'S';
-	if (mode & S_ISVTX)
-		out[9] = (mode & 0001) ? 't' : 'T';
-	out[10] = '\0';
-}
+static uchar_t detail_lvl = 1; /* 1 with seconds, 0 compact */
 
 static void print_time_full(const time_t *timep, const uchar_t flags)
 {
@@ -5165,21 +5148,11 @@ static void printent(int pdents_index, uint_t namecols, bool sel)
 			? coolsize(cfg.blkorder ? (blkcnt_t)ent->blocks << blk_shift : ent->size)
 			: (type = (uchar_t)get_detail_ind(ent->mode), (char *)&type);
 
-		if (detail_lvl == 0) {
+		if (detail_lvl == 0)
 			print_time(&ent->sec, ent->flags);
-			printw("%s%9s ", perms, sz);
-		} else {
-			char sym[11];
-
+		else
 			print_time_full(&ent->sec, ent->flags);
-			fmt_perms(ent->mode, sym);
-			printw(" %s ", sym);
-#ifndef NOUG
-			if (detail_lvl == 2)
-				printw("%-8.8s %-8.8s ", getpwname(ent->uid), getgrname(ent->gid));
-#endif
-			printw("%9s ", sz);
-		}
+		printw("%s%9s ", perms, sz);
 
 		if (attrs)
 			attroff(attrs);
@@ -7986,12 +7959,6 @@ static bool set_time_type(int *presel)
  * Key hint bar on the last line. Each hint belongs to one modifier set; only the hints of the modifiers
  * currently held are shown (hint_mods), plain keys when nothing is held.
  */
-#define HM_CTRL  1
-#define HM_ALT   2
-#define HM_SHIFT 4
-
-static uchar_t hint_mods; /* modifiers currently held */
-
 static const struct hint {
 	uchar_t mods;
 	const char *key, *desc;
@@ -8004,7 +7971,7 @@ static const struct hint {
 	{ 0, "n", "new" },         { 0, "o", "open with" },   { 0, "e", "edit" },
 	{ 0, ",", "mark" },        { 0, "b", "to mark" },     { 0, "t", "sort" },
 	{ 0, "s", "sessions" },    { 0, "1-8", "context" },   { 0, "?", "help" },
-	{ 0, "q", "quit" },
+	{ 0, "q", "quit (+cd)" },
 	{ HM_CTRL, "^A", "top" },       { HM_CTRL, "^E", "end" },        { HM_CTRL, "^D", "page down" },
 	{ HM_CTRL, "^U", "page up" },   { HM_CTRL, "^F", "file info" },  { HM_CTRL, "^N", "filter mode" },
 	{ HM_CTRL, "^P", "copy" },      { HM_CTRL, "^V", "move" },       { HM_CTRL, "^W", "copy as" },
@@ -8016,7 +7983,7 @@ static const struct hint {
 	{ HM_SHIFT, "J", "jump" },       { HM_SHIFT, "P", "preview" },    { HM_SHIFT, "Q", "quit (err)" },
 	{ HM_SHIFT, "S", "sel size" },   { HM_SHIFT, "T", "time type" },  { HM_SHIFT, "X", "rm -rf" },
 	{ HM_SHIFT, "Tab", "prev ctx" },
-	{ HM_ALT, ";", "plugin" },       { HM_ALT, "Esc", "quit ctx" },
+	{ HM_ALT, "q", "quit, no cd" },     { HM_ALT, ";", "plugin" },       { HM_ALT, "Esc", "quit ctx" },
 };
 
 static void draw_hints(void)
@@ -8440,10 +8407,8 @@ static int adjust_cols(int n)
 #endif
 	if (cfg.showdetail) {
 		/* widest detail level that still leaves room for the names, else the legacy one */
-		if (DETAIL_FULL && n >= DETAIL_FULL + DETAIL_NAME_MIN)
-			detail_lvl = 2, n -= DETAIL_FULL;
-		else if (n >= DETAIL_MID + DETAIL_NAME_MIN)
-			detail_lvl = 1, n -= DETAIL_MID;
+		if (n >= DETAIL_SEC + DETAIL_NAME_MIN)
+			detail_lvl = 1, n -= DETAIL_SEC;
 		else if (n < 36) /* fallback to light mode if less than 35 columns */
 			cfg.showdetail ^= 1;
 		else /* 2 more accounted for below */
@@ -9935,7 +9900,8 @@ nochange:
 			goto cdfalse_begin;
 		case SEL_QUITCTX: // fallthrough
 		case SEL_QUITCD: // fallthrough
-		case SEL_QUIT:
+		case SEL_QUIT: // fallthrough
+		case SEL_QUITNOCD: // fallthrough
 		case SEL_QUITERR:
 			if (sel == SEL_QUITCTX) {
 				int ctx = cfg.curctx;
@@ -9977,7 +9943,7 @@ nochange:
 
 			/* CD on Quit */
 			tmp = getenv("NNN_TMPFILE");
-			if ((sel == SEL_QUITCD) || tmp) {
+			if (sel != SEL_QUITNOCD && ((sel == SEL_QUITCD) || tmp)) {
 				write_lastdir(path, tmp);
 				/* ^G is a way to quit picker mode without picking anything */
 				if ((sel == SEL_QUITCD) && g_state.picker)

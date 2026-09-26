@@ -416,6 +416,15 @@ file. Press \fB-\fR to return to the listing dir. Press \fBEnter\fR to open the 
 .Pp
 Listing input stream can be scripted. It can be extended to pick (option -p)
 selected entries from the listed results.
+.Sh QUITTING
+With \fBNNN_TMPFILE\fR set (cd on quit) every normal quit (\fBq\fR in the last context, \fB^Q\fR) writes the
+last directory. \fBAlt+q\fR quits without writing it, so the shell stays where it was.
+.Pp
+.Sh KEY HINT BAR
+The last screen line lists the keys. Hold Ctrl, Alt or Shift and only the keys of that modifier are shown.
+This needs a terminal with the kitty keyboard protocol (foot, kitty, wezterm); otherwise only the plain keys
+are listed. \fBNNN_KITTY=0\fR turns the protocol off.
+.Pp
 .Sh MARK
 Press \fB,\fR to mark the current directory; \fBb\fR (or \fB^/\fR) jumps to the marked directory.
 The directory where the key was pressed becomes the previous directory: press \fB-\fR to return to it.

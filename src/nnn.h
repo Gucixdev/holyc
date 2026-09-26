@@ -117,12 +117,16 @@ enum action {
 	SEL_QUITCTX,
 	SEL_QUITCD,
 	SEL_QUIT,
+	SEL_QUITNOCD,
 	SEL_QUITERR,
 #ifndef NOMOUSE
 	SEL_CLICK,
 #endif
 	SEL_MAX,
 };
+
+/* Private key code for Alt+q (outside the Unicode range, never typed) */
+#define KEY_ALT_Q 0x110001
 
 /* Associate a pressed key to an action */
 struct key {
@@ -283,6 +287,8 @@ static struct key bindings[] = {
 	{ CONTROL('G'),   SEL_QUITCD },
 	/* Quit */
 	{ CONTROL('Q'),   SEL_QUIT },
+	/* Alt+q: quit without changing the shell's directory (nextsel() turns Alt+q into this key) */
+	{ KEY_ALT_Q,      SEL_QUITNOCD },
 	/* Quit with an error code */
 	{ 'Q',            SEL_QUITERR },
 #ifndef NOMOUSE

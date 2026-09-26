@@ -98,7 +98,7 @@ CFLAGS += -std=c11 -Wall -Wextra -Wshadow $(CFLAGS_OPTIMIZATION) $(CFLAGS_CURSES
 LDLIBS += $(LDLIBS_CURSES) -lpthread
 
 SRC = src/nnn.c
-HEADERS += src/nnn.h $(if $(filter 1,$(strip $(O_DEBUG))),src/dbg.h) $(if $(filter 1,$(strip $(O_QSORT))),src/qsort.h)
+HEADERS += src/nnn.h src/kbd.h $(if $(filter 1,$(strip $(O_DEBUG))),src/dbg.h) $(if $(filter 1,$(strip $(O_QSORT))),src/qsort.h)
 BIN = nnn
 
 all: $(BIN)
