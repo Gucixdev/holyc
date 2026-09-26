@@ -64,7 +64,7 @@ Runs on the Pi, [Termux](https://www.youtube.com/embed/AbaauM7gUJw) (Android), L
   - *Type-to-nav* (turbo navigation/always filter) mode
   - Jump to an entry with visible relative offset
   - Contexts (_aka_ tabs/workspaces) with custom colors
-  - Sessions, bookmarks, mark and visit a dir
+  - Sessions, mark and visit a dir
   - Remote mounts (needs `sshfs`, `rclone`)
   - Familiar shortcuts (arrows, <kbd>~</kbd>, <kbd>-</kbd>, <kbd>@</kbd>), quick look-up
   - `cd` on quit (*easy* shell integration)

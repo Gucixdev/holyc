@@ -404,7 +404,6 @@ typedef struct {
 	uint_t rangesel   : 1;  /* Range selection on */
 	uint_t runctx     : 3;  /* The context in which plugin is to be run */
 	uint_t runplugin  : 1;  /* Choose plugin mode */
-	uint_t selbm      : 1;  /* Select a bookmark from bookmarks directory */
 	uint_t selmode    : 1;  /* Set when selecting files */
 	uint_t stayonsel  : 1;  /* Disable auto-advance on selection */
 	uint_t uidgid     : 1;  /* Show owner and group info */
@@ -458,11 +457,10 @@ static time_t gtimesecs;
 static uint_t idletimeout, selbufpos, selbuflen;
 static ushort_t xlines, xcols;
 static ushort_t idle;
-static uchar_t maxbm, maxplug, maxorder;
+static uchar_t maxplug, maxorder;
 static uchar_t cfgsort[CTX_MAX + 1];
 static uchar_t selcmdpos = INVALID_POS, lastcmdpos = INVALID_POS;
 static char *cmd_hist[MAX_HISTORY] = {0};
-static char *bmstr;
 static char *pluginstr;
 static char *orderstr;
 static char *opener;
@@ -491,7 +489,6 @@ static ullong_t *ihashbmp;
 static ullong_t *dir_dispatched_bmp; /* dir inodes already dispatched (avoid double-count same subtree) */
 static struct entry *pdents;
 static blkcnt_t dir_blocks;
-static kv *bookmark;
 static kv *plug;
 static kv *order;
 static ushort_t homelen;
@@ -701,8 +698,7 @@ static char * const utils[] = {
 #define MSG_INVALID_KEY  40
 #define MSG_NOCHANGE     41
 #define MSG_DIR_CHANGED  42
-#define MSG_BM_NAME      43
-#define MSG_ARCHIVE_RLTV 44
+#define MSG_ARCHIVE_RLTV 43
 
 static const char * const messages[] = {
 	"",
@@ -748,29 +744,26 @@ static const char * const messages[] = {
 	"invalid key",
 	"unchanged",
 	"dir changed, range sel off",
-	"name: ",
 	"add files with relative path?",
 };
 
 /* Supported configuration environment variables */
 #define NNN_OPTS    0
-#define NNN_BMS     1
-#define NNN_PLUG    2
-#define NNN_OPENER  3
-#define NNN_COLORS  4
-#define NNN_FCOLORS 5
-#define NNNLVL      6
-#define NNN_PIPE    7
-#define NNN_MCLICK  8
-#define NNN_SEL     9
-#define NNN_ARCHIVE 10
-#define NNN_ORDER   11
-#define NNN_HELP    12
-#define NNN_TRASH   13
+#define NNN_PLUG    1
+#define NNN_OPENER  2
+#define NNN_COLORS  3
+#define NNN_FCOLORS 4
+#define NNNLVL      5
+#define NNN_PIPE    6
+#define NNN_MCLICK  7
+#define NNN_SEL     8
+#define NNN_ARCHIVE 9
+#define NNN_ORDER   10
+#define NNN_HELP    11
+#define NNN_TRASH   12
 
 static const char * const env_cfg[] = {
 	"NNN_OPTS",
-	"NNN_BMS",
 	"NNN_PLUG",
 	"NNN_OPENER",
 	"NNN_COLORS",
@@ -825,13 +818,11 @@ static char mv[sizeof PROGRESS_MV] = "mv -i --";
 static char * const archive_cmd[] = {"atool -a", "bsdtar -acvf", "zip -r", "tar -acvf"};
 
 /* Tokens used for path creation */
-#define TOK_BM  0
-#define TOK_SSN 1
-#define TOK_MNT 2
-#define TOK_PLG 3
+#define TOK_SSN 0
+#define TOK_MNT 1
+#define TOK_PLG 2
 
 static const char * const toks[] = {
-	"bookmarks",
 	"sessions",
 	"mounts",
 	"plugins", /* must be the last entry */
@@ -1382,18 +1373,6 @@ static char *abspath(const char *filepath, char *cwd, char *buf)
 	}
 
 	return resolved_path;
-}
-
-/* finds abspath of link pointed by filepath, taking cwd into account */
-static char *bmtarget(const char *filepath, char *cwd, char *buf)
-{
-	char target[PATH_MAX + 1];
-	ssize_t n = readlink(filepath, target, PATH_MAX);
-	if (n != -1) {
-		target[n] = '\0';
-		return abspath(target, cwd, buf);
-	}
-	return NULL;
 }
 
 /**
@@ -4672,29 +4651,18 @@ static bool parsekvpair(kv **arr, char **envcpy, const uchar_t id, uchar_t *item
 }
 
 /*
- * Get the value corresponding to a key
+ * Get the value corresponding to a key (plugin table only)
  *
- * NULL is returned in case of no match, path resolution failure etc.
- * buf would be modified, so check return value before access
+ * NULL is returned in case of no match
  */
-static char *get_kv_val(kv *kvarr, char *buf, int key, uchar_t max, uchar_t id)
+static char *get_kv_val(kv *kvarr, int key, uchar_t max)
 {
-	char *val;
-
 	if (!kvarr)
 		return NULL;
 
-	for (int r = 0; r < max && kvarr[r].key; ++r) {
-		if (kvarr[r].key == key) {
-			/* Do not allocate new memory for plugin */
-			if (id == NNN_PLUG)
-				return pluginstr + kvarr[r].off;
-
-			val = bmstr + kvarr[r].off;
-			bool tilde = convert_tilde(val, g_buf);
-			return abspath((tilde ? g_buf : val), NULL, buf);
-		}
-	}
+	for (int r = 0; r < max && kvarr[r].key; ++r)
+		if (kvarr[r].key == key)
+			return pluginstr + kvarr[r].off;
 
 	DPRINTF_S("Invalid key");
 	return NULL;
@@ -6331,12 +6299,10 @@ static void lock_terminal(void)
 	spawn(xgetenv("NNN_LOCKER", utils[UTIL_LOCKER]), NULL, NULL, NULL, F_CLI);
 }
 
-static void printkv(kv *kvarr, FILE *f, uchar_t max, uchar_t id)
+static void printkv(kv *kvarr, FILE *f, uchar_t max)
 {
-	char *val = (id == NNN_BMS) ? bmstr : pluginstr;
-
 	for (uchar_t i = 0; i < max && kvarr[i].key; ++i)
-		fprintf(f, " %c: %s\n", (char)kvarr[i].key, val + kvarr[i].off);
+		fprintf(f, " %c: %s\n", (char)kvarr[i].key, pluginstr + kvarr[i].off);
 }
 
 static bool lazy_parse_plug(void)
@@ -6361,58 +6327,6 @@ static void printkeys(kv *kvarr, char *buf, uchar_t max)
 	}
 
 	buf[i << 1] = '\0';
-}
-
-static size_t handle_bookmark(const char *bmark, char *newpath)
-{
-	int fd = '\r';
-	size_t r;
-
-	if (maxbm || bmark) {
-		r = xstrsncpy(g_buf, messages[MSG_KEYS], CMD_LEN_MAX - 2); // Leave 2 chars for a marked directory
-
-		if (bmark) { /* There is a marked directory */
-			g_buf[--r] = ' ';
-			g_buf[++r] = ',';
-			g_buf[++r] = '\0';
-			++r;
-		}
-		printkeys(bookmark, g_buf + r - 1, maxbm);
-		printmsg(g_buf);
-		fd = get_input(NULL);
-	}
-
-	r = FALSE;
-	if (fd == ',') /* Visit marked directory */
-		bmark ? xstrsncpy(newpath, bmark, PATH_MAX) : (r = MSG_NOT_SET);
-	else if (fd == '\r') { /* Visit bookmarks directory */
-		mkpath(cfgpath, toks[TOK_BM], newpath);
-		g_state.selbm = 1;
-	} else if (!get_kv_val(bookmark, newpath, fd, maxbm, NNN_BMS))
-		r = MSG_INVALID_KEY;
-
-	if (!r && chdir(newpath) == -1) {
-		r = MSG_ACCESS;
-		if (g_state.selbm)
-			g_state.selbm = 0;
-	}
-
-	return r;
-}
-
-static void add_bookmark(char *path, char *newpath, int *presel)
-{
-	char *dir = xbasename(path);
-
-	dir = xreadline(dir[0] ? dir : NULL, messages[MSG_BM_NAME]);
-	if (dir && *dir) {
-		size_t r = mkpath(cfgpath, toks[TOK_BM], newpath);
-
-		newpath[r - 1] = '/';
-		xstrsncpy(newpath + r, dir, PATH_MAX - r);
-		printwait((symlink(path, newpath) == -1) ? strerror(errno) : newpath, presel);
-	} else
-		printwait(messages[MSG_CANCEL], presel);
 }
 
 /*
@@ -6441,7 +6355,7 @@ static void show_help(const char *path)
 	   "5Ret Rt l  Open%20'  First file/match\n"
 	       "9g ^A  Top%21J  Jump to entry/offset\n"
 	       "9G ^E  End%20^J  Toggle auto-advance on open\n"
-	      "8B (,)  Book(mark)%11b ^/  Select bookmark\n"
+	      "8, (mark)  Mark dir%11b ^/  Go to mark\n"
 		"a1-8  Context%11(Sh)Tab  Cycle/new context\n"
 	    "62Esc ^Q  Quit%19^y  Next young\n"
 		 "b^G  QuitCD%18Q  Pick/err, quit\n"
@@ -6520,18 +6434,13 @@ static void show_help(const char *path)
 	fprintf(f, "used:%s ", coolsize(get_fs_info(path, VFS_USED)));
 	fprintf(f, "size:%s\n\n", coolsize(get_fs_info(path, VFS_SIZE)));
 
-	if (bookmark || mark) {
-		fprintf(f, "BOOKMARKS\n");
-		printkv(bookmark, f, maxbm, NNN_BMS);
-		if (mark)
-			fprintf(f, " ,: %s\n", mark);
-		fprintf(f, "\n");
-	}
+	if (mark)
+		fprintf(f, "MARK\n ,: %s\n\n", mark);
 
 	lazy_parse_plug();
 	if (plug) {
 		fprintf(f, "PLUGIN KEYS\n");
-		printkv(plug, f, maxplug, NNN_PLUG);
+		printkv(plug, f, maxplug);
 		fprintf(f, "\n");
 	}
 
@@ -8942,16 +8851,12 @@ nochange:
 			/* Cannot descend in empty directories */
 			if (!ndents) {
 				cd = FALSE;
-				g_state.selbm = g_state.runplugin = 0;
+				g_state.runplugin = 0;
 				goto begin;
 			}
 
 			pent = &pdents[cur];
-			if (!g_state.selbm || !(S_ISLNK(pent->mode) &&
-			                        bmtarget(pent->name, path, newpath) &&
-			                        xstrsncpy(path, lastdir, PATH_MAX)))
-				mkpath(path, pent->name, newpath);
-			g_state.selbm = 0;
+			mkpath(path, pent->name, newpath);
 			DPRINTF_S(newpath);
 
 			/* Visit directory */
@@ -9157,7 +9062,6 @@ nochange:
 				goto nochange;
 			}
 
-			g_state.selbm = 0;
 			if (strcmp(path, dir) == 0) {
 				if (dir == ipath) {
 					if (cfg.filtermode)
@@ -9175,14 +9079,15 @@ nochange:
 			xstrsncpy(newpath, dir, PATH_MAX); // fallthrough
 		case SEL_BMOPEN:
 			if (sel == SEL_BMOPEN) {
-				r = (int)handle_bookmark(mark, newpath);
-				if (r) {
-					printwait(messages[r], &presel);
+				if (!mark) {
+					printwait(messages[MSG_NOT_SET], &presel);
 					goto nochange;
 				}
-
-				if (g_state.selbm == 1) /* Allow filtering in bookmarks directory */
-					presel = FILTER;
+				xstrsncpy(newpath, mark, PATH_MAX);
+				if (chdir(newpath) == -1) {
+					printwait(messages[MSG_ACCESS], &presel);
+					goto nochange;
+				}
 				if (strcmp(path, newpath) == 0)
 					break;
 			}
@@ -9236,9 +9141,6 @@ nochange:
 				goto nochange;
 			}
 			printwait(mark, &presel);
-			goto nochange;
-		case SEL_BMARK:
-			add_bookmark(path, newpath, &presel);
 			goto nochange;
 		case SEL_FLTR:
 			/* Unwatch dir if we are still in a filtered view */
@@ -9780,7 +9682,7 @@ nochange:
 
 			if (r != '\r') {
 				endselection(FALSE);
-				tmp = get_kv_val(plug, NULL, r, maxplug, NNN_PLUG);
+				tmp = get_kv_val(plug, r, maxplug);
 				if (!tmp) {
 					printwait(messages[MSG_INVALID_KEY], &presel);
 					goto nochange;
@@ -10242,7 +10144,6 @@ static void usage(void)
 		" -a      auto NNN_FIFO\n"
 #endif
 		" -A      no dir auto-enter during filter\n"
-		" -b key  open bookmark key (trumps -s/S)\n"
 		" -B      use bsdtar for archives\n"
 		" -c      cli-only NNN_OPENER (trumps -e)\n"
 		" -C      8-color scheme\n"
@@ -10311,12 +10212,12 @@ static bool setup_config(void)
 			return FALSE;
 		}
 
-		len = xstrlen(xdgcfg) + xstrlen("/nnn/bookmarks") + 1;
+		len = xstrlen(xdgcfg) + xstrlen("/nnn/sessions") + 1;
 		xdg = TRUE;
 	}
 
 	if (!xdg)
-		len = xstrlen(home) + xstrlen("/.config/nnn/bookmarks") + 1;
+		len = xstrlen(home) + xstrlen("/.config/nnn/sessions") + 1;
 
 	cfgpath = malloc(len);
 	plgpath = malloc(len);
@@ -10327,7 +10228,7 @@ static bool setup_config(void)
 
 	if (xdg) {
 		xstrsncpy(cfgpath, xdgcfg, len);
-		r = len - xstrlen("/nnn/bookmarks");
+		r = len - xstrlen("/nnn/sessions");
 	} else {
 		r = xstrsncpy(cfgpath, home, len);
 
@@ -10347,7 +10248,7 @@ static bool setup_config(void)
 		return FALSE;
 	}
 
-	/* Create bookmarks, sessions, mounts and plugins directories */
+	/* Create sessions, mounts and plugins directories */
 	for (r = 0; r < ELEMENTS(toks); ++r) {
 		mkpath(cfgpath, toks[r], plgpath);
 		/* The dirs are created on first run, check if they already exist */
@@ -10409,12 +10310,10 @@ static void cleanup(void)
 	free(plgpath);
 	free(cfgpath);
 	free(initpath);
-	free(bmstr);
 	free(pluginstr);
 	free(listroot);
 	free(ihashbmp);
 	free(dir_dispatched_bmp);
-	free(bookmark);
 	free(plug);
 	free(previewer);
 	if (lastcmdpos != INVALID_POS)
@@ -10451,7 +10350,7 @@ int main(int argc, char *argv[])
 
 	while ((opt = (env_opts_id > 0
 		       ? env_opts[--env_opts_id]
-		       : getopt(argc, argv, "aAb:BcCdDeEfF:gHiJKl:nNop:P:QrRs:St:T:uUVxz0h"))) != -1) {
+		       : getopt(argc, argv, "aABcCdDeEfF:gHiJKl:nNop:P:QrRs:St:T:uUVxz0h"))) != -1) {
 		switch (opt) {
 #ifndef NOFIFO
 		case 'a':
@@ -10460,10 +10359,6 @@ int main(int argc, char *argv[])
 #endif
 		case 'A':
 			cfg.autoenter = 0;
-			break;
-		case 'b':
-			if (env_opts_id < 0)
-				arg = optarg;
 			break;
 		case 'B':
 			g_state.usebsdtar = 1;
@@ -10680,12 +10575,6 @@ int main(int argc, char *argv[])
 	opener = xgetenv(env_cfg[NNN_OPENER], utils[UTIL_OPENER]);
 	DPRINTF_S(opener);
 
-	/* Parse bookmarks string */
-	if (!parsekvpair(&bookmark, &bmstr, NNN_BMS, &maxbm)) {
-		msg(env_cfg[NNN_BMS]);
-		return EXIT_FAILURE;
-	}
-
 	/* Parse order string */
 	if (!parsekvpair(&order, &orderstr, NNN_ORDER, &maxorder)) {
 		msg(env_cfg[NNN_ORDER]);
@@ -10693,20 +10582,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (!initpath) {
-		if (arg) { /* Open a bookmark directly */
-			if (!arg[1]) /* Bookmarks keys are single char */
-				initpath = get_kv_val(bookmark, NULL, *arg, maxbm, NNN_BMS);
-
-			if (!initpath) {
-				msg(messages[MSG_INVALID_KEY]);
-				return EXIT_FAILURE;
-			}
-
-#ifndef NOSSN
-			if (curssn[0])
-				curssn[0] = '\0';
-#endif
-		} else if (argc == optind) {
+		if (argc == optind) {
 			/* Start in the current directory */
 			char *startpath = getenv("PWD");
 

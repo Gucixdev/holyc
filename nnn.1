@@ -64,9 +64,6 @@ supports the following options:
 .Fl A
         disable directory auto-enter on unique filter match
 .Pp
-.Fl "b key"
-        specify bookmark key to open
-.Pp
 .Fl B
         use bsdtar for archives (default: atool)
 .Pp
@@ -212,8 +209,7 @@ will be updated with the final state at program quit.
 .br
 - The "auto session" is used in persistent session mode if no session is active.
 .br
-- Listing input stream and opening a bookmark by key have a higher priority to
-session options (\fB-s\fR/\fB-S\fR).
+- Listing input stream has a higher priority than session options (\fB-s\fR/\fB-S\fR).
 .Pp
 All the session files are located by session name in the directory
 .Pp
@@ -420,23 +416,9 @@ file. Press \fB-\fR to return to the listing dir. Press \fBEnter\fR to open the 
 .Pp
 Listing input stream can be scripted. It can be extended to pick (option -p)
 selected entries from the listed results.
-.Sh BOOKMARKS
-There are 2 ways (can be used together) to manage bookmarks.
-.Pp
-(1) Bookmark keys: See \fBNNN_BMS\fR under \fBENVIRONMENT\fR section on how to set
-    bookmark keys.
-
-    The select bookmark key \fBb\fR lists all the bookmark keys set in \fBNNN_BMS\fR
-    in the bookmarks prompt.
-.Pp
-(2) Symlinked bookmarks: A symlinked bookmark to the current directory can
-    be created with the \fBB\fR key (or manually under ~/.config/nnn/bookmarks).
-
-    Pressing \fBEnter\fR at the bookmarks prompt takes to this directory.
-    If \fBNNN_BMS\fR is not set, the select bookmark key directly opens it.
-.Pp
-On entering a bookmark, the directory where the select bookmark key was
-pressed is set as the previous directory. Press \fB-\fR to return to it.
+.Sh MARK
+Press \fB,\fR to mark the current directory; \fBb\fR (or \fB^/\fR) jumps to the marked directory.
+The directory where the key was pressed becomes the previous directory: press \fB-\fR to return to it.
 .Pp
 .Sh UNITS
 The minimum file size unit is byte (B). The rest are K, M, G, T, P, E, Z, Y
@@ -457,14 +439,6 @@ used. A single combination of arguments is supported for SHELL and PAGER.
 
     NOTE: \fBnuke\fR is a file opener available in the plugin repository.
 .Ed
-.Pp
-\fBNNN_BMS:\fR bookmark string as \fIkey_char:location\fR pairs
-separated by \fB;\fR:
-.Bd -literal
-    export NNN_BMS="d:$HOME/Docs;u:/home/user/Cam Uploads;D:$HOME/Downloads/"
-.Ed
-.Pp
-    These bookmarks are listed in the help and config screen (key \fB?\fR).
 .Pp
 \fBNNN_PLUG:\fR directly executable plugins as \fIkey_char:plugin\fR pairs
 separated by \fB;\fR:
