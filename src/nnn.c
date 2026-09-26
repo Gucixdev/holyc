@@ -841,7 +841,7 @@ static const char * const patterns[] = {
 	SED" -i 's|^\\(\\(.*/\\)\\(.*\\)$\\)|#\\1\\n\\3|' '%s'",
 	SED" 's|^\\([^#/][^/]\\?.*\\)$|%s/\\1|;s|^#\\(/.*\\)$|\\1|' "
 		"'%s' | tr '\\n' '\\0' | xargs -0 -n2 sh -c '%s \"$0\" \"$@\" < /dev/tty'",
-	"\\.(bz|bz2|gz|tar|taz|tbz|tbz2|tgz|tzst|z|zip|zst)$", /* Basic formats that don't need external tools */
+	"\\.(7z|bz|bz2|cab|cpio|gz|iso|jar|lz|lz4|lzma|rar|tar|taz|tbz|tbz2|tgz|txz|tzst|xz|z|zip|zipx|zst)$", /* archives: zip/tar via unzip/tar, rar via unrar or 7z, the rest via bsdtar or 7z */
 	SED" -i 's|^%s\\(.*\\)$|%s\\1|' '%s'",
 	"xargs -0 %s %s < %s",
 };
@@ -6053,10 +6053,23 @@ static bool handle_archive(char *fpath /* in-out param */, char op)
 		}
 	}
 
+	static char sevenz_arg[2] = {'x', '\0'};
+	bool is_rar = is_suffix(fpath, ".rar"), is_7z = is_suffix(fpath, ".7z") || is_suffix(fpath, ".cab") ||
+		      is_suffix(fpath, ".iso") || is_suffix(fpath, ".zipx") || is_suffix(fpath, ".lzma");
+	char *seven = getutil("7z") ? "7z" : (getutil("7za") ? "7za" : (getutil("7zz") ? "7zz" : NULL));
+
 	if (is_atool) {
 		util = utils[UTIL_ATOOL];
 		arg[1] = op;
 		arg[2] = '\0';
+	} else if (is_rar && getutil("unrar")) {
+		util = "unrar";
+		sevenz_arg[0] = (op == 'x') ? 'x' : 'l';
+		xstrsncpy(arg, sevenz_arg, sizeof(arg));
+	} else if ((is_rar || is_7z) && seven) {
+		util = seven;
+		sevenz_arg[0] = (op == 'x') ? 'x' : 'l';
+		xstrsncpy(arg, sevenz_arg, sizeof(arg));
 	} else if (getutil(utils[UTIL_BSDTAR])) {
 		util = utils[UTIL_BSDTAR];
 		if (op == 'x')
@@ -6065,6 +6078,11 @@ static bool handle_archive(char *fpath /* in-out param */, char op)
 		util = utils[UTIL_UNZIP];
 		arg[1] = (op == 'l') ? 'v' /* verbose listing */ : '\0';
 		arg[2] = '\0';
+	} else if (seven && !is_suffix(fpath, ".tar") && !is_suffix(fpath, ".tgz") && !is_suffix(fpath, ".gz") &&
+		   !is_suffix(fpath, ".bz2") && !is_suffix(fpath, ".zst")) {
+		util = seven;
+		sevenz_arg[0] = (op == 'x') ? 'x' : 'l';
+		xstrsncpy(arg, sevenz_arg, sizeof(arg));
 	} else {
 		util = utils[UTIL_TAR];
 		if (op == 'x')
