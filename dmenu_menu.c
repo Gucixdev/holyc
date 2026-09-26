@@ -566,7 +566,19 @@ menu_clip(void)
 		free(pick("Schowek:", m, 1));
 		return;
 	}
-	(void)!system("cliphist list | ${DMENU_CMD:-dmenu -i} -p 'Schowek:' | cliphist decode | wl-copy");
+	{
+		/* the picker command is spliced into the string, so its own quotes are parsed by sh (an unquoted
+		 * ${DMENU_CMD} expansion would keep them as literal characters) */
+		const char *base = getenv("DMENU_CMD");
+		char *cmd;
+
+		if (!base || !*base)
+			base = "dmenu -i";
+		cmd = xmalloc(strlen(base) + 96);
+		sprintf(cmd, "cliphist list | %s -p 'Schowek:' | cliphist decode | wl-copy", base);
+		(void)!system(cmd);
+		free(cmd);
+	}
 }
 
 /* ---- main -------------------------------------------------------------- */
