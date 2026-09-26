@@ -443,6 +443,7 @@ static settings cfg = {
 	.autoenter = 1,
 	.timetype = 2, /* T_MOD */
 	.rollover = 1,
+	.showdetail = 1, /* detail columns on by default (d toggles) */
 };
 
 alignas(max_align_t) static context g_ctx[CTX_MAX];
@@ -1657,7 +1658,7 @@ static int get_input(const char *prompt)
 	while (*ch == KEY_RESIZE) {
 		if (prompt) {
 			clearoldprompt();
-			xlines = LINES;
+			xlines = LINES - 1; /* the last screen line is the key hint bar */
 			printmsg(prompt);
 		}
 
@@ -4451,7 +4452,7 @@ static char *xreadline(const char *prefill, const char *prompt)
 #ifdef KEY_RESIZE
 			case KEY_RESIZE:
 				clearoldprompt();
-				xlines = LINES;
+				xlines = LINES - 1; /* the last screen line is the key hint bar */
 				printmsg(prompt);
 				break;
 #endif
@@ -5093,6 +5094,54 @@ static inline void printent_name(const struct entry *ent, uint_t namecols)
 }
 #endif
 
+/*
+ * Detail columns, widest first; adjust_cols() picks the widest level that leaves room for names.
+ *   2: time(s) perms owner group size   3: time(s) perms size   1: legacy (time, octal perms, size)
+ * Widths include the leading space and the separators.
+ */
+#ifndef NOUG
+#define DETAIL_FULL 60
+#else
+#define DETAIL_FULL 0
+#endif
+#define DETAIL_MID  42
+#define DETAIL_LEG  32
+#define DETAIL_NAME_MIN 20
+static uchar_t detail_lvl = 2; /* 2 full, 1 mid, 0 legacy */
+
+/* "drwxr-xr-x" incl. setuid/setgid/sticky, out must hold 11 bytes */
+static void fmt_perms(mode_t mode, char *out)
+{
+	static const char types[] = "?pc?d?b?-?l?s???"; /* indexed by (mode & S_IFMT) >> 12 */
+	static const char rwx[] = "rwxrwxrwx";
+
+	out[0] = types[(mode & S_IFMT) >> 12];
+	for (int i = 0; i < 9; ++i)
+		out[i + 1] = (mode & (0400 >> i)) ? rwx[i] : '-';
+	if (mode & S_ISUID)
+		out[3] = (mode & 0100) ? 's' : 'S';
+	if (mode & S_ISGID)
+		out[6] = (mode & 0010) ? 's' : 'S';
+	if (mode & S_ISVTX)
+		out[9] = (mode & 0001) ? 't' : 'T';
+	out[10] = '\0';
+}
+
+static void print_time_full(const time_t *timep, const uchar_t flags)
+{
+	struct tm t;
+
+	if (flags & FILE_YOUNG)
+		attron(A_REVERSE);
+
+	localtime_r(timep, &t);
+	printw("%s-%02d-%02d %02d:%02d:%02d",
+		xitoa(t.tm_year + 1900), t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
+
+	if (flags & FILE_YOUNG)
+		attroff(A_REVERSE);
+}
+
 static void printent(int pdents_index, uint_t namecols, bool sel)
 {
 	const struct entry *ent = &pdents[pdents_index];
@@ -5112,11 +5161,25 @@ static void printent(int pdents_index, uint_t namecols, bool sel)
 			attron(attrs);
 
 		/* Print details */
-		print_time(&ent->sec, ent->flags);
-
-		printw("%s%9s ", perms, (type == S_IFREG || type == S_IFDIR)
+		const char *sz = (type == S_IFREG || type == S_IFDIR)
 			? coolsize(cfg.blkorder ? (blkcnt_t)ent->blocks << blk_shift : ent->size)
-			: (type = (uchar_t)get_detail_ind(ent->mode), (char *)&type));
+			: (type = (uchar_t)get_detail_ind(ent->mode), (char *)&type);
+
+		if (detail_lvl == 0) {
+			print_time(&ent->sec, ent->flags);
+			printw("%s%9s ", perms, sz);
+		} else {
+			char sym[11];
+
+			print_time_full(&ent->sec, ent->flags);
+			fmt_perms(ent->mode, sym);
+			printw(" %s ", sym);
+#ifndef NOUG
+			if (detail_lvl == 2)
+				printw("%-8.8s %-8.8s ", getpwname(ent->uid), getgrname(ent->gid));
+#endif
+			printw("%9s ", sz);
+		}
 
 		if (attrs)
 			attroff(attrs);
@@ -7919,11 +7982,75 @@ static bool set_time_type(int *presel)
 	return ret;
 }
 
+/*
+ * Key hint bar on the last line. Each hint belongs to one modifier set; only the hints of the modifiers
+ * currently held are shown (hint_mods), plain keys when nothing is held.
+ */
+#define HM_CTRL  1
+#define HM_ALT   2
+#define HM_SHIFT 4
+
+static uchar_t hint_mods; /* modifiers currently held */
+
+static const struct hint {
+	uchar_t mods;
+	const char *key, *desc;
+} hints[] = {
+	{ 0, "j/k", "move" },      { 0, "Left", "back" },     { 0, "Right/Enter", "open" },
+	{ 0, "/", "filter" },      { 0, "h", "hidden" },      { 0, "l", "symlinks" },
+	{ 0, "d", "detail" },      { 0, "P", "preview" },     { 0, "Space", "select" },
+	{ 0, "a", "all" },         { 0, "m", "multi" },       { 0, "p", "copy" },
+	{ 0, "v", "move" },        { 0, "x", "trash" },       { 0, "r", "rename" },
+	{ 0, "n", "new" },         { 0, "o", "open with" },   { 0, "e", "edit" },
+	{ 0, ",", "mark" },        { 0, "b", "to mark" },     { 0, "t", "sort" },
+	{ 0, "s", "sessions" },    { 0, "1-8", "context" },   { 0, "?", "help" },
+	{ 0, "q", "quit" },
+	{ HM_CTRL, "^A", "top" },       { HM_CTRL, "^E", "end" },        { HM_CTRL, "^D", "page down" },
+	{ HM_CTRL, "^U", "page up" },   { HM_CTRL, "^F", "file info" },  { HM_CTRL, "^N", "filter mode" },
+	{ HM_CTRL, "^P", "copy" },      { HM_CTRL, "^V", "move" },       { HM_CTRL, "^W", "copy as" },
+	{ HM_CTRL, "^X", "trash" },     { HM_CTRL, "^O", "open with" },  { HM_CTRL, "^R", "rename" },
+	{ HM_CTRL, "^T", "sort" },      { HM_CTRL, "^Y", "next new" },   { HM_CTRL, "^J", "auto-next" },
+	{ HM_CTRL, "^G", "quit+cd" },   { HM_CTRL, "^Q", "quit" },       { HM_CTRL, "^L", "redraw" },
+	{ HM_CTRL, "^/", "to mark" },   { HM_CTRL, "^]", "shell" },
+	{ HM_SHIFT, "A", "invert sel" }, { HM_SHIFT, "E", "edit sel" },   { HM_SHIFT, "G", "end" },
+	{ HM_SHIFT, "J", "jump" },       { HM_SHIFT, "P", "preview" },    { HM_SHIFT, "Q", "quit (err)" },
+	{ HM_SHIFT, "S", "sel size" },   { HM_SHIFT, "T", "time type" },  { HM_SHIFT, "X", "rm -rf" },
+	{ HM_SHIFT, "Tab", "prev ctx" },
+	{ HM_ALT, ";", "plugin" },       { HM_ALT, "Esc", "quit ctx" },
+};
+
+static void draw_hints(void)
+{
+	int x = 0;
+
+	if (xlines < 5)
+		return;
+
+	move(xlines, 0);
+	clrtoeol();
+	for (size_t i = 0; i < ELEMENTS(hints); ++i) {
+		if (hints[i].mods != hint_mods)
+			continue;
+
+		int kl = (int)xstrlen(hints[i].key) - 1, dl = (int)xstrlen(hints[i].desc) - 1;
+
+		if (x + kl + dl + 5 > xcols)
+			break;
+		attron(A_REVERSE);
+		mvprintw(xlines, x, " %s ", hints[i].key);
+		attroff(A_REVERSE);
+		mvprintw(xlines, x + kl + 2, " %s ", hints[i].desc);
+		x += kl + dl + 6;
+	}
+}
+
 static void statusbar(char *path)
 {
 	int i = 0, len = 0;
 	char *ptr;
 	pEntry pent = &pdents[cur];
+
+	draw_hints();
 
 	if (!ndents) {
 		printmsg("0/0");
@@ -8312,11 +8439,15 @@ static int adjust_cols(int n)
 	n -= (g_state.oldcolor ? 0 : ICON_SIZE + ICON_PADDING_LEFT_LEN + ICON_PADDING_RIGHT_LEN);
 #endif
 	if (cfg.showdetail) {
-		/* Fallback to light mode if less than 35 columns */
-		if (n < 36)
+		/* widest detail level that still leaves room for the names, else the legacy one */
+		if (DETAIL_FULL && n >= DETAIL_FULL + DETAIL_NAME_MIN)
+			detail_lvl = 2, n -= DETAIL_FULL;
+		else if (n >= DETAIL_MID + DETAIL_NAME_MIN)
+			detail_lvl = 1, n -= DETAIL_MID;
+		else if (n < 36) /* fallback to light mode if less than 35 columns */
 			cfg.showdetail ^= 1;
 		else /* 2 more accounted for below */
-			n -= 32;
+			detail_lvl = 0, n -= DETAIL_LEG;
 	}
 
 	/* 2 columns for preceding space and indicator */
@@ -8362,6 +8493,7 @@ static void draw_line(int ncols)
 static void redraw(char *path)
 {
 	getmaxyx(stdscr, xlines, xcols);
+	--xlines; /* the last screen line is the key hint bar */
 
 	int ncols = (xcols <= PATH_MAX) ? xcols : PATH_MAX;
 	/* Limit listing width when preview pane is active */
@@ -8558,6 +8690,7 @@ static bool browse(char *ipath, int pkey)
 	atexit(dentfree);
 
 	getmaxyx(stdscr, xlines, xcols);
+	--xlines; /* the last screen line is the key hint bar */
 
 #ifndef NOSSN
 	/* set-up first context */
@@ -9864,7 +9997,7 @@ nochange:
 
 			return EXIT_FAILURE;
 		default:
-			if (xlines != LINES || xcols != COLS)
+			if (xlines != LINES - 1 || xcols != COLS)
 				continue;
 
 			if (idletimeout && idle == idletimeout) {
