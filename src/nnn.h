@@ -63,7 +63,6 @@ enum action {
 	SEL_CDBEGIN,
 	SEL_CDLAST,
 	SEL_CDROOT,
-	SEL_BMOPEN,
 	SEL_REMOTE,
 	SEL_CYCLE,
 	SEL_CYCLER,
@@ -75,7 +74,6 @@ enum action {
 	SEL_CTX6,
 	SEL_CTX7,
 	SEL_CTX8,
-	SEL_MARK,
 	SEL_FLTR,
 	SEL_MFLTR,
 	SEL_HIDDEN,
@@ -85,6 +83,7 @@ enum action {
 	SEL_CHMODX,
 	SEL_ARCHIVE,
 	SEL_SORT,
+	SEL_SORTMENU,
 	SEL_REDRAW,
 	SEL_SEL,
 	SEL_SELMUL,
@@ -128,6 +127,7 @@ enum action {
 
 /* Private key code for Alt+q (outside the Unicode range, never typed) */
 #define KEY_ALT_Q 0x110001
+#define KEY_ALT_T 0x110002
 
 /* Associate a pressed key to an action */
 struct key {
@@ -180,9 +180,6 @@ static struct key bindings[] = {
 	{ '-',            SEL_CDLAST },
 	/* Go to / */
 	{ '`',            SEL_CDROOT },
-	/* Leader key */
-	{ 'b',            SEL_BMOPEN },
-	{ CONTROL('_'),   SEL_BMOPEN },
 	/* Connect to server over SSHFS */
 	{ 'c',            SEL_REMOTE },
 	/* Cycle contexts in forward direction */
@@ -198,8 +195,6 @@ static struct key bindings[] = {
 	{ '6',            SEL_CTX6 },
 	{ '7',            SEL_CTX7 },
 	{ '8',            SEL_CTX8 },
-	/* Mark a path to visit later */
-	{ ',',            SEL_MARK },
 	/* Filter */
 	{ '/',            SEL_FLTR },
 	/* Toggle filter mode */
@@ -291,6 +286,8 @@ static struct key bindings[] = {
 	{ CONTROL('Q'),   SEL_QUIT },
 	/* Alt+q: quit without changing the shell's directory (nextsel() turns Alt+q into this key) */
 	{ KEY_ALT_Q,      SEL_QUITNOCD },
+	/* Alt+t: the old sort prompt (disk usage, version, ...) */
+	{ KEY_ALT_T,      SEL_SORTMENU },
 	/* Quit with an error code */
 	{ 'Q',            SEL_QUITERR },
 #ifndef NOMOUSE

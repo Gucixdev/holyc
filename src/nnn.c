@@ -479,7 +479,6 @@ static char *listpath;
 static char *listroot;
 static char *plgpath;
 static char *pnamebuf, *pselbuf, *findselpos;
-static char *mark;
 static char *trashcmd;
 static char *previewer = NULL;
 #ifndef NOX11
@@ -3707,6 +3706,8 @@ try_quit:
 					c = 'q'; /* Quit context */
 				else if (c == 'q')
 					c = KEY_ALT_Q; /* Alt+q: quit without cd */
+				else if (c == 't')
+					c = KEY_ALT_T; /* Alt+t: sort prompt */
 				else {
 					unget_wch(c);
 					c = ';';
@@ -6395,7 +6396,6 @@ static void show_help(const char *path)
 	   "5Ret Rt l  Open%20'  First file/match\n"
 	       "9g ^A  Top%21J  Jump to entry/offset\n"
 	       "9G ^E  End%20^J  Toggle auto-advance on open\n"
-	      "8, (mark)  Mark dir%11b ^/  Go to mark\n"
 		"a1-8  Context%11(Sh)Tab  Cycle/new context\n"
 	    "62Esc ^Q  Quit%19^y  Next young\n"
 		 "b^G  QuitCD%18Q  Pick/err, quit\n"
@@ -6423,7 +6423,7 @@ static void show_help(const char *path)
 	      "8Alt ;  Select plugin%11=  Launch app\n"
 	       "9! ^]  Shell%19]  Cmd prompt\n"
 		  "cc  Connect remote%10u  Unmount remote/archive\n"
-	       "9t ^T  Sort toggles%12s  Manage session\n"
+	       "9t ^T  Cycle sort%13s  Manage session\n"
 		  "cT  Set time type%110  Lock\n"
 		 "b^L  Redraw%18?  Help, conf\n"
 	};
@@ -6474,8 +6474,6 @@ static void show_help(const char *path)
 	fprintf(f, "used:%s ", coolsize(get_fs_info(path, VFS_USED)));
 	fprintf(f, "size:%s\n\n", coolsize(get_fs_info(path, VFS_SIZE)));
 
-	if (mark)
-		fprintf(f, "MARK\n ,: %s\n\n", mark);
 
 	lazy_parse_plug();
 	if (plug) {
@@ -6911,7 +6909,6 @@ static void dentfree(void)
 
 	free(pnamebuf);
 	free(pdents);
-	free(mark);
 
 	/* Thread data cleanup */
 	free(core_blocks);
@@ -7930,6 +7927,42 @@ static int set_sort_flags(int r)
 	return r;
 }
 
+/*
+ * One key cycles through the sort orders that matter (directories always come first):
+ *   name A-Z, name Z-A, size big-small, size small-big, time new-old, time old-new, extension
+ * The current one is written in the status bar (sortlabel). Alt+t opens the old prompt for the rest.
+ */
+static int sortmode(void)
+{
+	if (cfg.timeorder)
+		return cfg.reverse ? 5 : 4;
+	if (cfg.sizeorder)
+		return cfg.reverse ? 3 : 2;
+	if (cfg.extnorder)
+		return 6;
+	return cfg.reverse ? 1 : 0;
+}
+
+static const char *sortlabel(void)
+{
+	static const char *const names[] = {
+		"name A-Z", "name Z-A", "size big-small", "size small-big", "time new-old", "time old-new", "ext A-Z",
+	};
+
+	return names[sortmode()];
+}
+
+static int sort_cycle(void)
+{
+	static const char *const steps[] = {"", "r", "s", "sr", "t", "tr", "e"};
+	int next = (cfg.blkorder || cfg.apparentsz) ? 0 : (sortmode() + 1) % 7;
+	int r = set_sort_flags('c');
+
+	for (const char *k = steps[next]; *k; ++k)
+		r = set_sort_flags(*k);
+	return r ? r : 'c';
+}
+
 static bool set_time_type(int *presel)
 {
 	bool ret = FALSE;
@@ -7974,7 +8007,7 @@ static const struct hint {
 	{ 0, "a", "toggle all" },         { 0, "m", "multi" },       { 0, "p", "copy" },
 	{ 0, "v", "move" },        { 0, "x", "trash" },       { 0, "r", "run" },         { 0, "R", "batch rename" },
 	{ 0, "n", "new" },         { 0, "o", "open with" },   { 0, "e", "edit" },
-	{ 0, ",", "mark" },        { 0, "b", "to mark" },     { 0, "t", "sort" },
+	{ 0, "t", "cycle sort" },
 	{ 0, "s", "sessions" },    { 0, "1-8", "context" },
 	{ HM_CTRL, "^A", "top" },       { HM_CTRL, "^E", "end" },        { HM_CTRL, "^D", "page down" },
 	{ HM_CTRL, "^U", "page up" },   { HM_CTRL, "^F", "file info" },  { HM_CTRL, "^N", "filter mode" },
@@ -7982,12 +8015,12 @@ static const struct hint {
 	{ HM_CTRL, "^X", "trash" },     { HM_CTRL, "^O", "open with" },  { HM_CTRL, "^R", "rename" },
 	{ HM_CTRL, "^T", "sort" },      { HM_CTRL, "^Y", "next new" },   { HM_CTRL, "^J", "auto-next" },
 	{ HM_CTRL, "^G", "quit+cd" },   { HM_CTRL, "^Q", "quit" },       { HM_CTRL, "^L", "redraw" },
-	{ HM_CTRL, "^/", "to mark" },   { HM_CTRL, "^]", "shell" },
+	{ HM_CTRL, "^]", "shell" },
 	{ HM_SHIFT, "R", "batch rename" }, { HM_SHIFT, "A", "invert sel" }, { HM_SHIFT, "E", "edit sel" },   { HM_SHIFT, "G", "end" },
 	{ HM_SHIFT, "J", "jump" },       { HM_SHIFT, "P", "preview" },    { HM_SHIFT, "Q", "quit (err)" },
 	{ HM_SHIFT, "S", "sel size" },   { HM_SHIFT, "T", "time type" },  { HM_SHIFT, "X", "rm -rf" },
 	{ HM_SHIFT, "Tab", "prev ctx" },
-	{ HM_ALT, "q", "quit, no cd" },     { HM_ALT, ";", "plugin" },       { HM_ALT, "Esc", "quit ctx" },
+	{ HM_ALT, "q", "quit, no cd" },     { HM_ALT, "t", "sort menu" },     { HM_ALT, ";", "plugin" },       { HM_ALT, "Esc", "quit ctx" },
 };
 
 static void draw_hints(void)
@@ -8078,12 +8111,10 @@ static void statusbar(char *path)
 		       (cfg.apparentsz ? 'a' : 'd'), buf, coolsize(get_fs_info(path, VFS_AVAIL)),
 		       num_files, (ullong_t)pent->blocks << blk_shift, ptr);
 	} else { /* light or detail mode */
-		char sort[] = "\0\0\0\0\0";
-
 		if (cfg.filtermode)
 			addch('F');
 
-		getorderstr(sort) ? addstr(sort) : addch(' ');
+		printw("%s%s ", cfg.showhidden ? "H " : "", sortlabel());
 
 		/* Timestamp */
 		print_time(&pent->sec, pent->flags);
@@ -9403,21 +9434,6 @@ nochange:
 
 			/* SEL_CDLAST: dir pointing to lastdir */
 			xstrsncpy(newpath, dir, PATH_MAX); // fallthrough
-		case SEL_BMOPEN:
-			if (sel == SEL_BMOPEN) {
-				if (!mark) {
-					printwait(messages[MSG_NOT_SET], &presel);
-					goto nochange;
-				}
-				xstrsncpy(newpath, mark, PATH_MAX);
-				if (chdir(newpath) == -1) {
-					printwait(messages[MSG_ACCESS], &presel);
-					goto nochange;
-				}
-				if (strcmp(path, newpath) == 0)
-					break;
-			}
-
 			/* In list mode, retain the last file name to highlight it, if possible */
 			cdprep(lastdir, listpath && sel == SEL_CDLAST ? NULL : lastname, path, newpath)
 			       ? (presel = FILTER) : (watch = TRUE);
@@ -9459,15 +9475,6 @@ nochange:
 				watch = TRUE;
 
 			goto begin;
-		case SEL_MARK:
-			free(mark);
-			mark = xstrdup(path);
-			if (!mark) {
-				printwarn(&presel);
-				goto nochange;
-			}
-			printwait(mark, &presel);
-			goto nochange;
 		case SEL_FLTR:
 			/* Unwatch dir if we are still in a filtered view */
 #ifdef LINUX_INOTIFY
@@ -9500,6 +9507,7 @@ nochange:
 		case SEL_SYMLINK: // fallthrough
 		case SEL_DETAIL: // fallthrough
 		case SEL_PREVIEW: // fallthrough
+		case SEL_SORTMENU: // fallthrough
 		case SEL_SORT:
 			switch (sel) {
 			case SEL_MFLTR:
@@ -9536,7 +9544,7 @@ nochange:
 				cfg.preview ^= 1;
 				continue;
 			default: /* SEL_SORT */
-				r = set_sort_flags(get_input(messages[MSG_ORDER]));
+				r = (sel == SEL_SORTMENU) ? set_sort_flags(get_input(messages[MSG_ORDER])) : sort_cycle();
 				if (!r) {
 					printwait(messages[MSG_INVALID_KEY], &presel);
 					goto nochange;

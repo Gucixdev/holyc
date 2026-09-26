@@ -425,6 +425,11 @@ runs in the terminal and waits for Enter. Batch rename moved to \fBR\fR.
 The preview pane shows text, directory listings, and for other files the output of a tool: \fBffprobe\fR for audio/video
 (tags, duration), \fBbsdtar\fR for archives, \fBpdftotext\fR for PDF, otherwise \fBfile\fR. It is text only (no pixels).
 .Pp
+.Sh CYCLING THE SORT ORDER
+\fBt\fR (or \fB^T\fR) cycles: name A-Z, name Z-A, size big-small, size small-big, time new-old, time old-new, extension.
+Directories always come first and the current order is shown in the status bar. \fBAlt+t\fR opens the old order prompt
+(disk usage, version order, ...).
+.Pp
 .Sh QUITTING
 With \fBNNN_TMPFILE\fR set (cd on quit) every normal quit (\fBq\fR in the last context, \fB^Q\fR) writes the
 last directory. \fBAlt+q\fR quits without writing it, so the shell stays where it was.
@@ -433,10 +438,6 @@ last directory. \fBAlt+q\fR quits without writing it, so the shell stays where i
 The last screen line lists the keys. Hold Ctrl, Alt or Shift and only the keys of that modifier are shown.
 This needs a terminal with the kitty keyboard protocol (foot, kitty, wezterm); otherwise only the plain keys
 are listed. \fBNNN_KITTY=0\fR turns the protocol off.
-.Pp
-.Sh MARK
-Press \fB,\fR to mark the current directory; \fBb\fR (or \fB^/\fR) jumps to the marked directory.
-The directory where the key was pressed becomes the previous directory: press \fB-\fR to return to it.
 .Pp
 .Sh UNITS
 The minimum file size unit is byte (B). The rest are K, M, G, T, P, E, Z, Y
