@@ -2803,7 +2803,7 @@ static bool xrm(char * const fpath, bool use_trash)
 		rm_opts[3] = r;
 		spawn("rm", rm_opts, "--", fpath, F_NORMAL | F_CHKRTN);
 	} else
-		spawn(trashcmd, fpath, NULL, NULL, F_NORMAL | F_MULTI);
+		spawn(trashcmd, fpath, NULL, NULL, F_NORMAL | F_MULTI | F_CHKRTN); /* a failing trash tool (e.g. no .Trash-UID on that disk) must not be silent */
 
 	return (access(fpath, F_OK) == -1); /* File is removed */
 }
