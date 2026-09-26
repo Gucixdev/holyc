@@ -888,7 +888,8 @@ static haiku_nm_h haiku_hnd;
 /* Function macros */
 #define tolastln() move(xlines - 1, 0)
 #define tocursor() move(cur + 2 - curscroll, 0)
-#define exitcurses() do { kb_off(); move(xlines, 0); clrtoeol(); refresh(); endwin(); } while (0)
+#define HINT_ROWS 2 /* screen lines at the bottom for the key hint bar */
+#define exitcurses() do { kb_off(); for (int i_ = 0; i_ < HINT_ROWS; ++i_) { move(xlines + i_, 0); clrtoeol(); } refresh(); endwin(); } while (0)
 #define istopdir(path) ((path)[1] == '\0' && (path)[0] == '/')
 #define settimeout() timeout(1000)
 #define cleartimeout() timeout(-1)
@@ -1664,7 +1665,7 @@ static int get_input(const char *prompt)
 	while (*ch == KEY_RESIZE) {
 		if (prompt) {
 			clearoldprompt();
-			xlines = LINES - 1; /* the last screen line is the key hint bar */
+			xlines = LINES - HINT_ROWS; /* the last screen lines are the key hint bar */
 			printmsg(prompt);
 		}
 
@@ -4461,7 +4462,7 @@ static char *xreadline(const char *prefill, const char *prompt)
 #ifdef KEY_RESIZE
 			case KEY_RESIZE:
 				clearoldprompt();
-				xlines = LINES - 1; /* the last screen line is the key hint bar */
+				xlines = LINES - HINT_ROWS; /* the last screen lines are the key hint bar */
 				printmsg(prompt);
 				break;
 #endif
@@ -7967,14 +7968,14 @@ static const struct hint {
 	const char *key, *desc;
 } hints[] = {
 	{ 0, "j/k", "move" },      { 0, "Left", "back" },     { 0, "Right/Enter", "open" },
+	{ 0, "?", "help" },        { 0, "q", "quit (+cd)" },
 	{ 0, "/", "filter" },      { 0, "h", "hidden" },      { 0, "l", "symlinks" },
 	{ 0, "d", "detail" },      { 0, "P", "preview" },     { 0, "Space", "select" },
 	{ 0, "a", "toggle all" },         { 0, "m", "multi" },       { 0, "p", "copy" },
 	{ 0, "v", "move" },        { 0, "x", "trash" },       { 0, "r", "run" },         { 0, "R", "batch rename" },
 	{ 0, "n", "new" },         { 0, "o", "open with" },   { 0, "e", "edit" },
 	{ 0, ",", "mark" },        { 0, "b", "to mark" },     { 0, "t", "sort" },
-	{ 0, "s", "sessions" },    { 0, "1-8", "context" },   { 0, "?", "help" },
-	{ 0, "q", "quit (+cd)" },
+	{ 0, "s", "sessions" },    { 0, "1-8", "context" },
 	{ HM_CTRL, "^A", "top" },       { HM_CTRL, "^E", "end" },        { HM_CTRL, "^D", "page down" },
 	{ HM_CTRL, "^U", "page up" },   { HM_CTRL, "^F", "file info" },  { HM_CTRL, "^N", "filter mode" },
 	{ HM_CTRL, "^P", "copy" },      { HM_CTRL, "^V", "move" },       { HM_CTRL, "^W", "copy as" },
@@ -7991,27 +7992,33 @@ static const struct hint {
 
 static void draw_hints(void)
 {
-	int x = 0;
+	int x = 0, row = 0;
 
-	if (xlines < 5)
+	if (xlines < 6)
 		return;
 
-	move(xlines, 0);
-	clrtoeol();
+	for (int r = 0; r < HINT_ROWS; ++r) {
+		move(xlines + r, 0);
+		clrtoeol();
+	}
 	for (size_t i = 0; i < ELEMENTS(hints); ++i) {
 		/* plain keys when nothing is held, else the hints of every modifier that is held */
 		if (hint_mods ? (!hints[i].mods || (hints[i].mods & ~hint_mods)) : hints[i].mods)
 			continue;
 
 		int kl = (int)xstrlen(hints[i].key) - 1, dl = (int)xstrlen(hints[i].desc) - 1;
+		int w = kl + dl + 6;
 
-		if (x + kl + dl + 5 > xcols)
-			break;
+		if (x + w - 1 > xcols) { /* does not fit: continue on the next line, stop after the last one */
+			if (++row >= HINT_ROWS)
+				break;
+			x = 0;
+		}
 		attron(A_REVERSE);
-		mvprintw(xlines, x, " %s ", hints[i].key);
+		mvprintw(xlines + row, x, " %s ", hints[i].key);
 		attroff(A_REVERSE);
-		mvprintw(xlines, x + kl + 2, " %s ", hints[i].desc);
-		x += kl + dl + 6;
+		mvprintw(xlines + row, x + kl + 2, " %s ", hints[i].desc);
+		x += w;
 	}
 }
 
@@ -8679,7 +8686,7 @@ static void draw_line(int ncols)
 static void redraw(char *path)
 {
 	getmaxyx(stdscr, xlines, xcols);
-	--xlines; /* the last screen line is the key hint bar */
+	xlines -= HINT_ROWS; /* the last screen lines are the key hint bar */
 
 	int ncols = (xcols <= PATH_MAX) ? xcols : PATH_MAX;
 	/* Limit listing width when preview pane is active */
@@ -8876,7 +8883,7 @@ static bool browse(char *ipath, int pkey)
 	atexit(dentfree);
 
 	getmaxyx(stdscr, xlines, xcols);
-	--xlines; /* the last screen line is the key hint bar */
+	xlines -= HINT_ROWS; /* the last screen lines are the key hint bar */
 
 #ifndef NOSSN
 	/* set-up first context */
@@ -10217,7 +10224,7 @@ nochange:
 
 			return EXIT_FAILURE;
 		default:
-			if (xlines != LINES - 1 || xcols != COLS)
+			if (xlines != LINES - HINT_ROWS || xcols != COLS)
 				continue;
 
 			if (idletimeout && idle == idletimeout) {
