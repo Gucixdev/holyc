@@ -223,17 +223,21 @@ drw_fontset_free(Fnt *font)
 void
 drw_clr_create(Drw *drw, Clr *dest, const char *clrname)
 {
-	unsigned int r = 0, g = 0, b = 0;
+	unsigned int r = 0, g = 0, b = 0, a = 255;
 
 	if (!drw || !dest || !clrname)
 		return;
 
 	if (clrname[0] == '#' && strlen(clrname) == 7) {
 		sscanf(clrname + 1, "%02x%02x%02x", &r, &g, &b);
+	} else if (clrname[0] == '#' && strlen(clrname) == 9) {
+		sscanf(clrname + 1, "%02x%02x%02x%02x", &r, &g, &b, &a);
 	} else {
-		fprintf(stderr, "warning: only #rrggbb colors are real here, got '%s'\n", clrname);
+		fprintf(stderr, "warning: only #rrggbb and #rrggbbaa colors are real here, got '%s'\n", clrname);
 	}
-	*dest = 0xff000000u | (r << 16) | (g << 8) | b;
+	/* wl_shm ARGB8888 is premultiplied alpha */
+	r = r * a / 255; g = g * a / 255; b = b * a / 255;
+	*dest = (a << 24) | (r << 16) | (g << 8) | b;
 }
 
 Clr *
@@ -278,7 +282,7 @@ putpixel(Drw *drw, int x, int y, Clr c)
 static void
 blendpixel(Drw *drw, int x, int y, Clr fg, unsigned int a)
 {
-	uint32_t bg, or_, og, ob, nr, ng, nb;
+	uint32_t bg, oa, or_, og, ob, na, nr, ng, nb;
 
 	if (x < 0 || y < 0 || (unsigned)x >= drw->w || (unsigned)y >= drw->h || a == 0)
 		return;
@@ -286,13 +290,14 @@ blendpixel(Drw *drw, int x, int y, Clr fg, unsigned int a)
 		putpixel(drw, x, y, fg);
 		return;
 	}
+	/* premultiplied source-over with the glyph coverage `a` applied to the (premultiplied) fg colour */
 	bg = drw->pixels[y * (int)drw->w + x];
-	or_ = (bg >> 16) & 0xff; og = (bg >> 8) & 0xff; ob = bg & 0xff;
-	nr = ((fg >> 16) & 0xff); ng = ((fg >> 8) & 0xff); nb = fg & 0xff;
-	nr = (nr * a + or_ * (255 - a)) / 255;
-	ng = (ng * a + og * (255 - a)) / 255;
-	nb = (nb * a + ob * (255 - a)) / 255;
-	drw->pixels[y * (int)drw->w + x] = 0xff000000u | (nr << 16) | (ng << 8) | nb;
+	oa = bg >> 24; or_ = (bg >> 16) & 0xff; og = (bg >> 8) & 0xff; ob = bg & 0xff;
+	na = ((fg >> 24) * a + oa * (255 - a)) / 255;
+	nr = (((fg >> 16) & 0xff) * a + or_ * (255 - a)) / 255;
+	ng = (((fg >> 8) & 0xff) * a + og * (255 - a)) / 255;
+	nb = ((fg & 0xff) * a + ob * (255 - a)) / 255;
+	drw->pixels[y * (int)drw->w + x] = (na << 24) | (nr << 16) | (ng << 8) | nb;
 }
 
 void

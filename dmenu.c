@@ -38,7 +38,7 @@
 #define TEXTW(X)              (drw_fontset_getwidth(drw, (X)) + lrpad)
 
 /* enums */
-enum { SchemeNorm, SchemeSel, SchemeOut, SchemeLast }; /* color schemes */
+enum { SchemeNorm, SchemeSel, SchemeOut, SchemeInput, SchemePrompt, SchemeHint, SchemeLast }; /* color schemes */
 
 struct item {
 	char *text;
@@ -179,9 +179,90 @@ drawitem(struct item *item, int x, int y, int w)
 	return drw_text(drw, x, y, (unsigned)w, (unsigned)bh, (unsigned)(lrpad / 2), item->text, 0);
 }
 
+/* ---- rofi look ---------------------------------------------------------- */
+static int inh, rowh;        /* input bar height, list row height (bh becomes the row pitch) */
+static int nitems_visible;   /* rows in the list right now */
+static int reqh;             /* height last asked from the compositor */
+
+static int
+rofi_height(int nrows)
+{
+	int h = 2 * (rofi_border + rofi_pad) + inh;
+
+	if (nrows > 0)
+		h += rofi_gap + nrows * rowh + (nrows - 1) * rofi_el_gap;
+	return h;
+}
+
+static void
+drawmenu_rofi(void)
+{
+	struct item *item;
+	int n = 0, x0 = rofi_border + rofi_pad, w0 = mw - 2 * x0, y, tw, ex;
+	int fh = (int)drw->fonts->h;
+
+	for (item = curr; item && item != next; item = item->right)
+		n++;
+	nitems_visible = n;
+	if (rofi_height(n) != mh && rofi_height(n) != reqh) { /* the list grew/shrank: ask for a new size, redraw on configure */
+		mh = reqh = rofi_height(n);
+		zwlr_layer_surface_v1_set_size(layer_surface, (uint32_t)mw, (uint32_t)mh);
+		wl_surface_commit(surface);
+		return;
+	}
+
+	/* window: translucent background, accent border */
+	drw_setscheme(drw, scheme[SchemeNorm]);
+	drw_rect(drw, 0, 0, (unsigned)mw, (unsigned)mh, 1, 1);
+	drw_setscheme(drw, scheme[SchemePrompt]);
+	for (y = 0; y < rofi_border; y++)
+		drw_rect(drw, y, y, (unsigned)(mw - 2 * y), (unsigned)(mh - 2 * y), 0, 0);
+
+	/* input bar */
+	drw_setscheme(drw, scheme[SchemeInput]);
+	drw_rect(drw, x0, x0, (unsigned)w0, (unsigned)inh, 1, 1);
+	ex = x0 + rofi_in_padx;
+	if (prompt && *prompt) {
+		drw_setscheme(drw, scheme[SchemePrompt]);
+		tw = (int)drw_fontset_getwidth(drw, prompt);
+		drw_text(drw, ex, x0, (unsigned)tw, (unsigned)inh, 0, prompt, 0);
+		ex += tw + rofi_in_gap;
+	}
+	if (*text) {
+		drw_setscheme(drw, scheme[SchemeInput]);
+		drw_text(drw, ex, x0, (unsigned)(x0 + w0 - rofi_in_padx - ex), (unsigned)inh, 0, text, 0);
+	} else if (rofi_placeholder && *rofi_placeholder) {
+		drw_setscheme(drw, scheme[SchemeHint]);
+		drw_text(drw, ex, x0, (unsigned)(x0 + w0 - rofi_in_padx - ex), (unsigned)inh, 0, rofi_placeholder, 0);
+	}
+	{
+		char pre[BUFSIZ];
+		size_t c = MIN(cursor, sizeof(pre) - 1);
+
+		memcpy(pre, text, c);
+		pre[c] = '\0';
+		drw_setscheme(drw, scheme[SchemeInput]);
+		drw_rect(drw, ex + (int)drw_fontset_getwidth(drw, pre), x0 + (inh - fh) / 2, 2, (unsigned)fh, 1, 0);
+	}
+
+	/* list */
+	y = x0 + inh + rofi_gap;
+	for (item = curr; item && item != next; item = item->right) {
+		drw_setscheme(drw, scheme[item == sel ? SchemeSel : (item->out ? SchemeOut : SchemeNorm)]);
+		drw_text(drw, x0, y, (unsigned)w0, (unsigned)rowh, (unsigned)rofi_el_padx, item->text, 0);
+		y += rowh + rofi_el_gap;
+	}
+	redraw();
+}
+
 static void
 drawmenu(void)
 {
+	if (rofimode) {
+		drawmenu_rofi();
+		return;
+	}
+
 	unsigned int curpos;
 	struct item *item;
 	int x = 0, y = 0, w;
@@ -601,11 +682,15 @@ layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *ls,
 {
 	zwlr_layer_surface_v1_ack_configure(ls, serial);
 	mw = (int)width;
+	if (rofimode && height)
+		mh = (int)height;
 	configured = 1;
 	drw_resize(drw, (unsigned)mw, (unsigned)mh);
 	promptw = (prompt && *prompt) ? (int)TEXTW(prompt) - lrpad / 4 : 0;
 	inputw = mw / 3;
 	match();
+	if (rofimode)
+		reqh = 0; /* a configure means the last size request is settled */
 	drawmenu();
 }
 
@@ -771,7 +856,7 @@ static const struct wl_registry_listener registry_listener = { .global = registr
 static void
 usage(void)
 {
-	die("usage: dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]\n"
+	die("usage: dmenu [-bfirTv] [-l lines] [-p prompt] [-fn font] [-m monitor]\n"
 	    "             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]");
 }
 
@@ -790,6 +875,10 @@ main(int argc, char *argv[])
 			topbar = 0;
 		else if (!strcmp(argv[i], "-f"))
 			fast = 1;
+		else if (!strcmp(argv[i], "-r"))
+			rofimode = 1;
+		else if (!strcmp(argv[i], "-T"))
+			rofimode = 0;
 		else if (!strcmp(argv[i], "-i")) {
 			fstrncmp = strncasecmp;
 			fstrstr = cistrstr;
@@ -847,6 +936,8 @@ main(int argc, char *argv[])
 		die("no fonts could be loaded.");
 	lrpad = (int)drw->fonts->h;
 
+	if (rofimode) /* window background is the translucent one */
+		colors[SchemeNorm][ColBg] = rofi_bg;
 	for (i = 0; i < SchemeLast; i++)
 		scheme[i] = drw_scm_create(drw, colors[i], 2);
 
@@ -859,16 +950,35 @@ main(int argc, char *argv[])
 	bh = (int)drw->fonts->h + 2;
 	lines = MAX(lines, 0);
 	mh = (lines + 1) * bh;
+	if (rofimode) {
+		size_t n = 0;
+
+		while (items && items[n].text) /* items is still a plain array here: the links are set by match() */
+			n++;
+		if (!lines)
+			lines = rofi_lines;
+		inh = (int)drw->fonts->h + 2 * rofi_in_pady;
+		rowh = (int)drw->fonts->h + 2 * rofi_el_pady;
+		bh = rowh + rofi_el_gap; /* row pitch for the shared list logic */
+		mw = rofi_width;
+		mh = reqh = rofi_height((int)MIN(n, (size_t)lines));
+	}
 
 	surface = wl_compositor_create_surface(compositor);
 	layer_surface = zwlr_layer_shell_v1_get_layer_surface(layer_shell, surface, chosen_output,
 	                                                       ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "dmenu");
 	zwlr_layer_surface_v1_add_listener(layer_surface, &layer_surface_listener, NULL);
-	zwlr_layer_surface_v1_set_size(layer_surface, 0, (uint32_t)mh);
-	zwlr_layer_surface_v1_set_anchor(layer_surface,
-		ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
-		(topbar ? ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP : ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM));
-	zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, mh);
+	if (rofimode) {
+		zwlr_layer_surface_v1_set_size(layer_surface, (uint32_t)rofi_width, (uint32_t)mh);
+		zwlr_layer_surface_v1_set_anchor(layer_surface, 0); /* no anchor = centred */
+		zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, -1);
+	} else {
+		zwlr_layer_surface_v1_set_size(layer_surface, 0, (uint32_t)mh);
+		zwlr_layer_surface_v1_set_anchor(layer_surface,
+			ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
+			(topbar ? ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP : ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM));
+		zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, mh);
+	}
 	zwlr_layer_surface_v1_set_keyboard_interactivity(layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
 	wl_surface_commit(surface);
 
