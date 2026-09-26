@@ -693,7 +693,12 @@ static const struct wl_keyboard_listener keyboard_listener = {
 };
 
 static void data_offer_offer(void *data, struct wl_data_offer *o, const char *mime) {}
-static const struct wl_data_offer_listener data_offer_listener = { .offer = data_offer_offer };
+/* version >= 3 of wl_data_offer also sends these; libwayland aborts on an event without a handler */
+static void data_offer_source_actions(void *data, struct wl_data_offer *o, uint32_t actions) {}
+static void data_offer_action(void *data, struct wl_data_offer *o, uint32_t action) {}
+static const struct wl_data_offer_listener data_offer_listener = {
+	.offer = data_offer_offer, .source_actions = data_offer_source_actions, .action = data_offer_action,
+};
 
 static void
 data_device_data_offer(void *data, struct wl_data_device *dd, struct wl_data_offer *offer)
