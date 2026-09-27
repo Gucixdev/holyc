@@ -10584,7 +10584,7 @@ static void check_key_collision(void)
 static void usage(void)
 {
 	fprintf(stdout,
-		"%s: nnn [OPTIONS] [PATH]\n\n"
+		"%s: mc [OPTIONS] [PATH]\n\n"
 		"The unorthodox terminal file manager.\n\n"
 		"positional args:\n"
 		"  PATH   start dir/file [default: .]\n\n"

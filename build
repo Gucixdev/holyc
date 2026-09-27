@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Buduje ten fork (branch Gucixdev-hl-toggle) i instaluje do ~/.local/bin/nnn
+# Buduje ten fork (branch Gucixdev-hl-toggle, dawne "nnn") i instaluje do ~/.local/bin/mc
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 make O_NORL=1 -j"$(nproc)"
-install -m 755 nnn "$HOME/.local/bin/nnn"
-echo "Zainstalowano: $HOME/.local/bin/nnn ($("$HOME/.local/bin/nnn" -V))"
+install -m 755 mc "$HOME/.local/bin/mc"
+echo "Zainstalowano: $HOME/.local/bin/mc ($("$HOME/.local/bin/mc" -V))"

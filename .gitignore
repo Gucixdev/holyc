@@ -1,5 +1,5 @@
 *.o
 *.dSYM
-nnn
+mc
 src/icons-generated*.h
 src/icons-hash-gen
