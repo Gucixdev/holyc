@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# $EDITOR/$VISUAL wrapper: obrazy leca do mpv (podglad), reszta do emacsa.
+# Uzywane przez nnn (klawisz 'e'), git commit, itp - wszedzie gdzie leci $EDITOR.
+
+file="$1"
+mime=$(file --mime-type -b "$file" 2>/dev/null)
+
+case "$mime" in
+    image/*)
+        exec mpv --no-config "$file"
+        ;;
+    *)
+        exec emacs -nw "$file"
+        ;;
+esac
