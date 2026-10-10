@@ -3,21 +3,18 @@
  * Replaces the rofi shell script bound to Super+W: one menu with
  *   Aplikacje   desktop applications that are not games
  *   Gry         desktop applications in the Game category
- *   Skrypty     executables from your script directories
  *   Kalkulator  type an expression, the result is copied to the clipboard
  *   Schowek     cliphist history, the chosen entry goes back to the clipboard
  * Every list is shown by dmenu (DMENU_CMD, default "dmenu -i"), one item
  * per line, and the choice is read back from its stdout.
  *
  * usage: dmenu_menu              the main menu
- *        dmenu_menu apps|games|scripts|calc|clip    jump straight to one entry
- *        dmenu_menu --eval EXPR  print the value of EXPR and exit (for scripts)
+ *        dmenu_menu apps|games|calc|clip    jump straight to one entry
+ *        dmenu_menu --eval EXPR  print the value of EXPR and exit (for calc)
  *
  * environment:
  *   DMENU_CMD      picker command (default "dmenu -i"); a prompt is added as -p
- *   DMENU_SCRIPTS  colon separated script directories (default: ~/dev/repos/setup/bash, see DEFAULT_SCRIPTS)
- *                  (default ~/.config/src:~/.local/bin)
- *   DMENU_TERMINAL terminal for Terminal=true apps and scripts (default foot)
+ *   DMENU_TERMINAL terminal for Terminal=true apps (default foot)
  *
  * Applications come from $XDG_DATA_HOME/applications, $XDG_DATA_DIRS/applications
  * and the Flatpak export directories (also $FLATPAK_USER_DIR/exports/share).
@@ -342,45 +339,6 @@ menu_apps(int games)
 	free(r);
 }
 
-/* ---- scripts ----------------------------------------------------------- */
-/* The folder the "Skrypty" entry lists (relative to $HOME): the bash tools collection. */
-#define DEFAULT_SCRIPTS "/dev/repos/setup/bash"
-
-static void
-menu_scripts(void)
-{
-	struct item *v = NULL, *sel;
-	size_t n = 0, cap = 0;
-	const char *env = getenv("DMENU_SCRIPTS");
-	char *dirs, *save = NULL, *t, *r;
-
-	if (env && *env) {
-		dirs = xstrdup(env);
-	} else {
-		dirs = join(home(), DEFAULT_SCRIPTS, ""); /* one designated folder, not every binary in ~/.local/bin */
-	}
-	for (t = strtok_r(dirs, ":", &save); t; t = strtok_r(NULL, ":", &save)) {
-		DIR *d = opendir(t);
-		struct dirent *e;
-		if (!d)
-			continue;
-		while ((e = readdir(d))) {
-			char *p = join(t, "/", e->d_name);
-			struct stat st;
-			if (e->d_name[0] != '.' && stat(p, &st) == 0 && S_ISREG(st.st_mode) && (st.st_mode & S_IXUSR))
-				additem(&v, &n, &cap, e->d_name, p, 1);
-			free(p);
-		}
-		closedir(d);
-	}
-	free(dirs);
-	qsort(v, n, sizeof *v, cmpitem);
-	r = pickitem("Skrypty:", v, n, &sel);
-	if (sel)
-		detach_run(sel->data, sel->terminal);
-	free(r);
-}
-
 /* ---- calculator -------------------------------------------------------- */
 static const char *g_p;
 static int g_err;
@@ -586,14 +544,13 @@ menu_clip(void)
 static void
 mainmenu(void)
 {
-	char *entries[] = { "Aplikacje", "Gry", "Skrypty", "Kalkulator", "Schowek" };
-	char *r = pick("Menu:", entries, 5);
+	char *entries[] = { "Aplikacje", "Gry", "Kalkulator", "Schowek" };
+	char *r = pick("Menu:", entries, 4);
 
 	if (!r)
 		return;
 	if (!strcmp(r, "Aplikacje")) menu_apps(0);
 	else if (!strcmp(r, "Gry")) menu_apps(1);
-	else if (!strcmp(r, "Skrypty")) menu_scripts();
 	else if (!strcmp(r, "Kalkulator")) menu_calc();
 	else if (!strcmp(r, "Schowek")) menu_clip();
 	free(r);
@@ -639,11 +596,10 @@ main(int argc, char *argv[])
 	if (argc >= 2) {
 		if (!strcmp(argv[1], "apps")) menu_apps(0);
 		else if (!strcmp(argv[1], "games")) menu_apps(1);
-		else if (!strcmp(argv[1], "scripts")) menu_scripts();
 		else if (!strcmp(argv[1], "calc")) menu_calc();
 		else if (!strcmp(argv[1], "clip")) menu_clip();
 		else {
-			fputs("usage: dmenu_menu [apps|games|scripts|calc|clip | --eval EXPR]\n", stderr);
+			fputs("usage: dmenu_menu [apps|games|calc|clip | --eval EXPR]\n", stderr);
 			return 1;
 		}
 		return 0;
