@@ -1,4 +1,4 @@
-# mc (Gucixdev fork of nnn) - lean build: make [O_FLAG=1 ...], make install, make clean
+# nnn (Gucixdev fork of upstream nnn) - lean build: make [O_FLAG=1 ...], make install, make clean
 # Release engineering (static/musl builds, signing, uploads, desktop files, user patches) was removed on purpose.
 
 VERSION = $(shell grep -m1 VERSION $(SRC) | cut -f 2 -d'"')
@@ -99,7 +99,7 @@ LDLIBS += $(LDLIBS_CURSES) -lpthread
 
 SRC = src/nnn.c
 HEADERS += src/nnn.h src/kbd.h $(if $(filter 1,$(strip $(O_DEBUG))),src/dbg.h) $(if $(filter 1,$(strip $(O_QSORT))),src/qsort.h)
-BIN = mc
+BIN = nnn
 
 all: $(BIN)
 

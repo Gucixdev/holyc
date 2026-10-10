@@ -127,6 +127,9 @@
 #define alloca(size) __builtin_alloca(size)
 #endif
 
+#define ARENA_ALLOC_IMPLEMENTATION
+#include "arena_alloc.h"
+
 #include "nnn.h"
 #include "dbg.h"
 
@@ -207,7 +210,6 @@
 #define ENTRY_INCR      64 /* Number of dir 'entry' structures to allocate per shot */
 #define ENTRY_INCR_DU   1024 /* Larger increment in du mode to reduce realloc and wait-for-threads */
 #define TASK_CAP_DU     256  /* Initial number of tasks for disk usage */
-#define NAMEBUF_INCR    0x800 /* 64 dir entries at once, avg. 32 chars per file name = 64*32B = 2KB */
 #define DESCRIPTOR_LEN  32
 #define _ALIGNMENT      0x10 /* 16-byte alignment */
 #define _ALIGNMENT_MASK 0xF
@@ -478,7 +480,10 @@ static char *selpath;
 static char *listpath;
 static char *listroot;
 static char *plgpath;
-static char *pnamebuf, *pselbuf, *findselpos;
+static char *pselbuf, *findselpos;
+/* dentfill()'s struct entry array + file-name storage. FLAT-backend arena:
+ * reset (not freed) between directory reads, see dentfill(). */
+static Arena g_dentarena;
 static char *trashcmd;
 static char *previewer = NULL;
 #ifndef NOX11
@@ -6923,8 +6928,7 @@ static void dentfree(void)
 			pthread_join(worker_tids[i], NULL);
 	}
 
-	free(pnamebuf);
-	free(pdents);
+	arena_free(&g_dentarena); /* backs both pdents and their names now */
 
 	/* Thread data cleanup */
 	free(core_blocks);
@@ -7253,9 +7257,9 @@ static int dentfill(char *path, struct entry **ppdents)
 	uchar_t entflags = 0;
 	int flags = 0;
 	struct dirent *dp;
-	char *namep, *pnb, *buf;
+	char *namep, *buf;
+	char namebuf[NAME_MAX + 1];
 	struct entry *dentp;
-	size_t off = 0, namebuflen = NAMEBUF_INCR;
 	struct stat sb_path, sb;
 	DIR *dirp = opendir(path);
 
@@ -7394,46 +7398,23 @@ static int dentfill(char *path, struct entry **ppdents)
 				pthread_mutex_unlock(&running_mutex);
 			}
 
-			total_dents += cfg.blkorder ? ENTRY_INCR_DU : ENTRY_INCR;
-			*ppdents = xrealloc(*ppdents, total_dents * sizeof(**ppdents));
-			if (!*ppdents) {
-				free(pnamebuf);
-				closedir(dirp);
-				errexit();
-			}
+			/* Geometric growth (was a fixed +ENTRY_INCR step, O(n^2)
+			 * total copying on huge directories) out of g_dentarena -
+			 * FLAT-backend, so this almost never actually moves memory. */
+			size_t old_dents = total_dents;
+			total_dents = total_dents ? total_dents * 2 : (cfg.blkorder ? ENTRY_INCR_DU : ENTRY_INCR);
+			*ppdents = arena_realloc(&g_dentarena, *ppdents,
+					old_dents * sizeof(**ppdents), total_dents * sizeof(**ppdents));
 			DPRINTF_P(*ppdents);
-		}
-
-		/* If not enough bytes left to copy a file name of length NAME_MAX, re-allocate */
-		if (namebuflen - off < NAME_MAX + 1) {
-			namebuflen += NAMEBUF_INCR;
-
-			pnb = pnamebuf;
-			pnamebuf = (char *)xrealloc(pnamebuf, namebuflen);
-			if (!pnamebuf) {
-				free(*ppdents);
-				closedir(dirp);
-				errexit();
-			}
-			DPRINTF_P(pnamebuf);
-
-			/* realloc() may result in memory move, we must re-adjust if that happens */
-			if (pnb != pnamebuf) {
-				dentp = *ppdents;
-				dentp->name = pnamebuf;
-
-				for (int count = 1; count < ndents; ++dentp, ++count)
-					/* Current file name starts at last file name start + length */
-					(dentp + 1)->name = (char *)((size_t)dentp->name + dentp->nlen);
-			}
 		}
 
 		dentp = *ppdents + ndents;
 
-		/* Selection file name */
-		dentp->name = (char *)((size_t)pnamebuf + off);
-		dentp->nlen = xstrsncpy(dentp->name, namep, NAME_MAX + 1);
-		off += dentp->nlen;
+		/* Selection file name - arena_strdup'd out of g_dentarena, which
+		 * (FLAT backend) never moves, so unlike the old pnamebuf there is
+		 * no pointer fixup to do when more name storage is needed. */
+		dentp->nlen = xstrsncpy(namebuf, namep, NAME_MAX + 1);
+		dentp->name = arena_strdup(&g_dentarena, namebuf);
 
 		/* Copy other fields */
 		if (cfg.timetype == T_MOD) {
@@ -9041,14 +9022,8 @@ static bool browse(char *ipath, int pkey)
 #endif
 			) && !cfg.blkorder) ? FILTER : 0);
 
-	pdents = xrealloc(pdents, total_dents * sizeof(struct entry));
-	if (!pdents)
-		errexit();
-
-	/* Allocate buffer to hold names */
-	pnamebuf = (char *)xrealloc(pnamebuf, NAMEBUF_INCR);
-	if (!pnamebuf)
-		errexit();
+	/* pdents and their names both come out of g_dentarena now - see dentfill() */
+	pdents = arena_alloc(&g_dentarena, total_dents * sizeof(struct entry));
 
 	/* The following call is added to handle a broken window at start */
 	if (presel == FILTER)
@@ -10584,7 +10559,7 @@ static void check_key_collision(void)
 static void usage(void)
 {
 	fprintf(stdout,
-		"%s: mc [OPTIONS] [PATH]\n\n"
+		"%s: nnn [OPTIONS] [PATH]\n\n"
 		"The unorthodox terminal file manager.\n\n"
 		"positional args:\n"
 		"  PATH   start dir/file [default: .]\n\n"

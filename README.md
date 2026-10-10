@@ -11,9 +11,9 @@
 
 <p align="center"><a href="https://github.com/user-attachments/assets/541ca36d-ae26-49fb-97da-d1f7a12d4b9a"><img src="https://github.com/user-attachments/assets/a8ee4689-1552-4fb1-997e-b16fe8ef5086"></a></p>
 
-> **This is Gucixdev's local fork**, installed as `mc` (`make` builds `./mc`, `./build` installs to `~/.local/bin/mc`) rather than
-> `nnn`, so it doesn't collide with anything else on this machine also called nnn. Everything below is upstream's own README,
-> describing real upstream `nnn` - kept as-is for reference and to make rebasing against upstream easier, not rewritten per-fork.
+> **This is Gucixdev's local fork**, installed as `nnn` (`make` builds `./nnn`, `./build` installs to `~/.local/bin/nnn`).
+> Everything below is upstream's own README, describing real upstream `nnn` - kept as-is for reference and to make rebasing
+> against upstream easier, not rewritten per-fork.
 
 <h3 align="center">[<a
 href="https://github.com/jarun/nnn#features">Features</a>] $~~$ [<a
