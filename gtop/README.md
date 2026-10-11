@@ -34,7 +34,7 @@ A real frame from `gtop --snapshot 118 22 --keys a -f systemd` (anonymous mode, 
 
 ```sh
 make            # ./gtop
-make test       # tests/run: 30 checks against the live system
+make test       # tests/run: 29 checks against the live system
 sudo make install   # PREFIX=/usr/local: bin/gtop and share/gtop/commands/
 ```
 

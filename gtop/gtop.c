@@ -532,7 +532,7 @@ static void net_refresh(Net *N)
 			snprintf(out, sizeof out, "%.60s/%d", ip, prefix);
 			for (a = 0; a < n; a++)
 				if (!strcmp(NI[a].name, p->ifa_name) && NI[a].naddr < MAXADDR)
-					snprintf(NI[a].addr[NI[a].naddr++], 64, "%s", out);
+					snprintf(NI[a].addr[NI[a].naddr++], 64, "%.63s", out);
 		}
 		freeifaddrs(ifa);
 	}
