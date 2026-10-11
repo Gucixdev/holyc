@@ -1,0 +1,17 @@
+#!/bin/sh
+# Builds and runs every tests/test_*.c as its own program, in parallel.
+#   sh tests/run            all
+#   sh tests/run arena      only tests whose file name contains "arena"
+cd "$(dirname "$0")/.." || exit 1
+export CC="${CC:-cc}" OUT; OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT INT TERM
+export CC OUT
+ls tests/test_*.c | grep -e "${1:-.}" | xargs -P "$(nproc 2>/dev/null || echo 4)" -I{} sh -c '
+	t={}; n=$(basename "$t" .c)
+	if ! "$CC" -std=gnu11 -O1 -w -D_GNU_SOURCE -Iinclude -Iinclude/hash -Isrc -Itests -o "$OUT/$n" "$t" -lm -lpthread 2> "$OUT/$n.err"; then
+		echo "COMPILE_FAIL $n"
+	elif timeout 30 "$OUT/$n" > "$OUT/$n.out" 2>&1; then echo "PASS $n"
+	else echo "FAIL $n"; fi' > "$OUT/results"
+pass=$(grep -c '^PASS' "$OUT/results"); bad=$(grep -vc '^PASS' "$OUT/results")
+grep -v '^PASS' "$OUT/results" | sort
+echo "$pass passed, $bad failed"
+[ "$bad" -eq 0 ]

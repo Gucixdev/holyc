@@ -25,8 +25,10 @@ otherwise plain copies - see each entry):
 - **notcoreutils** — small own-written CLI utilities (`tree`, `cb`, `cloc`, `dv`, `man`, `netcat`,
   `sudo`, `tgates`, `tmux` helpers) (plain copy - same reason as `fzf`).
 
-- **types** — `Option`, `Result`, `TRY`, `Future`, `DEFER` and `Async_Signal` in one header,
-  taken apart with a plain `switch` (own, with a test).
+- **base** — a library of single-file C headers (`include/`): types (`Option`, `Result`, `TRY`, `Future`,
+  `DEFER`, `Async_Signal`), arena and pool allocators, queues and jobs, data structures, math, codecs,
+  crypto and building blocks for games and terminal UIs. 191 tests; the ported code is credited in
+  `base/THIRD_PARTY.md` (own, with ports credited).
 - **alloc** — arena and fixed-size slab allocators on a replaceable allocator hook (own, with a test).
 - **lazytui** — terminal UI library on plain ANSI: Cassowary layout, spring animation, diff-rendered
   canvas, widgets, themes, mouse (own; plain copy of the current tree, 33 tests).
