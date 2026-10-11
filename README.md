@@ -89,9 +89,11 @@ syntax, `--bind` grammar and actions, preview windows, `--listen`, mouse, border
 scripts.
 
 ### notcoreutils
-Small tools without a GNU counterpart, one source file and one man page each: `tree`, `cb`
-(clipboard), `cloc`, `dv`, `man`, `netcat`, `sudo` (not installed setuid), `tgates` (ternary
-logic gates on the command line, from `base`), `colorado`. Things GNU already does well are deliberately not reimplemented.
+Nine small tools, one source file and one man page each: `cb` (X11 clipboard manager), `cloc`
+(lines of code per language), `colorado` (log colorizer), `dv` (disk usage, biggest first), `man`
+(manual-page viewer), `netcat` (TCP pipe), `sudo` (doas-style, not installed setuid), `tgates`
+(ternary logic gates on the command line) and `tree` (`tree(1)`-compatible). Things GNU
+coreutils already does well are not reimplemented. See [`notcoreutils/README.md`](notcoreutils/README.md).
 
 ### gtop
 A system monitor for the terminal in C99, libc and libm only, reading `/proc` and `/sys`

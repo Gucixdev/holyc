@@ -7,7 +7,7 @@ original licence text is in `THIRD_PARTY/`.
 | header | derived from | author | licence |
 |---|---|---|---|
 | `arena_alloc.h` | [tsoding/arena](https://github.com/tsoding/arena) | Alexey Kutepov | MIT, `LICENSE.arena` |
-| `str.h` (String_View) | [tsoding/sv](https://github.com/tsoding/sv) | Alexey Kutepov | MIT, `LICENSE.sv` |
+| `base.h` (String_View section) | [tsoding/sv](https://github.com/tsoding/sv) | Alexey Kutepov | MIT, `LICENSE.sv` |
 | `uuid4.h` | [rxi/uuid4](https://github.com/rxi/uuid4) | rxi | MIT, `LICENSE.uuid4` |
 | `log.h` | [rxi/log.c](https://github.com/rxi/log.c) | rxi | MIT, `LICENSE.log.c` |
 | `ini_dec.h` | [rxi/ini](https://github.com/rxi/ini) | rxi | MIT, `LICENSE.ini` |
