@@ -8,12 +8,10 @@ original licence text is in `THIRD_PARTY/`.
 |---|---|---|---|
 | `arena_alloc.h` | [tsoding/arena](https://github.com/tsoding/arena) | Alexey Kutepov | MIT, `LICENSE.arena` |
 | `str.h` (String_View) | [tsoding/sv](https://github.com/tsoding/sv) | Alexey Kutepov | MIT, `LICENSE.sv` |
-| `nn.h` | [tsoding/nn.h](https://github.com/tsoding/nn.h) | Alexey Kutepov | MIT, `LICENSE.nn.h` |
 | `uuid4.h` | [rxi/uuid4](https://github.com/rxi/uuid4) | rxi | MIT, `LICENSE.uuid4` |
 | `log.h` | [rxi/log.c](https://github.com/rxi/log.c) | rxi | MIT, `LICENSE.log.c` |
 | `ini_dec.h` | [rxi/ini](https://github.com/rxi/ini) | rxi | MIT, `LICENSE.ini` |
 | `tinytar.h` | [rxi/microtar](https://github.com/rxi/microtar) | rxi | MIT, `LICENSE.microtar` |
-| `immediate.h` | [rxi/microui](https://github.com/rxi/microui) | rxi | MIT, `LICENSE.microui` |
 | `png_dec.h`, `jpeg_dec.h`, `deflate.h` | [stb_image](https://github.com/nothings/stb) | Sean Barrett | MIT or public domain, `LICENSE.stb` |
 | `mp3_dec.h` | dr_mp3 in [mackron/dr_libs](https://github.com/mackron/dr_libs) | David Reid | public domain or MIT-0, `LICENSE.dr_libs` |
 | `ring_buffer.h` | ring buffer from c89atomic ([mackron/c89atomic](https://github.com/mackron/c89atomic)) | David Reid | public domain or MIT-0 (as stated in the header) |
@@ -21,7 +19,6 @@ original licence text is in `THIRD_PARTY/`.
 | `path.h` | API shape of [likle/cwalk](https://github.com/likle/cwalk), not a port | Leonard Ikle | MIT, `LICENSE.cwalk` |
 | `noise.h` | [Auburn/FastNoiseLite](https://github.com/Auburn/FastNoiseLite) | Jordan Peck and contributors | MIT, `LICENSE.FastNoiseLite` |
 | `curve.h` | the scalar Bezier formula from [recp/cglm](https://github.com/recp/cglm) | Recep Aslantas | MIT, `LICENSE.cglm` |
-| `cli.h` | xgetopt | unknown | public domain (as stated in the header) |
 
 Implementations written from scratch from the published algorithm, not ports: `hash/marmur.h`
 (MurmurHash3 by Austin Appleby, public domain), `hash/tinyxxhash.h` (XXH32 by Yann Collet),

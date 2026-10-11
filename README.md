@@ -25,13 +25,15 @@ otherwise plain copies - see each entry):
 - **notcoreutils** — small own-written CLI utilities (`tree`, `cb`, `cloc`, `dv`, `man`, `netcat`,
   `sudo`, `tgates`, `tmux` helpers) (plain copy - same reason as `fzf`).
 
-- **base** — a library of single-file C headers (`include/`): types (`Option`, `Result`, `TRY`, `Future`,
-  `DEFER`, `Async_Signal`), arena and pool allocators, queues and jobs, data structures, math, codecs,
-  crypto and building blocks for games and terminal UIs. 191 tests; the ported code is credited in
-  `base/THIRD_PARTY.md` (own, with ports credited).
-- **alloc** — arena and fixed-size slab allocators on a replaceable allocator hook (own, with a test).
-- **lazytui** — terminal UI library on plain ANSI: Cassowary layout, spring animation, diff-rendered
-  canvas, widgets, themes, mouse (own; plain copy of the current tree, 33 tests).
+
+- **base** — the most useful single-file C libraries in one place (`include/`): types (`Option`, `Result`,
+  `TRY`, `Future`, `DEFER`), arena, slab and pool allocators, queues and jobs, data structures, math,
+  codecs, crypto and utilities, 97 tests and benchmarks. Ported code is credited in
+  `base/THIRD_PARTY.md`. **`base/lazytui`** is the terminal UI library (Cassowary layout, spring
+  animation, diff-rendered canvas, widgets, mouse).
+- **ragdb** — an embedded note/vector database in C89: IVF and HNSW indexes with bit-packed
+  quantizers, a hybrid lexical + vector search, crash-safe on-disk format, an optional agent-memory
+  layer. Self-tests, fuzzers and crash tests in `./run`; benchmark data is not included (see its README).
 
 Each subtree keeps its own upstream remote inside its own git history (visible via
 `git log <dir>/`); this top-level repo is just where they're published together.

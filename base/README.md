@@ -1,16 +1,21 @@
 # base
 
 A library of single-file C headers: types, allocators, queues and jobs, data structures, math,
-codecs, a few crypto primitives, and building blocks for games and terminal UIs. Everything is a
-header you include; the implementation of a module is pulled in by defining its
-`<NAME>_IMPLEMENTATION` macro in exactly one translation unit (the stb convention). A handful of
+codecs, a few crypto primitives and the utilities that keep coming up. It holds the
+80 modules that proved useful on their own, each with a test. `lazytui/` (a terminal UI
+library) lives here too.
+
+Everything is a header you include. The implementation of a module is pulled in by defining its
+`<NAME>_IMPLEMENTATION` macro in exactly one translation unit (the stb convention); a few
 modules also ship a `.c` file in `src/`.
 
 ```c
-#include "arena_alloc.h"          // include/ is on the include path
+#define ARENA_SLAB_IMPLEMENTATION     // once
+#define MEM_HOOK_IMPLEMENTATION       // once
+#include "arena_slab.h"
 
-#define TYPES_IMPLEMENTATION      // once, for Async_Signal
-#include "types.h"
+hc_arena *a = hc_arena_new(1 << 20);
+void *p = hc_arena_alloc(a, 256);     // a pointer add; freed all at once
 ```
 
 ## Layout
@@ -20,51 +25,45 @@ include/      the headers (include/hash/ holds the hash tables and hash function
 src/          the few modules that are a .c file (pool_alloc.c, flags.c, ...)
 tests/        one program per module: tests/test_NAME.c
 bench/        benchmarks
+lazytui/      terminal UI library (compiled, own Makefile and tests)
 THIRD_PARTY/  licence texts of the code some headers are ported from, see THIRD_PARTY.md
 ```
 
 `make test` (or `sh tests/run [filter]`) builds and runs every test on its own, in parallel.
 `make bench` runs `bench/`: the arena against glibc malloc, the pool against malloc/free, the job
 pool against spawning a thread per job, the hash table and Morton encoding against naive versions.
-On the author's machine the arena is about 2.7x faster than malloc, the pool about 10x and the job
-pool about 8x; run it yourself, the numbers depend on the machine.
 Add `-Iinclude -Iinclude/hash -Isrc` to compile your own code against it.
 
 ## What is in it
 
-**Core** (`abstract`): `types` (Option, Result, TRY, Future, DEFER, Async_Signal, fixed-width ints),
-`base`, `arena_alloc`, `persistant_arena`, `persistant_pool`, `src/pool_alloc.c`, `ref_count`,
-`ring_buffer` (lock-free single producer/consumer), `fine_grained` (a worker pool that claims disjoint
-chunks of an index range, no locks around shared state), `action_queue` (bounded multi-producer
-multi-consumer queue of actions), `event_queue` (ticked events for deterministic replay),
-`priority_queue`, `corountines` (stackless coroutines), `fsm`, `fabric`, `architect`, `args`, `flags`,
-`log`, `print`, `io`, `socket`, `stream`, `serialize`, `contracts`, `verify`, `xmacro`.
+**Types and allocators**: `types`, `base`, `contracts`. `types` is Option, Result, TRY,
+Future, DEFER and Async_Signal in one header, taken apart with a plain `switch`.
+Allocators: `arena_alloc`, `arena_slab`, `mem_hook`, `persistant_arena`, `persistant_pool`, `pool_alloc`, `ref_count`.
+`arena_slab` is a bump arena and a fixed-size slab on a replaceable allocator hook (`mem_hook`);
+`arena_alloc` is a C89 arena; `pool_alloc` a fixed-size pool.
 
-**Data structures**: `array`, `list`, `tree`, `hashmap`, `hashset`, `hashtable`, `slot_map`,
-`spatialhash`, `perfecthash`, `rollhash`, `merkletree`, `pubsub`, `prefix`, `suffix`, `token_table`,
-`ast`, `formula`, `hex`, hash functions (`marmur` = MurmurHash3, `tinyxxhash` = XXH32).
+**Concurrency and queues**: `fine_grained`, `action_queue`, `event_queue`, `ring_buffer`, `priority_queue`, `corountines`, `fsm`, `pipe`, `socket`.
+`fine_grained` is a worker pool that claims disjoint chunks of an index range with no locks around
+shared state; `action_queue` is a bounded multi-producer multi-consumer queue; `ring_buffer` is
+lock-free single producer/consumer; `event_queue` carries ticked events for deterministic replay.
 
-**Math**: `linear_algebra`, `trigonometry`, `mathx`, `fp_math` (fixed point), `curve`, `easing`,
-`gradient`, `noise`, `intersect`, `distribution`, `mean`, `variance`, `rng`, `pcg`, `xorshift`,
-`fractal_math`, `vat`.
+**Data structures**: `array`, `list`, `tree`, `hashmap`, `hashset`, `hashtable`, `slot_map`, `marmur`, `tinyxxhash`, `hex`.
 
-**Codecs and formats**: `deflate` (zlib), `png_dec`, `jpeg_dec`, `qoi_codec`, `wav`, `mp3_dec`,
-`webp` (header reader), `bdf_dec`, `ini_dec`, `json`, `csv`, `svg`, `obj`, `stl`, `fbx`, `tinytar`,
-`base64`, `img`.
+**Math**: `linear_algebra`, `trigonometry`, `mathx`, `fp_math`, `curve`, `easing`, `noise`, `rng`, `pcg`, `xorshift`, `mean`, `variance`, `constant`.
 
-**Crypto**: `aes256` (with CBC), `sha256_hash`.
+**Codecs and formats**: `deflate`, `png_dec`, `jpeg_dec`, `qoi_codec`, `wav`, `mp3_dec`, `bdf_dec`, `img`, `ini_dec`, `json`, `csv`, `tinytar`, `base64`.
 
-**Utilities**: `utf8`, `str` (String_View), `text_ops`, `path`, `exe_path`, `vfs`, `config`,
-`date_util`, `time_util`, `units`, `fuzzy_match` (fzf's FuzzyMatchV2 scoring), `uuid4`, `lut`,
-`merge_ops`, `single_instance`, `vm`.
+**Crypto**: `aes256`, `sha256_hash`.
 
-**Game building blocks**: `ecs`, `aabb_collision`, `obb`, `gjk`, `broadphase`, `raycast`, `rigidbody`,
-`verlet`, `particle`, `camera`, `geometry`, `blackboard`, `btree`, `nn` (a small neural network).
+**I/O, text and utilities**: `io`, `stream`, `serialize`, `print`, `log`, `args`, `flags`, `str`, `utf8`, `text_ops`, `path`, `exe_path`, `vfs`, `config`, `date_util`, `time_util`, `units`, `fuzzy_match`, `uuid4`, `xmacro`.
 
-**Terminal UI**: `tui`, `ansi_escape`, `color`, `font`, `layout`, `node`, `piemenu`, `sequencer`,
-`cassowara` (constraint solver), `immediate` (immediate-mode GUI), `reactive`.
+**Network**: `http`, `http_server`, `net`.
 
-**Network**: `http` (client), `http_server`, `net`.
+## lazytui
+
+`lazytui/` is a terminal UI library on plain ANSI escapes: Cassowary layout, spring animation,
+a diff-rendered canvas, widgets (progress and pacman bars, charts, lists, trees, pickers, a world
+map), themes and mouse input. Build and test it from its own directory (`make`, `make test`).
 
 ## Design rules
 
@@ -72,19 +71,15 @@ These are the rules the headers themselves state, and they hold across the libra
 
 - **No hidden control flow.** No RAII: a release is a function you call. `Option`/`Result` are
   tagged unions you take apart with a plain `switch`.
-- **Recursion and virtual dispatch are avoided**, not just discouraged (`profiler.h`,
-  `corountines.h` say why).
+- **Recursion and virtual dispatch are avoided** (`profiler.h`, `corountines.h` say why).
 - **Own printing**: `print.h` writes with `write` and its own integer conversion instead of `printf`.
-- **Math is written out** rather than pulled from libm; five headers (`fractal_math`, `cassowara`,
-  `easing`, `piemenu`, `ansii_piemenu`) still include `<math.h>`.
-- **Data-oriented** where it matters: structure of arrays rather than array of structures (`ecs.h`).
+- **Math is written out** rather than pulled from libm where it can be.
 - **Honest scope**: each header states what it does not do.
 
 ## Tests
 
-`tests/` holds 191 programs, all of which compile and pass. A module without a test is not in this
-directory: modules that could not be compiled and verified yet were left out rather than shipped
-unchecked.
+`tests/` holds 97 programs, all of which compile and pass. A module that could not be
+compiled and verified is not here: it was left out rather than shipped unchecked.
 
 ## Credits and licences
 
