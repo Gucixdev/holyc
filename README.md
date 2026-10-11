@@ -1,52 +1,119 @@
 # holyc
 
-A collection of suckless-tool-style forks and own-written CLI tools.
+A collection of C tools and libraries, plus the Wayland desktop pieces I run them with. The name
+is a nod, not a claim: this has nothing to do with TempleOS's HolyC language, it is plain C
+(C89 to gnu11) and a little Rust.
 
-Forks are kept as their own subtree (full upstream history preserved via `git subtree`, not
-squashed or copy-pasted in):
+| Directory | What it is | Language | Origin |
+|---|---|---|---|
+| [`base`](base) | Single-header C library: types, allocators, queues, data structures, math, codecs, crypto | C | own |
+| [`lazytui`](lazytui) | Terminal UI library on plain ANSI escapes | C | own |
+| [`ragdb`](ragdb) | Embedded note/vector database, IVF + HNSW, hybrid search | C89 | own |
+| [`fzf`](fzf) | Fuzzy finder, compatible with fzf 0.74's command line | C | own, not a fork of the Go fzf |
+| [`notcoreutils`](notcoreutils) | `cb cloc colorado dv man netcat sudo tgates tmux tree` | C | own |
+| [`gtop`](gtop) | System monitor TUI (CPU/GPU, RAM, disk, net, processes) | Rust | own |
+| [`dwl`](dwl) | Wayland compositor | C | fork of [dwl](https://codeberg.org/dwl/dwl) |
+| [`dmenu`](dmenu) | Launcher, native Wayland | C | fork of [dmenu](https://git.suckless.org/dmenu) (`wayland` branch) |
+| [`lemonbar`](lemonbar) | Status bar, native Wayland | C | fork of [lemonbar](https://github.com/LemonBoy/bar) (`wayland` branch) |
+| [`nnn`](nnn) | File manager | C | fork of [nnn](https://github.com/jarun/nnn) (`debloat` branch) |
 
-- **dwl** — fork of [dwl](https://codeberg.org/dwl/dwl) (itself built on dwm/sway/tinywl): own
-  patches on top (i3-style layouts/workspaces/directional focus, own dmenu wired in as the
-  launcher, window-geometry fixes). Licenses: `dwl/LICENSE`, `dwl/LICENSE.dwm`,
-  `dwl/LICENSE.sway`, `dwl/LICENSE.tinywl`.
-- **dmenu** — fork of [dmenu](https://git.suckless.org/dmenu) (branch `wayland`), wired in as
-  dwl's launcher above.
-- **lemonbar** — fork of [bar/lemonbar](https://github.com/LemonBoy/bar) (branch `wayland`).
-- **nnn** — fork of [nnn](https://github.com/jarun/nnn) (branch `debloat`): an arena-allocator
-  fix for an O(n²) `dentfill()`, plus personal opener/smart-edit scripts (GUI Emacs integration
-  that doesn't block nnn while open). License: `nnn/LICENSE`.
+Every directory builds on its own; there is no top-level build. Each has its own README with
+the details, this page is the map.
 
-Own-written tools, no upstream to track (also subtree where they had their own git history,
-otherwise plain copies - see each entry):
-
-- **gtop** — Rust/ratatui system monitor TUI (subtree, own history, no upstream).
-- **fzf** — own fuzzy-finder in C, not a fork of the Go `junegunn/fzf` despite the name (plain
-  copy - this one was never its own git repo).
-- **notcoreutils** — small own-written CLI utilities (`tree`, `cb`, `cloc`, `dv`, `man`, `netcat`,
-  `sudo`, `tgates`, `tmux` helpers) (plain copy - same reason as `fzf`).
-
-
-- **base** — the most useful single-file C libraries in one place (`src/`): types (`Option`, `Result`,
-  `TRY`, `Future`, `DEFER`), arena, slab and pool allocators, queues and jobs, data structures, math,
-  codecs, crypto and utilities, 97 tests and benchmarks. Ported code is credited in
-  `base/THIRD_PARTY.md`. 
-- **lazytui** — terminal UI library in C on plain ANSI escapes: Cassowary layout, spring
-  animation, diff-rendered canvas, widgets, mouse. Own Makefile, tests and demo.
-- **ragdb** — an embedded note/vector database in C89: IVF and HNSW indexes with bit-packed
-  quantizers, a hybrid lexical + vector search, crash-safe on-disk format, an optional agent-memory
-  layer. Self-tests, fuzzers and crash tests in `./run`; benchmark data is not included (see its README).
-
-Each subtree keeps its own upstream remote inside its own git history (visible via
-`git log <dir>/`); this top-level repo is just where they're published together.
-
-## Updating from upstream
+## Quick start
 
 ```sh
-git subtree pull --prefix=<dir> <upstream-url> <branch> --squash
+git clone https://github.com/Gucixdev/holyc && cd holyc
+
+# libraries: tests run from a plain `cc`, no dependencies beyond libc, libm and pthreads
+(cd base && make test)            # 97 test programs
+(cd base && make bench)           # 5 benchmarks against malloc / naive loops
+(cd lazytui && make test)         # widgets, layout, solver, fuzzed input
+(cd ragdb && ./run)               # self-tests, fuzzers, thread and crash-safety tests
+
+# tools
+(cd fzf && make && make test)     # 413 tests, differential against /usr/bin/fzf when present
+(cd notcoreutils && make && make test)   # 59 tests; binaries land in bin/
+(cd gtop && cargo build --release)       # binary is called `bsc`
 ```
 
-## License
+## What each piece is
 
-Each subtree keeps its own upstream license where one exists (see each folder's own `LICENSE*`
-files: `dwl/`, `dmenu/`, `lemonbar/`, `nnn/`). `gtop`, `fzf`, and `notcoreutils` are own-written,
-unlicensed for now - nothing here is unified under a single license.
+### base
+The single-file library everything else shares ideas with. Include what you need, define
+`<NAME>_IMPLEMENTATION` in one translation unit (stb style). `core/base.h` carries the base
+types, `Option`/`Result`/`TRY`, `str`/`String_View`, `Arena_String` and `print`;
+`core/arena_alloc.h` is the arena (plus a growable slab). Then data structures, math, codecs
+(png, jpeg, qoi, wav, mp3, deflate, json, csv), `aes256`/`sha256`, `http`, `vfs` and more.
+Every module has a test; modules that could not be verified were left out. Ported code is
+credited in [`base/THIRD_PARTY.md`](base/THIRD_PARTY.md) with the upstream licence texts.
+
+### lazytui
+Cassowary constraint layout, spring animation, a diff-rendered canvas, widgets (bars, charts,
+lists, trees, pickers, a world map and globe), themes and mouse input. Works on the Linux
+console too (ASCII, 16 colours, no alternate screen). `examples/demo --snapshot W H` prints a
+frame without a terminal. Design notes: [`lazytui/DESIGN.md`](lazytui/DESIGN.md).
+
+### ragdb
+An embedded vector and note database: bit-packed quantizers, IVF and HNSW routers, BM25 lexical
+search fused with vector search, a crash-safe on-disk format and an optional agent-memory layer.
+Single node, library only (no server, no auth, no replication). Its README has the measured
+scale and recall numbers and what was and was not independently reviewed. Benchmark data
+(94 MB) is not in the repository; the README says how to generate it. Some optional helpers
+(`embedsrv.py`, `rerank_srv.py`, `wikiprep.py`) are Python and only needed for benchmarking and
+reranking; the core has no Python dependency.
+
+### fzf
+A from-scratch fzf in C (libc and pthreads only): the FuzzyMatchV2 scoring, extended search
+syntax, `--bind` grammar and actions, preview windows, `--listen`, mouse, borders. Not done
+(listed in its README): `--gap`, `--tail`, sixel/kitty previews, `--tmux`, shell key-binding
+scripts.
+
+### notcoreutils
+Small tools without a GNU counterpart, one source file and one man page each: `tree`, `cb`
+(clipboard), `cloc`, `dv`, `man`, `netcat`, `sudo` (not installed setuid), `tgates`, `tmux`
+helpers, `colorado`. Things GNU already does well are deliberately not reimplemented.
+
+### gtop
+A ratatui system monitor reading `/proc` and `/sys` directly (no `sysinfo` crate): CPU with
+GPU, RAM, disk, network and a process table with app-grouped, raw and user/system views,
+multi-select kill and a command palette. Rust 2021, built with `cargo`.
+
+### The Wayland desktop: dwl, dmenu, lemonbar, nnn
+Forks kept as `git subtree`s with the full upstream history, so `git log <dir>/` shows who
+wrote what. Local changes on top of upstream:
+
+- **dwl**: i3-style layouts, workspaces and directional focus, the own dmenu wired in as the
+  launcher, window-geometry fixes. Builds against wlroots 0.20.
+- **dmenu**: ported to native Wayland (`wayland-client`, `xkbcommon`, `fontconfig`, `freetype2`)
+  with a layer-shell surface; adds `dmenu_menu`.
+- **lemonbar**: native Wayland port sharing dmenu's drawing code.
+- **nnn**: an arena allocator to fix an O(n²) `dentfill()`, plus opener scripts that open a GUI
+  Emacs without blocking nnn. Release engineering of upstream was removed on purpose.
+
+## Requirements
+
+| Piece | Needs |
+|---|---|
+| base, lazytui, ragdb, fzf, notcoreutils | a C compiler (gcc or clang), make, Linux. ragdb's `./run` wants bash and gcc |
+| gtop | Rust toolchain; crates `ratatui`, `crossterm`, `libc` |
+| dwl | wlroots 0.20, wayland, xkbcommon, pkg-config |
+| dmenu, lemonbar | wayland-client, xkbcommon, fontconfig, freetype2 |
+| nnn | ncurses; readline support is off by default (`O_NORL := 1` in its Makefile) |
+
+The code is developed and tested on Linux (x86-64). Other platforms are not tested.
+
+## Repository layout and history
+
+This repository is where the pieces are published together. The five forked or standalone
+subtrees (`dwl`, `dmenu`, `lemonbar`, `nnn`, `gtop`) keep their own upstream history; `base`,
+`lazytui`, `ragdb`, `fzf` and `notcoreutils` start here. Issues and patches welcome; run the
+directory's tests before sending one.
+
+## Licence
+
+My own code (`base`, `lazytui`, `ragdb`, `fzf`, `notcoreutils`, `gtop`) is MIT, see
+[`LICENSE`](LICENSE). The forks keep the licences of their upstreams, in each directory:
+`dwl` (GPLv3 with dwm/sway/tinywl notices), `dmenu` (MIT/X), `lemonbar` (MIT), `nnn` (BSD
+2-Clause). Third-party code ported into `base` is listed with its licence in
+[`base/THIRD_PARTY.md`](base/THIRD_PARTY.md).

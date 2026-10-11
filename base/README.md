@@ -87,6 +87,6 @@ compiled and verified is not here: it was left out rather than shipped unchecked
 
 ## Credits and licences
 
-The library is MIT licensed (see the repository `LICENSE`). Some headers are ports of other
+The library is MIT licensed (see the repository root `LICENSE`). Some headers are ports of other
 people's code; each is credited at the top of its header and listed with its licence in
 [`THIRD_PARTY.md`](THIRD_PARTY.md).
