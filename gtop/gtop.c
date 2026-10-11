@@ -30,10 +30,12 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <math.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -1087,6 +1089,244 @@ static int collect_targets(const Procs *P, int *pids, int cap, char *names, size
 	return n;
 }
 
+/* ------------------------------------------------------------------ info panel */
+/* What the process under the cursor is: command line, executable, owner, parent, systemd unit and its
+ * description, the package that owns the executable, the man page one-liner, or what a kernel thread
+ * is for. Gathered once when the cursor moves to another process, not every frame. */
+typedef struct {
+	int pid, valid;
+	char name[80], cmd[320], exe[200], cwd[200], user[48], state[48], parent[112], unit[128], started[64];
+	char about[360], source[80];
+	int threads;
+} Info;
+
+/* run argv without a shell (stderr dropped) and return all its output, trimmed; empty when it fails */
+static void capture_full(char *const argv[], char *out, size_t cap)
+{
+	int fd[2];
+	pid_t pid;
+	ssize_t r, tot = 0;
+	out[0] = 0;
+	if (pipe(fd) != 0) return;
+	pid = fork();
+	if (pid == 0) {
+		int nul = open("/dev/null", O_WRONLY);
+		dup2(fd[1], 1);
+		if (nul >= 0) dup2(nul, 2);
+		close(fd[0]);
+		close(fd[1]);
+		execvp(argv[0], argv);
+		_exit(127);
+	}
+	close(fd[1]);
+	while ((r = read(fd[0], out + tot, cap - 1 - (size_t)tot)) > 0 && (size_t)tot < cap - 1) tot += r;
+	out[tot > 0 ? tot : 0] = 0;
+	close(fd[0]);
+	waitpid(pid, NULL, 0);
+	{ char *t = trim(out); if (t != out) memmove(out, t, strlen(t) + 1); }
+}
+
+/* the same, first line only */
+static void capture_argv(char *const argv[], char *out, size_t cap)
+{
+	char *nl;
+	capture_full(argv, out, cap);
+	nl = strchr(out, '\n');
+	if (nl) *nl = 0;
+}
+
+static int safe_word(const char *w)
+{
+	if (!*w) return 0;
+	for (; *w; w++) if (!(isalnum((unsigned char)*w) || strchr("._-@:+/\\", *w))) return 0;
+	return 1;
+}
+
+static const char *kernel_thread_about(const char *n)
+{
+	static const struct { const char *prefix, *text; } t[] = {
+		{"kthreadd", "the parent of every kernel thread; creates them on request"},
+		{"kworker", "kernel worker: runs queued kernel work items (the number is the CPU or pool, R- = rescuer)"},
+		{"ksoftirqd", "per-CPU thread that runs deferred interrupt work (softirqs) when it gets too heavy"},
+		{"migration", "per-CPU scheduler thread that moves tasks between CPUs for load balancing"},
+		{"cpuhp", "per-CPU thread that runs CPU hotplug steps (bringing a core up or down)"},
+		{"rcu_", "RCU: lets the kernel free data structures only after readers are done"},
+		{"rcub", "RCU priority booster for readers that block a grace period"},
+		{"idle_inject", "forces CPU idle time to stay under a thermal or power limit"},
+		{"watchdog", "per-CPU lockup detector"},
+		{"kswapd", "reclaims memory (swaps out and frees pages) when memory runs low"},
+		{"kcompactd", "defragments memory so large contiguous pages can be allocated"},
+		{"khugepaged", "merges small pages into transparent huge pages"},
+		{"jbd2", "ext4 journal commit thread"},
+		{"kblockd", "block layer work queue"},
+		{"irq/", "threaded interrupt handler for a device"},
+		{"nvme", "NVMe driver work"},
+		{"scsi_", "SCSI error handling or work thread"},
+		{"usb", "USB hub or host controller thread"},
+		{"kdevtmpfs", "creates and removes nodes in /dev"},
+		{"oom_reaper", "frees memory of processes killed by the out-of-memory killer"},
+		{"pool_workqueue", "releases workqueue pools"},
+		{"kprobe-optimizer", "optimizes kprobes (kernel dynamic tracing)"},
+	};
+	size_t i;
+	for (i = 0; i < sizeof t / sizeof t[0]; i++) if (!strncmp(n, t[i].prefix, strlen(t[i].prefix))) return t[i].text;
+	return "kernel thread";
+}
+
+static void info_gather(Info *I, int pid, int is_kernel)
+{
+	char path[64], buf[8192], *p, unit_desc[360] = "";
+	size_t i;
+	memset(I, 0, sizeof *I);
+	I->pid = pid;
+	I->valid = 1;
+	snprintf(path, sizeof path, "/proc/%d/comm", pid);
+	if (read_file(path, buf, sizeof buf) > 0) snprintf(I->name, sizeof I->name, "%.79s", trim(buf));
+	else { snprintf(I->name, sizeof I->name, "?"); snprintf(I->about, sizeof I->about, "this process has exited"); return; }
+	snprintf(path, sizeof path, "/proc/%d/cmdline", pid);
+	{
+		int n = read_file(path, buf, sizeof buf);
+		for (i = 0; n > 0 && i < (size_t)n - 1; i++) if (buf[i] == 0) buf[i] = ' ';
+		if (n > 0) snprintf(I->cmd, sizeof I->cmd, "%.319s", trim(buf));
+	}
+	snprintf(path, sizeof path, "/proc/%d/exe", pid);
+	{
+		ssize_t k = readlink(path, I->exe, sizeof I->exe - 1);
+		I->exe[k > 0 ? k : 0] = 0;
+	}
+	if (!I->exe[0] && I->cmd[0] == '/') { /* another user's process: its exe link is unreadable, the command line is not */
+		size_t n = strcspn(I->cmd, " ");
+		snprintf(I->exe, sizeof I->exe, "%.*s", (int)(n < sizeof I->exe - 1 ? n : sizeof I->exe - 1), I->cmd);
+	}
+	snprintf(path, sizeof path, "/proc/%d/cwd", pid);
+	{
+		ssize_t k = readlink(path, I->cwd, sizeof I->cwd - 1);
+		I->cwd[k > 0 ? k : 0] = 0;
+	}
+	snprintf(path, sizeof path, "/proc/%d/status", pid);
+	if (read_file(path, buf, sizeof buf) > 0) {
+		unsigned long uid = 0;
+		int ppid = 0;
+		struct passwd *pw;
+		p = strstr(buf, "\nUid:");
+		if (p) uid = strtoul(p + 5, NULL, 10);
+		p = strstr(buf, "\nState:");
+		if (p) { char *e = strchr(p + 1, '\n'); if (e) *e = 0; snprintf(I->state, sizeof I->state, "%.47s", trim(p + 7)); if (e) *e = '\n'; }
+		p = strstr(buf, "\nThreads:");
+		if (p) I->threads = atoi(p + 9);
+		p = strstr(buf, "\nPPid:");
+		if (p) ppid = atoi(p + 6);
+		pw = getpwuid((uid_t)uid);
+		snprintf(I->user, sizeof I->user, "%.30s (%lu)", pw ? pw->pw_name : "?", uid);
+		if (ppid > 0) {
+			char pc[128] = "?";
+			snprintf(path, sizeof path, "/proc/%d/comm", ppid);
+			if (read_file(path, pc, sizeof pc) > 0) trim(pc);
+			snprintf(I->parent, sizeof I->parent, "%.80s [%d]", pc, ppid);
+		}
+	}
+	/* start time: field 22 of stat, in clock ticks since boot */
+	snprintf(path, sizeof path, "/proc/%d/stat", pid);
+	if (read_file(path, buf, sizeof buf) > 0 && (p = strrchr(buf, ')'))) {
+		int idx = 0;
+		char *tok, *sv = NULL, *copy = strdup(p + 2);
+		unsigned long long st = 0;
+		long hz = sysconf(_SC_CLK_TCK);
+		for (tok = strtok_r(copy, " ", &sv); tok; tok = strtok_r(NULL, " ", &sv), idx++) if (idx == 19) { st = strtoull(tok, NULL, 10); break; }
+		free(copy);
+		if (hz > 0 && idx == 19) {
+			char sb[8192];
+			long btime = 0;
+			if (read_file("/proc/stat", sb, sizeof sb) > 0 && (p = strstr(sb, "\nbtime"))) btime = atol(p + 7);
+			if (btime > 0) {
+				time_t t0 = (time_t)(btime + (long)(st / (unsigned long long)hz)), nowt = time(NULL);
+				struct tm tmv;
+				long ago = (long)(nowt - t0);
+				char ts[32];
+				localtime_r(&t0, &tmv);
+				strftime(ts, sizeof ts, "%Y-%m-%d %H:%M:%S", &tmv);
+				if (ago >= 86400) snprintf(I->started, sizeof I->started, "%s (%ldd %ldh ago)", ts, ago / 86400, ago % 86400 / 3600);
+				else if (ago >= 3600) snprintf(I->started, sizeof I->started, "%s (%ldh %ldm ago)", ts, ago / 3600, ago % 3600 / 60);
+				else snprintf(I->started, sizeof I->started, "%s (%ldm %lds ago)", ts, ago / 60, ago % 60);
+			}
+		}
+	}
+	/* systemd unit from the cgroup path */
+	snprintf(path, sizeof path, "/proc/%d/cgroup", pid);
+	if (read_file(path, buf, sizeof buf) > 0) {
+		char *line = strrchr(trim(buf), '\n');
+		char *cg = strstr(line ? line : buf, "::");
+		int user_unit = 0;
+		if (cg) {
+			char *seg, *sv = NULL, *last = NULL, *c = strdup(cg + 2);
+			if (strstr(c, "/user.slice/user-") || strstr(c, "user@")) user_unit = 1;
+			for (seg = strtok_r(c, "/", &sv); seg; seg = strtok_r(NULL, "/", &sv))
+				if (strstr(seg, ".service") || strstr(seg, ".scope")) last = seg;
+			if (last) snprintf(I->unit, sizeof I->unit, "%.127s", last);
+			free(c);
+		}
+		if (I->unit[0] && safe_word(I->unit) && strstr(I->unit, ".service")) {
+			char *a1[] = {"systemctl", "show", "-p", "Description", "--value", I->unit, NULL};
+			char *a2[] = {"systemctl", "--user", "show", "-p", "Description", "--value", I->unit, NULL};
+			char d[360];
+			capture_argv(user_unit ? a2 : a1, d, sizeof d);
+			if (d[0] && strcmp(d, I->unit)) {
+				/* the unit describes this process only when it is the unit's own program (systemd-logind.service
+				 * for systemd-logind); a terminal started from a compositor's session unit is not that unit */
+				char base[128], *dot;
+				size_t bl;
+				snprintf(base, sizeof base, "%s", I->unit);
+				if ((dot = strchr(base, '@'))) *dot = 0;
+				if ((dot = strstr(base, ".service"))) *dot = 0;
+				bl = strlen(base);
+				if (bl >= 4 && (strcasestr(base, I->name) || !strncasecmp(I->name, base, bl) || strcasestr(I->name, base))) {
+					snprintf(I->about, sizeof I->about, "%.359s", d);
+					snprintf(I->source, sizeof I->source, "systemd unit");
+				} else snprintf(unit_desc, sizeof unit_desc, "%.359s", d);
+			}
+		}
+	}
+	if (is_kernel || (!I->exe[0] && !strncmp(I->state, "S", 1) && !I->cmd[0])) {
+		snprintf(I->about, sizeof I->about, "%s", kernel_thread_about(I->name));
+		snprintf(I->source, sizeof I->source, "kernel thread");
+		return;
+	}
+	if (!I->about[0] && I->exe[0] && safe_word(I->exe) && access("/usr/bin/pacman", X_OK) == 0) {
+		char pkg[160];
+		char *a1[] = {"pacman", "-Qo", "-q", I->exe, NULL};
+		capture_argv(a1, pkg, sizeof pkg);
+		if (pkg[0] && safe_word(pkg)) {
+			char *a2[] = {"pacman", "-Qi", pkg, NULL};
+			static char info_out[8192];
+			char *dl;
+			capture_full(a2, info_out, sizeof info_out);
+			dl = strstr(info_out, "\nDescription");
+			if (!dl && !strncmp(info_out, "Description", 11)) dl = info_out - 1;
+			if (dl && strchr(dl + 1, ':')) {
+				char *v = strchr(dl + 1, ':') + 1, *e = strchr(v, '\n');
+				if (e) *e = 0;
+				snprintf(I->about, sizeof I->about, "%.359s", trim(v));
+			}
+			snprintf(I->source, sizeof I->source, "package %.60s", pkg);
+		}
+	}
+	if (!I->about[0] && safe_word(I->name) && which("whatis")) {
+		char w[360];
+		char *a1[] = {"whatis", I->name, NULL};
+		capture_argv(a1, w, sizeof w);
+		if (w[0] && !strstr(w, "nothing appropriate")) {
+			char *dash = strstr(w, " - ");
+			snprintf(I->about, sizeof I->about, "%.359s", dash ? dash + 3 : w);
+			snprintf(I->source, sizeof I->source, "man page");
+		}
+	}
+	if (!I->about[0] && unit_desc[0]) {
+		snprintf(I->about, sizeof I->about, "%s", unit_desc);
+		snprintf(I->source, sizeof I->source, "started by a systemd unit");
+	}
+	if (!I->about[0]) snprintf(I->about, sizeof I->about, "no description found (not owned by a package, no unit, no man page)");
+}
+
 /* ------------------------------------------------------------------ app */
 typedef struct {
 	Cpu cpu;
@@ -1104,7 +1344,44 @@ typedef struct {
 	int has_msg, has_palette_out;
 	FILE *rec;
 	char rec_path[96];
+	int info_on;
+	Info info;
+	double info_at;
 } App;
+
+/* the pid of the row under the cursor: a child row is that process, a program row its busiest one */
+static int cursor_pid(const App *A, int *kernel)
+{
+	const Procs *P = &A->procs;
+	const Row *r;
+	const Group *g;
+	if (P->cursor >= P->nrows) return 0;
+	r = &P->rows[P->cursor];
+	g = &P->g[r->g];
+	if (g->divider) return 0;
+	*kernel = P->mode == 1 && g->npids > 0 ? 0 : 0;
+	if (r->kid >= 0) return g->kids[r->kid].pid;
+	return g->nkids ? g->kids[0].pid : (g->npids ? g->pids[0] : 0);
+}
+
+static void info_update(App *A)
+{
+	int kernel = 0, pid;
+	double t = now_s();
+	if (!A->info_on) return;
+	pid = cursor_pid(A, &kernel);
+	if (pid <= 0) { A->info.valid = 0; return; }
+	if (A->info.valid && A->info.pid == pid && t - A->info_at < 5.0) return;
+	{
+		char path[64], b[64], *p;
+		int ppid = 0;
+		snprintf(path, sizeof path, "/proc/%d/stat", pid);
+		if (read_file(path, b, sizeof b) > 0 && (p = strrchr(b, ')'))) sscanf(p + 2, "%*c %d", &ppid);
+		kernel = pid == 2 || ppid == 2;
+	}
+	info_gather(&A->info, pid, kernel);
+	A->info_at = t;
+}
 
 static void app_tick(App *A)
 {
@@ -1271,6 +1548,7 @@ static void handle_key(App *A, int k)
 	case '/': A->palette = 1; A->palette_in[0] = 0; break;
 	case 'r': toggle_record(A); break;
 	case 'a': A->anonymous = !A->anonymous; break;
+	case 'i': A->info_on = !A->info_on; break;
 	case '+': case '=': A->interval_ms += 100; if (A->interval_ms > 5000) A->interval_ms = 5000; break;
 	case '-': A->interval_ms -= 100; if (A->interval_ms < 100) A->interval_ms = 100; break;
 	}
@@ -1700,6 +1978,7 @@ static void draw_proc(const App *A, int x, int y, int w, int h)
 	int show_gpu = A->gpu.found, visible = h - 4, total = P->nrows, start = 0, end, i, row = 0, col;
 	if (visible < 1) visible = 1;
 	snprintf(title, sizeof title, "PROC [%s]", labels[P->mode]);
+	if (A->info_on && visible - 8 >= 3) visible -= 8; /* room for the info panel under the list */
 	r = block(x, y, w, h, title);
 	if (total > visible) {
 		start = P->cursor - (visible - 1);
@@ -1773,11 +2052,41 @@ static void draw_proc(const App *A, int x, int y, int w, int h)
 		}
 		row++;
 	}
+	if (A->info_on && h - 4 - 8 >= 3) {
+		const Info *I = &A->info;
+		int rr, wrote = 0;
+		while (row < 1 + visible + 0 && row < r.h) row++; /* keep the panel at a fixed place below the list rows */
+		col = 0;
+		if (!I->valid) {
+			span(&r, row++, &col, C_ACCENT, 0, "\xE2\x94\x80\xE2\x94\x80 info \xE2\x94\x80\xE2\x94\x80  (move onto a process)");
+		} else {
+			char kv[700];
+			span(&r, row, &col, C_ACCENT, F_BOLD, "\xE2\x94\x80\xE2\x94\x80 info \xE2\x94\x80\xE2\x94\x80 ");
+			spanf(&r, row++, &col, C_PRIMARY, F_BOLD, "%s [%d]", I->name, I->pid);
+			col = 0;
+			snprintf(kv, sizeof kv, "about  %s%s%s", I->about, I->source[0] ? "   (" : "", I->source);
+			if (I->source[0]) strncat(kv, ")", sizeof kv - strlen(kv) - 1);
+			span(&r, row++, &col, C_CAUTION, 0, kv);
+			col = 0;
+			if (A->anonymous) span(&r, row++, &col, C_NEUTRAL, 0, "cmd    [hidden - anonymous mode]");
+			else { spanf(&r, row++, &col, C_PRIMARY, 0, "cmd    %s", I->cmd[0] ? I->cmd : "(none)"); }
+			col = 0;
+			if (A->anonymous) span(&r, row++, &col, C_NEUTRAL, 0, "exe    [hidden - anonymous mode]");
+			else spanf(&r, row++, &col, C_PRIMARY, 0, "exe    %s%s%s", I->exe[0] ? I->exe : "(not readable)", I->cwd[0] ? "   cwd " : "", I->cwd);
+			col = 0;
+			spanf(&r, row++, &col, C_PRIMARY, 0, "user   %s   state %s   threads %d   parent %s",
+			      A->anonymous ? "[hidden]" : I->user, I->state, I->threads, I->parent);
+			col = 0;
+			spanf(&r, row++, &col, C_PRIMARY, 0, "unit   %s   started %s", I->unit[0] ? I->unit : "(none)", I->started);
+			wrote = 1;
+		}
+		(void)rr; (void)wrote;
+	}
 	{
 		char scroll[48] = "", hint[400];
 		if (total > visible) snprintf(scroll, sizeof scroll, " [%d-%d/%d]", start + 1, end, total);
 		snprintf(hint, sizeof hint,
-		         "\xE2\x86\x91/\xE2\x86\x93 select%s  \xE2\x86\x90\xE2\x86\x92 mode  space: mark  k: kill  /: command  +/-: refresh %dms  r: record  a: anonymous",
+		         "\xE2\x86\x91/\xE2\x86\x93 select%s  \xE2\x86\x90\xE2\x86\x92 mode  space: mark  i: info  k: kill  /: command  +/-: refresh %dms  r: record  a: anonymous",
 		         scroll, A->interval_ms);
 		col = 0;
 		span(&r, row++, &col, C_ACCENT, 0, hint);
@@ -1965,6 +2274,7 @@ int main(int argc, char **argv)
 	const char *keys = NULL;
 
 	A->interval_ms = 1000;
+	A->info_on = 1;
 	for (i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(); return 0; }
 		else if (!strcmp(argv[i], "--snapshot")) {
@@ -2003,6 +2313,7 @@ int main(int argc, char **argv)
 			app_tick(A);
 		}
 		if (A->rec) { fclose(A->rec); A->rec = NULL; }
+		info_update(A);
 		grid_init(W, H);
 		draw_all(A, W, H);
 		emit_plain(stdout);
@@ -2033,6 +2344,7 @@ int main(int argc, char **argv)
 			if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) { W = ws.ws_col; H = ws.ws_row; }
 			if (W > 500) W = 500;
 			if (H > 300) H = 300;
+			info_update(A);
 			grid_init(W, H);
 			draw_all(A, W, H);
 			emit_ansi(stdout);

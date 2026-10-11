@@ -34,7 +34,7 @@ A real frame from `gtop --snapshot 118 22 --keys a -f systemd` (anonymous mode, 
 
 ```sh
 make            # ./gtop
-make test       # tests/run: 40 checks against the live system
+make test       # tests/run: 46 checks against the live system
 sudo make install   # PREFIX=/usr/local: bin/gtop and share/gtop/commands/
 ```
 
@@ -73,6 +73,26 @@ source. Needs `-lm`.
   two minutes that fills all the width left over. Rows of processes that just exited stay for 3
   seconds in grey. Order only re-sorts every 4 seconds so rows do not jump.
 
+## Info panel
+
+Under the process list, `gtop` explains the process under the cursor (key `i` hides it):
+
+```
+── info ── systemd-logind [723]
+about  User Login Management   (systemd unit)
+cmd    /usr/lib/systemd/systemd-logind
+exe    /usr/lib/systemd/systemd-logind   cwd /
+user   root (0)   state S (sleeping)   threads 1   parent systemd [1]
+unit   systemd-logind.service   started 2026-10-10 09:21:55 (1d 2h ago)
+```
+
+`about` is the first of these that exists: the description of the systemd unit when the process is
+that unit's own program (`systemctl show -p Description`), the description of the package that owns
+the executable (`pacman -Qi`, Arch family), the `whatis` line of its man page, the unit that
+started it, or, for a kernel thread, what that kind of thread does (`kworker`, `ksoftirqd`,
+`migration/N`, `rcu_*`...). It is gathered when the cursor moves to another process, not every
+frame. In anonymous mode the command line, executable, working directory and user are hidden.
+
 ## Keys
 
 | key | action |
@@ -83,6 +103,7 @@ source. Needs `-lm`.
 | space | mark / unmark the row (several rows can be marked; a child row marks just that process) |
 | `k` | SIGKILL every pid of the marked rows, or of the row under the cursor (a program row: all its processes; a child row: that one) |
 | `/` | command palette: type a name, Enter runs `commands/<name>` |
+| `i` | show / hide the info panel |
 | `r` | record all numbers to `gtop-record-<unix time>.csv` (toggle) |
 | `a` | anonymous mode: IP addresses and disk models hidden, on screen and in recordings |
 | `+` / `-` | refresh interval 100 ms ... 5 s, in steps of 100 ms |

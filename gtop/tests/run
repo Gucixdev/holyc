@@ -63,6 +63,14 @@ dead=0; for p in $P1 $P2 $P3; do if ! [ -d /proc/$p ] || grep -q '^State:.*Z' /p
 kill $P1 $P2 $P3 2>/dev/null; wait $P1 $P2 $P3 2>/dev/null
 S=$($BIN --snapshot 130 40 --keys E); printf '%s\n' "$S" | grep -q "PROCS" && bad "no PROCS column" || ok
 
+# info panel: what the process under the cursor is
+S=$($BIN --snapshot 140 50 -f systemd);               has "info panel is on by default" "$S" "── info ──"
+has "info has an about line" "$S" "about  "
+has "info has the command line" "$S" "cmd    "
+S=$($BIN --snapshot 140 50 -f systemd --keys i);      printf "%s\n" "$S" | grep -q "── info ──" && bad "i hides the panel" || ok
+S=$($BIN --snapshot 140 50 -f kthreadd --keys R);     has "kernel thread is explained" "$S" "the parent of every kernel thread"
+S=$($BIN --snapshot 140 50 -f systemd --keys a);      has "anonymous hides the command line" "$S" "cmd    \[hidden - anonymous mode\]"
+
 # palette runs commands/<name> with the marked pids as arguments
 mkdir "$T/cmds"; printf '#!/bin/sh\necho "args: $*"\n' > "$T/cmds/show"
 "$T/$V" 60 & P=$!; sleep 0.2
