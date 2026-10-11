@@ -41,6 +41,25 @@ S=$($BIN --snapshot 130 40 -f "$V")
 [ "$(printf '%s\n' "$S" | grep -c "$V")" -ge 1 ] && ok || bad "filter shows the process"
 kill $P 2>/dev/null; wait $P 2>/dev/null
 
+
+# process tree: several processes of one program fold into one row, Enter opens it
+"$T/$V" 60 & P1=$!; "$T/$V" 60 & P2=$!; "$T/$V" 60 & P3=$!
+sleep 0.2
+S=$($BIN --snapshot 130 40 -f "$V");        has "program row shows the count" "$S" "$V (3)"
+printf "%s\n" "$S" | grep "├── $V" | grep -q . && bad "tree is closed by default" || ok
+S=$($BIN --snapshot 130 40 -f "$V" --keys E); has "Enter opens the tree" "$S" "├── $V \\["
+has "last child uses the corner" "$S" "└── $V \\["
+S=$($BIN --snapshot 130 40 -f "$V" --keys EE); printf "%s\n" "$S" | grep "├── $V" | grep -q . && bad "Enter closes it again" || ok
+S=$($BIN --snapshot 130 40 -f "$V" --keys EDk)
+has "kill on a child row kills one process" "$S" "killed 1/1"
+sleep 0.2
+alive=0; for p in $P1 $P2 $P3; do kill -0 $p 2>/dev/null && alive=$((alive + 1)); done
+# a killed child is a zombie until reaped, so count the ones that report 137
+dead=0; for p in $P1 $P2 $P3; do if ! [ -d /proc/$p ] || grep -q '^State:.*Z' /proc/$p/status 2>/dev/null; then dead=$((dead + 1)); fi; done
+[ "$dead" -eq 1 ] && ok || bad "exactly one of three processes died (got $dead)"
+kill $P1 $P2 $P3 2>/dev/null; wait $P1 $P2 $P3 2>/dev/null
+S=$($BIN --snapshot 130 40 --keys E); printf '%s\n' "$S" | grep -q "PROCS" && bad "no PROCS column" || ok
+
 # palette runs commands/<name> with the marked pids as arguments
 mkdir "$T/cmds"; printf '#!/bin/sh\necho "args: $*"\n' > "$T/cmds/show"
 "$T/$V" 60 & P=$!; sleep 0.2

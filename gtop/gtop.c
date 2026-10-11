@@ -624,15 +624,29 @@ typedef struct {
 } Ent;
 
 typedef struct {
+	int pid;
+	double cpu, disk_bps, gpu_pct;
+	unsigned long long mem_mb, gpu_mb;
+} Child;
+
+typedef struct {
 	char name[80];
 	int count;
 	double cpu, mem_pct, disk_pct, disk_bps, gpu_pct;
 	unsigned long long mem_mb, gpu_mb;
 	int *pids, npids;
+	Child *kids;
+	int nkids;
 	int divider, ghost;
 } Group;
 
-typedef struct { char name[80]; Hist h; } NamedHist;
+/* activity history of a row: longer than the 30 samples of the panel graphs, so the ACTIVITY column
+ * can use the whole width it is given */
+#define PROC_HIST 120
+typedef struct { char name[96]; double v[PROC_HIST]; int n; } NamedHist;
+
+/* what is on screen: a group row (kid = -1) or one process of an expanded group */
+typedef struct { int g, kid; } Row;
 typedef struct { Group g; double since; } GhostG;
 
 typedef struct {
@@ -643,6 +657,10 @@ typedef struct {
 	int nmarked, cmarked;
 	NamedHist *hist;
 	int nhist;
+	Row *rows;
+	int nrows;
+	char (*expanded)[80];
+	int nexp, cexp;
 	GhostG *ghosts;
 	int nghost;
 	int *pj_pid;
@@ -652,13 +670,15 @@ typedef struct {
 	char filter[64];
 } Procs;
 
-static void group_free(Group *g) { free(g->pids); g->pids = NULL; }
+static void group_free(Group *g) { free(g->pids); free(g->kids); g->pids = NULL; g->kids = NULL; }
 
 static Group group_clone(const Group *s)
 {
 	Group c = *s;
 	c.pids = malloc((size_t)(s->npids > 0 ? s->npids : 1) * sizeof(int));
 	memcpy(c.pids, s->pids, (size_t)s->npids * sizeof(int));
+	c.kids = malloc((size_t)(s->nkids > 0 ? s->nkids : 1) * sizeof(Child));
+	memcpy(c.kids, s->kids, (size_t)s->nkids * sizeof(Child));
 	return c;
 }
 
@@ -680,6 +700,21 @@ static void group_add(Group *g, const Ent *e)
 	g->gpu_mb += e->gpu_mb;
 	g->pids = realloc(g->pids, (size_t)(g->npids + 1) * sizeof(int));
 	g->pids[g->npids++] = e->pid;
+	g->kids = realloc(g->kids, (size_t)(g->nkids + 1) * sizeof(Child));
+	g->kids[g->nkids].pid = e->pid;
+	g->kids[g->nkids].cpu = e->cpu;
+	g->kids[g->nkids].disk_bps = e->disk_bps;
+	g->kids[g->nkids].gpu_pct = e->gpu_pct;
+	g->kids[g->nkids].mem_mb = e->mem_mb;
+	g->kids[g->nkids].gpu_mb = e->gpu_mb;
+	g->nkids++;
+}
+
+static int kid_cmp(const void *a, const void *b)
+{
+	const Child *x = a, *y = b;
+	if (x->cpu != y->cpu) return x->cpu < y->cpu ? 1 : -1;
+	return x->pid - y->pid;
 }
 
 typedef struct { double cpu; int idx; } SortKey;
@@ -726,6 +761,7 @@ static void by_name(GVec *out, const Ent *e, int n, int want_kernel, double mem_
 		group_add(g, &e[i]);
 	}
 	apply_pct(out->g + start, out->n - start, mem_total, disk_bps);
+	for (i = start; i < out->n; i++) qsort(out->g[i].kids, (size_t)out->g[i].nkids, sizeof(Child), kid_cmp);
 	sort_groups(out->g + start, out->n - start);
 }
 
@@ -767,6 +803,45 @@ static void nvidia_pmon(Ent *e, int n)
 	}
 	pclose(p);
 }
+
+static int is_expanded(const Procs *P, const char *name)
+{
+	int i;
+	for (i = 0; i < P->nexp; i++) if (!strcmp(P->expanded[i], name)) return 1;
+	return 0;
+}
+
+/* a group of two or more processes can be opened into a tree (raw view is already one row per pid) */
+static int expandable(const Procs *P, const Group *g) { return P->mode != 1 && !g->divider && !g->ghost && g->nkids >= 2; }
+
+static void build_rows(Procs *P)
+{
+	int i, k, n = 0;
+	free(P->rows);
+	P->rows = malloc((size_t)(P->ng * 2 + 1) * sizeof(Row));
+	for (i = 0; i < P->ng; i++) {
+		const Group *g = &P->g[i];
+		int open = expandable(P, g) && is_expanded(P, g->name);
+		if (open) {
+			size_t need = (size_t)(n + 1 + g->nkids + (P->ng - i)) * sizeof(Row);
+			P->rows = realloc(P->rows, need + (size_t)P->ng * sizeof(Row));
+		}
+		P->rows[n].g = i; P->rows[n].kid = -1; n++;
+		if (open) for (k = 0; k < g->nkids; k++) { P->rows[n].g = i; P->rows[n].kid = k; n++; }
+	}
+	P->nrows = n;
+	if (P->cursor >= P->nrows) P->cursor = P->nrows ? P->nrows - 1 : 0;
+}
+
+/* the name a row is marked and tracked under */
+static void row_key(const Procs *P, const Row *r, char *out, size_t n)
+{
+	const Group *g = &P->g[r->g];
+	if (r->kid < 0) snprintf(out, n, "%s", g->name);
+	else snprintf(out, n, "%.60s [%d]", g->name, g->kids[r->kid].pid);
+}
+
+static int row_is_divider(const Procs *P, int i) { return P->rows[i].kid < 0 && P->g[P->rows[i].g].divider; }
 
 static int find_prev(const Procs *P, int pid)
 {
@@ -922,34 +997,41 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 		}
 	}
 
-	/* per-row activity history from the currently displayed rows only */
+	for (i = 0; i < P->ng; i++) group_free(&P->g[i]);
+	free(P->g);
+	P->g = groups.g;
+	P->ng = groups.n;
+	build_rows(P);
+
+	/* per-row activity history from the rows currently on screen only */
 	{
-		NamedHist *nh = calloc((size_t)(groups.n ? groups.n : 1), sizeof *nh);
+		NamedHist *nh = calloc((size_t)(P->nrows ? P->nrows : 1), sizeof *nh);
 		int nn = 0;
-		for (i = 0; i < groups.n; i++) {
-			Hist h;
-			memset(&h, 0, sizeof h);
-			if (groups.g[i].divider) continue;
-			for (j = 0; j < P->nhist; j++) if (!strcmp(P->hist[j].name, groups.g[i].name)) { h = P->hist[j].h; break; }
-			hpush(&h, groups.g[i].ghost ? 0.0 : groups.g[i].cpu);
-			snprintf(nh[nn].name, sizeof nh[nn].name, "%s", groups.g[i].name);
-			nh[nn].h = h;
-			nn++;
+		for (i = 0; i < P->nrows; i++) {
+			const Group *g = &P->g[P->rows[i].g];
+			char key[96];
+			double val;
+			NamedHist *dst;
+			if (row_is_divider(P, i)) continue;
+			row_key(P, &P->rows[i], key, sizeof key);
+			val = g->ghost ? 0.0 : (P->rows[i].kid < 0 ? g->cpu : g->kids[P->rows[i].kid].cpu);
+			dst = &nh[nn++];
+			snprintf(dst->name, sizeof dst->name, "%s", key);
+			for (j = 0; j < P->nhist; j++)
+				if (!strcmp(P->hist[j].name, key)) { memcpy(dst->v, P->hist[j].v, sizeof dst->v); dst->n = P->hist[j].n; break; }
+			if (dst->n == PROC_HIST) { memmove(dst->v, dst->v + 1, (PROC_HIST - 1) * sizeof(double)); dst->n--; }
+			dst->v[dst->n++] = val;
 		}
 		free(P->hist);
 		P->hist = nh;
 		P->nhist = nn;
 	}
 
-	for (i = 0; i < P->ng; i++) group_free(&P->g[i]);
-	free(P->g);
-	P->g = groups.g;
-	P->ng = groups.n;
-	if (P->cursor >= P->ng) P->cursor = P->ng ? P->ng - 1 : 0;
-	if (P->ng && P->g[P->cursor].divider) {
-		for (i = P->cursor + 1; i < P->ng; i++) if (!P->g[i].divider) { P->cursor = i; break; }
-		if (P->g[P->cursor].divider)
-			for (i = P->cursor - 1; i >= 0; i--) if (!P->g[i].divider) { P->cursor = i; break; }
+	if (P->cursor >= P->nrows) P->cursor = P->nrows ? P->nrows - 1 : 0;
+	if (P->nrows && row_is_divider(P, P->cursor)) {
+		for (i = P->cursor + 1; i < P->nrows; i++) if (!row_is_divider(P, i)) { P->cursor = i; break; }
+		if (row_is_divider(P, P->cursor))
+			for (i = P->cursor - 1; i >= 0; i--) if (!row_is_divider(P, i)) { P->cursor = i; break; }
 	}
 
 	free(P->pj_pid); free(P->pj_j); free(P->pj_io);
@@ -972,21 +1054,66 @@ static int is_marked(const Procs *P, const char *name)
 static void toggle_mark(Procs *P)
 {
 	int i;
-	const Group *g;
-	if (P->cursor >= P->ng) return;
-	g = &P->g[P->cursor];
-	if (g->divider) return;
+	char key[96];
+	if (P->cursor >= P->nrows || row_is_divider(P, P->cursor)) return;
+	row_key(P, &P->rows[P->cursor], key, sizeof key);
 	for (i = 0; i < P->nmarked; i++)
-		if (!strcmp(P->marked[i], g->name)) { memcpy(P->marked[i], P->marked[P->nmarked - 1], 80); P->nmarked--; return; }
+		if (!strcmp(P->marked[i], key)) { memcpy(P->marked[i], P->marked[P->nmarked - 1], 80); P->nmarked--; return; }
 	if (P->nmarked == P->cmarked) { P->cmarked = P->cmarked ? P->cmarked * 2 : 16; P->marked = realloc(P->marked, (size_t)P->cmarked * 80); }
-	snprintf(P->marked[P->nmarked++], 80, "%s", g->name);
+	snprintf(P->marked[P->nmarked++], 80, "%.79s", key);
 }
 
 static void cursor_move(Procs *P, int dir)
 {
 	int i = P->cursor + dir;
-	while (i >= 0 && i < P->ng && P->g[i].divider) i += dir;
-	if (i >= 0 && i < P->ng) P->cursor = i;
+	while (i >= 0 && i < P->nrows && row_is_divider(P, i)) i += dir;
+	if (i >= 0 && i < P->nrows) P->cursor = i;
+}
+
+/* Enter: open or close the process tree under a program; on a child row it closes its parent */
+static void toggle_expand(Procs *P)
+{
+	const Row *r;
+	const Group *g;
+	int i;
+	if (P->cursor >= P->nrows) return;
+	r = &P->rows[P->cursor];
+	g = &P->g[r->g];
+	if (!expandable(P, g)) return;
+	for (i = 0; i < P->nexp; i++)
+		if (!strcmp(P->expanded[i], g->name)) {
+			memcpy(P->expanded[i], P->expanded[P->nexp - 1], 80);
+			P->nexp--;
+			build_rows(P);
+			for (i = 0; i < P->nrows; i++) if (P->rows[i].g == r->g && P->rows[i].kid < 0) { P->cursor = i; break; }
+			return;
+		}
+	if (P->nexp == P->cexp) { P->cexp = P->cexp ? P->cexp * 2 : 16; P->expanded = realloc(P->expanded, (size_t)P->cexp * 80); }
+	snprintf(P->expanded[P->nexp++], 80, "%.79s", g->name);
+	build_rows(P);
+}
+
+/* the pids a kill or a palette command acts on: marked rows, or the row under the cursor */
+static int collect_targets(const Procs *P, int *pids, int cap, char *names, size_t ncap)
+{
+	int n = 0, i, j;
+	for (i = 0; i < P->nrows; i++) {
+		const Row *r = &P->rows[i];
+		const Group *g = &P->g[r->g];
+		char key[96];
+		int take;
+		if (row_is_divider(P, i)) continue;
+		row_key(P, r, key, sizeof key);
+		take = P->nmarked ? is_marked(P, key) : (i == P->cursor);
+		if (!take) continue;
+		if (names) {
+			if (names[0] && strlen(names) + 3 < ncap) strcat(names, ", ");
+			if (strlen(names) + strlen(key) + 1 < ncap) strcat(names, key);
+		}
+		if (r->kid >= 0) { if (n < cap) pids[n++] = g->kids[r->kid].pid; }
+		else for (j = 0; j < g->npids && n < cap; j++) pids[n++] = g->pids[j];
+	}
+	return n;
 }
 
 /* ------------------------------------------------------------------ app */
@@ -1056,21 +1183,12 @@ static void toggle_record(App *A)
 static void kill_selected(App *A)
 {
 	Procs *P = &A->procs;
-	int killed = 0, total = 0, i, j, any = 0;
+	int killed = 0, total, i;
+	static int pids[65536];
 	char names[300] = "", m[400];
-	for (i = 0; i < P->ng; i++) {
-		const Group *g = &P->g[i];
-		int take = P->nmarked ? is_marked(P, g->name) : (i == P->cursor && !g->divider);
-		if (!take) continue;
-		if (any && strlen(names) + 3 < sizeof names) strcat(names, ", ");
-		if (strlen(names) + strlen(g->name) + 1 < sizeof names) strcat(names, g->name);
-		any = 1;
-		for (j = 0; j < g->npids; j++) {
-			total++;
-			if (kill(g->pids[j], SIGKILL) == 0) killed++;
-		}
-	}
-	if (!any) return;
+	total = collect_targets(P, pids, 65536, names, sizeof names);
+	if (!total) return;
+	for (i = 0; i < total; i++) if (kill(pids[i], SIGKILL) == 0) killed++;
 	P->nmarked = 0;
 	snprintf(m, sizeof m, "killed %d/%d (%.300s)", killed, total, names);
 	set_msg(A, m);
@@ -1121,12 +1239,11 @@ static void run_palette(App *A)
 	argv[argc++] = "sh";
 	argv[argc++] = path;
 	while ((tok = strtok_r(NULL, " \t", &save)) && argc < 60) argv[argc++] = tok;
-	for (i = 0; i < P->ng; i++) {
-		const Group *g = &P->g[i];
-		int take = P->nmarked ? (!g->divider && is_marked(P, g->name)) : (i == P->cursor && !g->divider);
-		if (!take) continue;
-		for (j = 0; j < g->npids && npb < 400 && argc < 598; j++) {
-			snprintf(pidbufs[npb], 16, "%d", g->pids[j]);
+	{
+		static int tp[65536];
+		int nt = collect_targets(P, tp, 65536, NULL, 0);
+		for (j = 0; j < nt && npb < 400 && argc < 598; j++) {
+			snprintf(pidbufs[npb], 16, "%d", tp[j]);
 			argv[argc++] = pidbufs[npb++];
 		}
 	}
@@ -1174,11 +1291,12 @@ static void handle_key(App *A, int k)
 	}
 	switch (k) {
 	case 'q': A->quit = 1; break;
-	case K_LEFT: P->mode = (P->mode + 2) % 3; P->cursor = 0; P->nmarked = 0; break;
-	case K_RIGHT: P->mode = (P->mode + 1) % 3; P->cursor = 0; P->nmarked = 0; break;
+	case K_LEFT: P->mode = (P->mode + 2) % 3; P->cursor = 0; P->nmarked = 0; build_rows(P); break;
+	case K_RIGHT: P->mode = (P->mode + 1) % 3; P->cursor = 0; P->nmarked = 0; build_rows(P); break;
 	case K_UP: cursor_move(P, -1); break;
 	case K_DOWN: cursor_move(P, 1); break;
 	case ' ': toggle_mark(P); break;
+	case K_ENTER: toggle_expand(P); break;
 	case 'k': kill_selected(A); break;
 	case '/': A->palette = 1; A->palette_in[0] = 0; break;
 	case 'r': toggle_record(A); break;
@@ -1308,12 +1426,13 @@ static const char *GLY[9] = {" ", "\xE2\x96\x81", "\xE2\x96\x82", "\xE2\x96\x83"
 /* raw_percent_graph (fixed 0..100) and raw_rate_graph_line (scaled to its own max): linear
  * interpolation across the width, any nonzero value shows at least the lowest glyph. History
  * values are rounded to whole numbers first, as the original did (as_u64). */
-static void graph(const Rect *r, int row, int *col, const Hist *h, int width, unsigned colr, int fixed)
+static void graph_v(const Rect *r, int row, int *col, const double *vals, int n, int width, unsigned colr, int fixed)
 {
-	double hv[HIST_LEN], mx = 1;
-	int n = h->n, x, i;
+	double hv[PROC_HIST], mx = 1;
+	int x, i;
+	if (n > PROC_HIST) { vals += n - PROC_HIST; n = PROC_HIST; }
 	if (n < 2) { repeat(r, row, col, C_PLAIN, " ", width); return; }
-	for (i = 0; i < n; i++) { double v = h->v[i]; hv[i] = v < 0 ? 0 : floor(v + 0.5); }
+	for (i = 0; i < n; i++) { double v = vals[i]; hv[i] = v < 0 ? 0 : floor(v + 0.5); }
 	if (fixed) mx = 100.0;
 	else for (i = 0; i < n; i++) if (hv[i] > mx) mx = hv[i];
 	for (x = 0; x < width; x++) {
@@ -1331,6 +1450,11 @@ static void graph(const Rect *r, int row, int *col, const Hist *h, int width, un
 		if (v > 0.0 && idx < 1) idx = 1;
 		span(r, row, col, colr, 0, GLY[idx]);
 	}
+}
+
+static void graph(const Rect *r, int row, int *col, const Hist *h, int width, unsigned colr, int fixed)
+{
+	graph_v(r, row, col, h->v, h->n, width, colr, fixed);
 }
 
 static int cpu_box_lines(const App *A) { return 3 + A->cpu.ncores + 2; }
@@ -1603,7 +1727,7 @@ static void draw_proc(const App *A, int x, int y, int w, int h)
 	static const char *labels[] = {"app", "raw", "user/system"};
 	char title[64], hdr[256];
 	Rect r;
-	int show_gpu = A->gpu.found, visible = h - 4, total = P->ng, start = 0, end, i, row = 0, col;
+	int show_gpu = A->gpu.found, visible = h - 4, total = P->nrows, start = 0, end, i, row = 0, col;
 	if (visible < 1) visible = 1;
 	snprintf(title, sizeof title, "PROC [%s]", labels[P->mode]);
 	r = block(x, y, w, h, title);
@@ -1613,45 +1737,69 @@ static void draw_proc(const App *A, int x, int y, int w, int h)
 		if (start > total - visible) start = total - visible;
 	}
 	end = start + visible < total ? start + visible : total;
-	snprintf(hdr, sizeof hdr, "%-3s%-22s%6s %6s %9s %6s %10s", "", "NAME", "CPU%", "MEM%", "MEM", "DISK%", "DISK");
+	snprintf(hdr, sizeof hdr, "%-3s%-24s%6s %6s %9s %6s %10s", "", "NAME", "CPU%", "MEM%", "MEM", "DISK%", "DISK");
 	if (show_gpu) { size_t l = strlen(hdr); snprintf(hdr + l, sizeof hdr - l, "%6s %8s", "GPU%", "GPU"); }
-	{ size_t l = strlen(hdr); snprintf(hdr + l, sizeof hdr - l, " %5s %s", "PROCS", "ACTIVITY"); }
+	{ size_t l = strlen(hdr); snprintf(hdr + l, sizeof hdr - l, " %s", "ACTIVITY"); }
 	col = 0;
 	span(&r, row++, &col, C_ACCENT, 0, hdr);
 	for (i = start; i < end; i++) {
-		const Group *g = &P->g[i];
-		char fixed[400], nm[96], rate[40];
+		const Row *rw = &P->rows[i];
+		const Group *g = &P->g[rw->g];
+		const Child *kd = rw->kid >= 0 ? &g->kids[rw->kid] : NULL;
+		char label[200], cell[200], key[96], rate[40], fixed[400];
 		unsigned style;
-		int fl = 0, hi, pad, k = 0, bytes = 0;
+		int fl = 0, hi, pad, k = 0, bytes = 0, maxc;
 		const char *s;
-		const Hist *hist = NULL;
+		const NamedHist *hist = NULL;
+		double cpu, mem_pct, disk_pct, disk_bps, gpu_pct;
+		unsigned long long mem_mb, gpu_mb;
 		col = 0;
 		if (g->divider) { span(&r, row++, &col, C_ACCENT, 0, g->name); continue; }
-		s = g->name;
-		while (*s && k < 22) { int l = u8len((unsigned char)*s); bytes += l; s += l; k++; }
-		snprintf(nm, sizeof nm, "%.*s", bytes, g->name);
-		human_rate(g->disk_bps, rate, sizeof rate);
-		pad = 22 - ncells(nm);
-		snprintf(fixed, sizeof fixed, "%-2s %s%*s%5.1f%% %5.1f%% %8lluM %5.1f%% %10s", is_marked(P, g->name) ? "*" : " ", nm,
-		         pad > 0 ? pad : 0, "", g->cpu, g->mem_pct, g->mem_mb, g->disk_pct, rate);
+		if (kd) {
+			int last = rw->kid == g->nkids - 1;
+			snprintf(label, sizeof label, "%s%.60s [%d]", last ? "\xE2\x94\x94\xE2\x94\x80\xE2\x94\x80 " : "\xE2\x94\x9C\xE2\x94\x80\xE2\x94\x80 ", g->name, kd->pid);
+			maxc = 24;
+			cpu = kd->cpu; mem_mb = kd->mem_mb; disk_bps = kd->disk_bps; gpu_pct = kd->gpu_pct; gpu_mb = kd->gpu_mb;
+			mem_pct = g->mem_mb ? g->mem_pct * (double)kd->mem_mb / (double)g->mem_mb : 0;
+			disk_pct = g->disk_bps > 0 ? g->disk_pct * kd->disk_bps / g->disk_bps : 0;
+		} else {
+			const char *glyph = expandable(P, g) ? (is_expanded(P, g->name) ? "\xE2\x96\xBE " : "\xE2\x96\xB8 ") : "  ";
+			if (g->count > 1 && P->mode != 1) snprintf(label, sizeof label, "%s%s (%d)", glyph, g->name, g->count);
+			else snprintf(label, sizeof label, "%s%s", glyph, g->name);
+			maxc = 24;
+			cpu = g->cpu; mem_mb = g->mem_mb; disk_bps = g->disk_bps; gpu_pct = g->gpu_pct; gpu_mb = g->gpu_mb;
+			mem_pct = g->mem_pct; disk_pct = g->disk_pct;
+		}
+		s = label;
+		while (*s && k < maxc) { int l = u8len((unsigned char)*s); bytes += l; s += l; k++; }
+		snprintf(cell, sizeof cell, "%.*s", bytes, label);
+		pad = 24 - ncells(cell);
+		row_key(P, rw, key, sizeof key);
+		human_rate(disk_bps, rate, sizeof rate);
+		snprintf(fixed, sizeof fixed, "%-2s %s%*s%5.1f%% %5.1f%% %8lluM %5.1f%% %10s", is_marked(P, key) ? "*" : " ", cell,
+		         pad > 0 ? pad : 0, "", cpu, mem_pct, mem_mb, disk_pct, rate);
 		if (g->ghost) style = C_GHOST;
 		else {
-			style = tier_color(g->cpu);
+			style = tier_color(cpu);
 			if (i == P->cursor) fl = F_REV | F_BOLD;
 		}
 		span(&r, row, &col, style, fl, fixed);
-		if (show_gpu) spanf(&r, row, &col, style, fl, "%5.1f%% %8lluM", g->gpu_pct, g->gpu_mb);
-		spanf(&r, row, &col, style, fl, " %5d ", g->count);
-		for (hi = 0; hi < P->nhist; hi++) if (!strcmp(P->hist[hi].name, g->name)) { hist = &P->hist[hi].h; break; }
-		if (hist) graph(&r, row, &col, hist, 10, g->ghost ? C_GHOST : C_ACCENT, 1);
-		else repeat(&r, row, &col, C_PLAIN, " ", 10);
+		if (show_gpu) spanf(&r, row, &col, style, fl, "%5.1f%% %8lluM", gpu_pct, gpu_mb);
+		span(&r, row, &col, style, fl, " ");
+		for (hi = 0; hi < P->nhist; hi++) if (!strcmp(P->hist[hi].name, key)) { hist = &P->hist[hi]; break; }
+		{
+			int gw = r.w - col;
+			if (gw < 4) gw = 4;
+			if (hist) graph_v(&r, row, &col, hist->v, hist->n, gw, g->ghost ? C_GHOST : C_ACCENT, 1);
+			else repeat(&r, row, &col, C_PLAIN, " ", gw);
+		}
 		row++;
 	}
 	{
 		char scroll[48] = "", hint[400];
 		if (total > visible) snprintf(scroll, sizeof scroll, " [%d-%d/%d]", start + 1, end, total);
 		snprintf(hint, sizeof hint,
-		         "\xE2\x86\x91/\xE2\x86\x93 select%s  \xE2\x86\x90\xE2\x86\x92 mode  space: mark  k: kill  /: command  +/-: refresh %dms  r: record  a: anonymous",
+		         "\xE2\x86\x91/\xE2\x86\x93 select%s  \xE2\x86\x90\xE2\x86\x92 mode  space: mark  enter: expand  k: kill  /: command  +/-: refresh %dms  r: record  a: anonymous",
 		         scroll, A->interval_ms);
 		col = 0;
 		span(&r, row++, &col, C_ACCENT, 0, hint);
