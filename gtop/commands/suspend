@@ -1,0 +1,9 @@
+#!/bin/sh
+# real example command - classic task manager "Suspend Process"
+# (SIGSTOP - freezes the process, doesn't kill it). Pair with the
+# `resume` command (SIGCONT) to unfreeze. Invoked from the PROC panel's
+# "/" command palette with the selected/marked pid(s) as real
+# positional arguments.
+for pid in "$@"; do
+	kill -STOP "$pid"
+done

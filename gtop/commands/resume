@@ -1,0 +1,7 @@
+#!/bin/sh
+# real example command - unfreezes a process previously frozen by
+# `suspend` (SIGCONT). Invoked from the PROC panel's "/" command
+# palette with the selected/marked pid(s) as real positional arguments.
+for pid in "$@"; do
+	kill -CONT "$pid"
+done
