@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Buduje ten dmenu (Wayland, wyglad rofi) i instaluje do ~/.local/bin: dmenu, dmenu_menu, dmenu_path, dmenu_run, stest
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+make -j"$(nproc)"
+mkdir -p "$HOME/.local/bin"
+for f in dmenu dmenu_menu dmenu_path dmenu_run stest; do
+	install -m 755 "$f" "$HOME/.local/bin/$f"
+done
+echo "Zainstalowano w $HOME/.local/bin: dmenu dmenu_menu dmenu_path dmenu_run stest ($("$HOME/.local/bin/dmenu" -v))"
