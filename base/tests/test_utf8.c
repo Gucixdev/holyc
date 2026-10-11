@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define UTF8_IMPLEMENTATION
-#include "util/utf8.h"
+#include "core/utf8.h"
 
 int main(void)
 {

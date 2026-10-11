@@ -17,9 +17,9 @@
  * astral-plane-heavy sources (emoji, some CJK extensions) can hit this;
  * everything else is unaffected. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
-#include "util/str.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
+#include "core/str.h"
 
 typedef enum {
     JSON_ESUCCESS     = 0,

@@ -3,12 +3,12 @@
  * #include more than once thanks to this guard, since this project's
  * own single-TU-per-tool build (see automake's own header comment)
  * has no separate object-file-linking step: a consumer just does
- * #include "util/flags.c" (which pulls in flags.h transitively) rather
+ * #include "core/flags.c" (which pulls in flags.h transitively) rather
  * than compiling+linking this as its own .o. */
 #ifndef HOLYC_FLAGS_C_
 #define HOLYC_FLAGS_C_
 
-#include "util/flags.h"
+#include "core/flags.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

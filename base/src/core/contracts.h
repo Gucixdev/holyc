@@ -54,7 +54,7 @@
  * just restates the function's own body in different words is noise,
  * not verification. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 #if defined(__CPROVER__)
     #define HOLYC_REQUIRES(cond) __CPROVER_assume(cond)

@@ -8,8 +8,8 @@
  * split files) - a caller/test wanting only one algorithm still only pulls
  * in that one's code, this file just puts them in one place on disk. */
 
-#include "types/base.h"
-#include "types/base.h"
+#include "core/base.h"
+#include "core/base.h"
 #include "math/mathx.h"
 
 /* ---- bezier ----

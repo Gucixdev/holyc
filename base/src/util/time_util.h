@@ -21,7 +21,7 @@
  * parsing" stance. Picks s/ms/us/ns automatically from magnitude, always
  * 3 decimal places. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 f64 time_now_seconds(void);
 void time_sleep_seconds(f64 seconds);

@@ -28,8 +28,8 @@
  * anything this project had before), no rich error strings (matches
  * deflate.h/png.h's own plain 0/1 convention). */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 /* returns arena-owned RGBA8 pixels (out_width * out_height * 4 bytes,
  * row-major, no padding) on success, NULL on any parse/format error or

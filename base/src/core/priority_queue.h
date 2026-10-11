@@ -28,8 +28,8 @@
  * if plain FIFO ordering is actually enough) rather than this file
  * baking in locking every caller might not need. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 typedef struct {
     i64 id;

@@ -15,7 +15,7 @@
  * or add enough value over hand-rolled call-site code, without the
  * Windows-style half of cwalk's own design they were built alongside. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 /* own local strlen_ - own copy per this project's standing "no cross-
  * IMPLEMENTATION-guard dependency" rule, avoiding a <string.h>

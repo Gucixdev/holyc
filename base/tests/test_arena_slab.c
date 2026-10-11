@@ -2,7 +2,7 @@
  * pointer stability across growth, reset, zeroed blocks. */
 #define MEM_HOOK_IMPLEMENTATION
 #define ARENA_SLAB_IMPLEMENTATION
-#include "alloc/arena_slab.h"
+#include "core/arena_slab.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

@@ -44,7 +44,7 @@
  *     while (counter_run(&c) == PT_YIELDED) { ... }
  */
 
-#include "types/base.h"
+#include "core/base.h"
 
 typedef struct {
     u16 lc; /* "local continuation" - the resume point, 0 = not started */

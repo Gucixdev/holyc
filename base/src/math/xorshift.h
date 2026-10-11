@@ -16,8 +16,8 @@
  * external system/paper that specifies it) - not a default recommendation
  * over rng.h. */
 
-#include "types/base.h"
-#include "types/contracts.h"
+#include "core/base.h"
+#include "core/contracts.h"
 
 typedef struct {
     u32 state;

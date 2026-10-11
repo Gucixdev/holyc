@@ -8,9 +8,9 @@
  * (VECTOR_IMPLEMENTATION, QUAT_IMPLEMENTATION, MATRIX_IMPLEMENTATION) -
  * every existing `#define X_IMPLEMENTATION` call site keeps working
  * unchanged, consumers just need `#include "math/mathx.h"` in addition to
- * `#include "types/base.h"`. */
+ * `#include "core/base.h"`. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 /* ============================================================
  * math types: vector (vector.h)

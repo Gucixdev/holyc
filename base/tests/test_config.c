@@ -5,7 +5,7 @@
 #define HASH_MAP_IMPLEMENTATION
 #define STR_IMPLEMENTATION
 #define CONFIG_IMPLEMENTATION
-#include "alloc/arena_alloc.h"
+#include "core/arena_alloc.h"
 #include "util/config.h"
 
 int main(void)

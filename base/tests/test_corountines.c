@@ -1,5 +1,5 @@
 #include "test_common.h"
-#include "sync/corountines.h"
+#include "core/corountines.h"
 
 typedef struct {
     Pt pt;

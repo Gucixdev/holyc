@@ -14,7 +14,7 @@
  * sequence that LOOKS structurally valid but encodes a surrogate
  * codepoint is still invalid UTF-8. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 /* decodes one codepoint starting at bytes[0]. Returns the number of
  * bytes consumed (1-4) on success, 0 on any malformed sequence

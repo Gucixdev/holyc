@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "alloc/arena_alloc.h"
+#include "core/arena_alloc.h"
 #define IO_IMPLEMENTATION
-#include "util/io.h"
+#include "core/io.h"
 
 int main(void)
 {

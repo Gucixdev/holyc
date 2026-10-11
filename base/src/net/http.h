@@ -25,9 +25,9 @@
  * (arena_alloc.h, sequencer.h) make explicitly for their own first
  * versions. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
-#include "util/str.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
+#include "core/str.h"
 #include "net/socket.h"
 
 typedef enum {

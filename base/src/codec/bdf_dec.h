@@ -26,9 +26,9 @@
  * file), not defaulted to zero - a font that doesn't know a glyph's
  * advance width or bitmap dimensions can't be laid out correctly anyway. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
-#include "util/str.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
+#include "core/str.h"
 
 typedef struct {
     i32 codepoint;

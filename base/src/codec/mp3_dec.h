@@ -56,7 +56,7 @@
 #ifndef HOLYC_MP3_DEC_H_
 #define HOLYC_MP3_DEC_H_
 
-#include "types/base.h"
+#include "core/base.h"
 
 /* own local copy_/move_/zero_ - own copy per this project's standing "no
  * cross-IMPLEMENTATION-guard dependency" rule, backing the MP3_COPY_

@@ -13,7 +13,7 @@
  * print.h`), and log (`src/core/log.h`) used to live here too - all
  * three moved out to their own files, own scope: base.h stays scoped to base types/bit/SIMD only, a
  * consumer needing math types/print/log includes those files
- * separately (they each #include "types/base.h" themselves for the types
+ * separately (they each #include "core/base.h" themselves for the types
  * they need, so a consumer never has to include base.h AND one of
  * those directly for the shared types to resolve correctly).
  *

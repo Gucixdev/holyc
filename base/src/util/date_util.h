@@ -20,7 +20,7 @@
  * day_of_week uses JDN % 7 with the 0=Monday convention (verified
  * against 2000-01-01, a known Saturday, in the same test). */
 
-#include "types/base.h"
+#include "core/base.h"
 
 typedef struct {
     i32 year;

@@ -2,7 +2,7 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define DEFLATE_IMPLEMENTATION
 #define PNG_DEC_IMPLEMENTATION
-#include "alloc/arena_alloc.h"
+#include "core/arena_alloc.h"
 #include "codec/png_dec.h"
 #include "png_test_data.h"
 

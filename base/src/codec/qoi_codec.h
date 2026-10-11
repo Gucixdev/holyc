@@ -23,8 +23,8 @@
  * in one translation unit (e.g. test_qoi.c) without a duplicate-symbol
  * error. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 typedef enum {
     QOI_ESUCCESS     =  0,

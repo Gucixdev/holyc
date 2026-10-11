@@ -20,8 +20,8 @@
  * Verified for ranking-equivalence against the real `fzf --filter`
  * binary (see tests/test_fuzzy_match.c) - not just self-consistency. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 #include <ctype.h>
 
 #define FUZZY_SCORE_MATCH 16

@@ -19,7 +19,7 @@
  * of room" signal (the returned count hitting max) beats a hidden
  * unbounded allocation. */
 
-#include "util/str.h"
+#include "core/str.h"
 
 /* counts '\n' bytes + 1 for a nonempty text with no trailing newline
  * (cloc's own "last line without a trailing newline still counts"

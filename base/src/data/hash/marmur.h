@@ -18,7 +18,7 @@
  * test vector table, not just internal self-consistency - see
  * tests/test_marmur.c and docs/progress.md. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 u32 murmur3_32(const void *data, size_t len, u32 seed);
 

@@ -17,8 +17,8 @@
  * so a consumer loop can tell "queue closed" from "spuriously empty"
  * without polling a separate flag itself. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 #include <pthread.h>
 
 typedef void (*Action_Fn)(void *ctx);

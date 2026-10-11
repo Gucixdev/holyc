@@ -9,8 +9,8 @@
  *   - WIN32/WASM backends dropped for now, add back when actually needed
  */
 
-#include "types/base.h"
-#include "types/contracts.h"
+#include "core/base.h"
+#include "core/contracts.h"
 #include <stdarg.h> /* va_list is part of arena_vsprintf's declaration below, not implementation-only */
 #include <string.h> /* memcpy - arena_memcpy's underlying primitive */
 

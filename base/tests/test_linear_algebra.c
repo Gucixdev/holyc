@@ -3,7 +3,7 @@
 #define TRIGONOMETRY_IMPLEMENTATION
 #define QUAT_IMPLEMENTATION
 #define MATRIX_IMPLEMENTATION
-#include "types/base.h"
+#include "core/base.h"
 #include "math/mathx.h"
 #include "math/trigonometry.h"
 #include "math/linear_algebra.h"

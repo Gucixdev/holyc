@@ -13,7 +13,7 @@
  * estimate of some larger population's variance; a caller wanting
  * Bessel's correction can trivially multiply by n/(n-1) themselves. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 f32 variance_f32(const f32 *data, size_t n, f32 mean);
 f32 stddev_f32(const f32 *data, size_t n, f32 mean);

@@ -2,7 +2,7 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define QOI_DEC_IMPLEMENTATION
 #define QOI_ENC_IMPLEMENTATION
-#include "alloc/arena_alloc.h"
+#include "core/arena_alloc.h"
 #include "codec/qoi_codec.h"
 
 #include <string.h>

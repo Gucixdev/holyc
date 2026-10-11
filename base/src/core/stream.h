@@ -15,10 +15,10 @@
  * wrapper BUILT ON TOP of this - this file itself has no notion of
  * "closed", only of "currently has bytes or doesn't". */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 #define CHUNK_IMPLEMENTATION
-#include "alloc/chunk.h"
+#include "core/chunk.h"
 
 typedef struct Stream_Node Stream_Node;
 struct Stream_Node {

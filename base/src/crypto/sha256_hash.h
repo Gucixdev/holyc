@@ -13,7 +13,7 @@
  * constant-time build would be a real, separate, documented decision,
  * not silently assumed here. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 #define SHA256_DIGEST_SIZE 32
 

@@ -3,8 +3,8 @@
 #define STRING_VIEW_IMPLEMENTATION
 #define SOCKET_IMPLEMENTATION
 #define HTTP_IMPLEMENTATION
-#include "alloc/arena_alloc.h"
-#include "util/str.h"
+#include "core/arena_alloc.h"
+#include "core/str.h"
 #include "net/socket.h"
 #include "net/http.h"
 #include <pthread.h>

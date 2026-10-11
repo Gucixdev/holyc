@@ -2,7 +2,7 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define BASE64_ENCODE_IMPLEMENTATION
 #define BASE64_DECODE_IMPLEMENTATION
-#include "alloc/arena_alloc.h"
+#include "core/arena_alloc.h"
 #include "codec/base64.h"
 #include <string.h>
 

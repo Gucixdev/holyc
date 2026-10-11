@@ -17,7 +17,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "alloc/mem_hook.h"
+#include "core/mem_hook.h"
 
 #ifdef __cplusplus
 extern "C" {

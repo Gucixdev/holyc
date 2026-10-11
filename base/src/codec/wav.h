@@ -20,8 +20,8 @@
  * exact same vocabulary to describe "what a WAV file's audio looks
  * like" rather than duplicating those definitions. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 typedef enum {
     WAV_ESUCCESS      =  0,

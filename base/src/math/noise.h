@@ -11,8 +11,8 @@
  * simplex's, so a caller defining FBM_IMPLEMENTATION must also define
  * SIMPLEX_IMPLEMENTATION (same requirement the split files had). */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 #include "math/rng.h"
 
 /* ---- blue ----

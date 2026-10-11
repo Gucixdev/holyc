@@ -32,8 +32,8 @@
  * still link standalone even if a caller never defines
  * STR_IMPLEMENTATION at all. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 /* ============================================================
  * str (own C-string/memory primitives) - a real, if intentionally

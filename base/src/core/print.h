@@ -6,10 +6,10 @@
  * bit/SIMD, not print too - the same move mathx.h's vec/quat/mat split
  * already made). Same PRINT_IMPLEMENTATION guard name as before the
  * move - every existing `#define PRINT_IMPLEMENTATION` call site keeps
- * working unchanged, consumers just need `#include "util/print.h"` instead
+ * working unchanged, consumers just need `#include "core/print.h"` instead
  * of relying on it being bundled inside base.h. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 /* ============================================================
  * print (print.h) - "own print without printf, just write and itoa": no

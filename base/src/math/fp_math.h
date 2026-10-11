@@ -20,8 +20,8 @@
  * undertaking (a CORDIC implementation or a lookup table with
  * interpolation), not attempted here. */
 
-#include "types/base.h"
-#include "types/contracts.h"
+#include "core/base.h"
+#include "core/contracts.h"
 
 /* integer square root via the classic bit-by-bit ("digit by digit")
  * algorithm, computed at u64 width so the full Q16.16 fixed-point

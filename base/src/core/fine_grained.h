@@ -32,8 +32,8 @@
  * when done with a pool. thread_pool_run/run_range keep the exact same
  * signature, so Task_Graph needed zero changes for this. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 /* pthread.h lives here directly, not a shared platform-thread wrapper -
  * this is concurrency's own domain, already covered by arena/pool/

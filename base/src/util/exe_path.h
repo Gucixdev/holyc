@@ -30,7 +30,7 @@
  * documented, stable FreeBSD sysctl ABI, but flagging the gap honestly
  * rather than claiming tested. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 /* own local memcpy_ - own copy per this project's standing "no cross-
  * IMPLEMENTATION-guard dependency" rule, avoiding a <string.h>

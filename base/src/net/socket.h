@@ -20,8 +20,8 @@
  * "done" is a genuine, common bug class this wrapper exists to close
  * off at the one place instead of at every call site. */
 
-#include "types/base.h"
-#include "types/contracts.h"
+#include "core/base.h"
+#include "core/contracts.h"
 
 /* own local memset_ - own copy per this project's standing "no cross-
  * IMPLEMENTATION-guard dependency" rule, avoiding a <string.h>

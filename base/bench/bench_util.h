@@ -18,7 +18,7 @@
  * to-swap-or-drop pieces (a timer, a percentage calculation + a timing-
  * loop macro), not a framework a bench file has to buy into wholesale. */
 
-#include "types/base.h"
+#include "core/base.h"
 #include <time.h>
 
 static f64 bench_now(void)

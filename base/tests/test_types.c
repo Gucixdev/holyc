@@ -1,6 +1,6 @@
 /* Tests for types.h. Only stdio besides the header itself. */
 #define TYPES_IMPLEMENTATION
-#include "types/types.h"
+#include "core/types.h"
 
 #include <stdio.h>
 #include <string.h>

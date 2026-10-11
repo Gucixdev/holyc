@@ -9,7 +9,7 @@
  * else (RFC 4122 version/variant bit placement, the dashed hex string
  * layout) is the same shape as the original. */
 
-#include "types/base.h"
+#include "core/base.h"
 #include "math/rng.h"
 
 #define UUID4_STR_LEN 37 /* 8-4-4-4-12 hex + 4 dashes + NUL */

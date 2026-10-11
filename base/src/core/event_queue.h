@@ -7,8 +7,8 @@
  * per-type tagged union - add the real per-type shapes when there is an
  * actual second event type that needs one, not before. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 typedef struct {
     u32 type;

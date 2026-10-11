@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define STR_IMPLEMENTATION
-#include "util/str.h"
+#include "core/str.h"
 
 int main(void)
 {

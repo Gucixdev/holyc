@@ -23,8 +23,8 @@
  * documented gaps, not silently missing, same convention png_dec.h and
  * jpeg_dec.h already use for their own scope cuts. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 typedef enum {
     IMG_FORMAT_UNKNOWN = 0,

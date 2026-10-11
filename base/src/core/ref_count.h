@@ -26,7 +26,7 @@
  * to get hit. Same __sync_* builtins fgjob.h already uses for its
  * work-stealing counter. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 typedef void (*Rc_On_Zero_Fn)(void *ctx);
 

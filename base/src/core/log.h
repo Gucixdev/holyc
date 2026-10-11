@@ -11,7 +11,7 @@
  * (upstream's xmacro.h-generated version, without the xmacro.h
  * dependency). Same LOG_IMPLEMENTATION guard name as before the move. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 /* ============================================================
  * log (log.h) - ported from rxi's log.c (MIT). Diverges from upstream

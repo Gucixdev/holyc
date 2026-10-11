@@ -12,7 +12,7 @@
  * bounds-checked and returns 0 (leaving the writer/reader position
  * untouched) on failure rather than overrunning the buffer. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 typedef struct {
     u8 *data;

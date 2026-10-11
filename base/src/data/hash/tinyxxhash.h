@@ -23,7 +23,7 @@
  * internal self-consistency - see tests/test_tinyxxhash.c and
  * docs/progress.md. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 u32 xxhash32(const void *data, size_t len, u32 seed);
 

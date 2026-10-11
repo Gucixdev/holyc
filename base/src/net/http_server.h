@@ -27,9 +27,9 @@
  * Content-Length is treated as a zero-length body, not a hang waiting
  * for a close that may never come. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
-#include "util/str.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
+#include "core/str.h"
 #include "net/socket.h"
 #include "net/http.h"
 

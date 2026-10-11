@@ -1,7 +1,7 @@
 #include "test_common.h"
 #define BASE_TYPE_IMPLEMENTATION
-#include "types/base.h"
-#include "util/flags.c"
+#include "core/base.h"
+#include "core/flags.c"
 #include <stdlib.h>
 
 int main(void)

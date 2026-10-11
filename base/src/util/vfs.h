@@ -26,8 +26,8 @@
  * this project already assumes (codec decoders trust their caller to
  * have handed them a file worth decoding, not an adversarial one). */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 typedef struct Vfs Vfs;
 

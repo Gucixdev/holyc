@@ -13,7 +13,7 @@
  * about this being x86_64 Linux, not hedged for a big-endian target
  * that will never run this code). */
 
-#include "types/base.h"
+#include "core/base.h"
 
 i32 net_ipv4_parse(const char *s, u8 out[4]);    /* "a.b.c.d" -> 4 bytes; returns 0 on malformed input, out untouched */
 void net_ipv4_format(const u8 ip[4], char out[16]); /* 4 bytes -> "a.b.c.d\0", out must hold at least 16 bytes */

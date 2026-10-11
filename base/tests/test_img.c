@@ -4,7 +4,7 @@
 #define PNG_DEC_IMPLEMENTATION
 #define JPEG_DEC_IMPLEMENTATION
 #define IMG_IMPLEMENTATION
-#include "alloc/arena_alloc.h"
+#include "core/arena_alloc.h"
 #include "codec/img.h"
 #include <string.h>
 

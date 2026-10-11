@@ -9,8 +9,8 @@
  * tables (256 bytes each, not derived at runtime - the derivation
  * itself is real but not worth the code size here). */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 #define AES256_BLOCK_SIZE 16
 #define AES256_KEY_SIZE 32

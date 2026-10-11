@@ -6,7 +6,7 @@
  * later only needs its own to/from-base factor, not a new conversion
  * for every existing pair. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 typedef enum { UNITS_MM, UNITS_CM, UNITS_M, UNITS_KM } Units_Length;
 typedef enum { UNITS_MG, UNITS_G, UNITS_KG, UNITS_T } Units_Weight;

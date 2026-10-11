@@ -15,9 +15,9 @@
  * "don't copy what you don't have to" stance, just applied per-field
  * instead of per-file. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
-#include "util/str.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
+#include "core/str.h"
 
 typedef enum {
     CSV_ESUCCESS   = 0,

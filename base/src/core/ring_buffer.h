@@ -26,7 +26,7 @@
  * without the (here, unavailable) finer-grained vocabulary to say which
  * half was meant - same tradeoff fgjob.h itself already makes. */
 
-#include "types/base.h"
+#include "core/base.h"
 
 /* own local memcpy_ - own copy per this project's standing "no cross-
  * IMPLEMENTATION-guard dependency" rule, avoiding a <string.h>

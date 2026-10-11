@@ -6,8 +6,8 @@
  * this just slices it into equal chunks it can hand out and take back in
  * O(1), no fragmentation because every chunk is the same size. */
 
-#include "types/base.h"
-#include "types/contracts.h"
+#include "core/base.h"
+#include "core/contracts.h"
 
 #ifndef POOL_ASSERT
 #define POOL_ASSERT HOLYC_ASSERT

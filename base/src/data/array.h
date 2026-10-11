@@ -29,8 +29,8 @@
  * vary at runtime, or when avoiding a one-off struct declaration
  * genuinely matters more than the type safety it would have given up. */
 
-#include "types/base.h"
-#include "alloc/arena_alloc.h"
+#include "core/base.h"
+#include "core/arena_alloc.h"
 
 typedef struct {
     void *items;

@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define SSE_MATH_IMPLEMENTATION
-#include "types/base.h"
+#include "core/base.h"
 
 int main(void)
 {

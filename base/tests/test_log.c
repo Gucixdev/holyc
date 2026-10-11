@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define LOG_IMPLEMENTATION
-#include "util/log.h"
+#include "core/log.h"
 #include <unistd.h>
 #include <string.h>
 
