@@ -22,8 +22,8 @@ arena_free(&a);
 ## Layout
 
 ```
-src/core/     base.h (types, str, print, constants), arena_alloc, pool, queues, jobs, coroutines,
-              job pool and queues, coroutines, fsm, io, print, log, args, flags, str, utf8
+src/core/     base.h (types, str, print, constants), arena_alloc, pool, job pool, queues,
+              coroutines, fsm, io, log, args, flags, utf8
 src/data/     array, list, tree, slot_map, hex; data/hash/ has the hash tables and functions
 src/math/     linear algebra, trig, curves, noise, rng, statistics
 src/codec/    deflate, png, jpeg, qoi, wav, mp3, json, csv, tar, base64, serialize
