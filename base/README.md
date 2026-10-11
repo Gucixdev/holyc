@@ -36,7 +36,7 @@ THIRD_PARTY/  licence texts of the code some headers are ported from, see THIRD_
 `make test` (or `sh tests/run [filter]`) builds and runs every test on its own, in parallel.
 `make bench` runs `bench/`: the arena against glibc malloc, the pool against malloc/free, the job
 pool against spawning a thread per job, the hash table and Morton encoding against naive versions.
-Compile with `-Isrc` and include as `"core/arena_slab.h"`, `"types/types.h"`, ...
+Compile with `-Isrc` and include as `"core/arena_slab.h"`, `"core/types.h"`, ...
 
 ## What is in it
 
