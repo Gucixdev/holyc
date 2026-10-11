@@ -1,0 +1,176 @@
+#!/bin/sh
+# fzf (C) tests. No dependencies beyond sh and the built ./fzf.
+#
+#   make test            builds, then runs this
+#   REAL_FZF=/path sh tests/run     use another real fzf as the oracle
+#
+# 1. golden cases: expected output was produced by fzf 0.74.4 (Go) once and is
+#    stored here, so they run anywhere
+# 2. behaviour: exit codes, -1/-0, --print0/--read0, --ansi, --version, errors
+# 3. differential: the same query x option matrix against the real fzf, if one
+#    is installed ($REAL_FZF or /usr/bin/fzf), compared line by line
+
+cd "$(dirname "$0")/.." || exit 1
+BIN=./fzf
+[ -x "$BIN" ] || { echo "tests: build first (make)" >&2; exit 2; }
+REAL=${REAL_FZF:-/usr/bin/fzf}
+
+T=$(mktemp -d) || exit 1
+trap 'rm -rf "$T"' EXIT INT TERM
+DATA=$T/data
+printf '%s\n' src/main.c src/util.c src/Util.h src/algo/score.c docs/README.md README.md "my file.txt" Makefile \
+	build/main.o café.txt "ünï/cödé.c" 'a b c' 'a,b,c' 'x:1:foo' 'x:2:bar' 'y:3:foo' > "$DATA"
+
+pass=0 fail=0
+ok()   { pass=$((pass + 1)); }
+bad()  { fail=$((fail + 1)); printf 'FAIL  %s\n' "$1"; [ -n "$2" ] && printf '      %s\n' "$2"; }
+
+# golden NAME EXPECTED(lines joined by |) QUERY [OPTIONS...]
+golden() {
+	name=$1 exp=$2 q=$3
+	shift 3
+	got=$("$BIN" -f "$q" "$@" < "$DATA" 2>&1 | tr '\n' '|')
+	if [ "$got" = "$exp" ]; then ok; else bad "golden: $name" "expected [$exp] got [$got]"; fi
+}
+
+# expect_rc NAME WANTED_RC COMMAND...   (stdin from the dataset)
+expect_rc() {
+	name=$1 want=$2
+	shift 2
+	"$@" < "$DATA" > /dev/null 2>&1
+	rc=$?
+	if [ "$rc" -eq "$want" ]; then ok; else bad "exit code: $name" "wanted $want got $rc"; fi
+}
+
+# expect_out NAME EXPECTED COMMAND...   (stdin from the dataset, stdout compared)
+expect_out() {
+	name=$1 exp=$2
+	shift 2
+	got=$("$@" < "$DATA" 2>/dev/null)
+	if [ "$got" = "$exp" ]; then ok; else bad "output: $name" "expected [$exp] got [$got]"; fi
+}
+
+echo "== golden cases (from fzf 0.74.4)"
+golden_cases() {
+	golden 'fuzzy' 'src/main.c|build/main.o|' "main" 
+	golden 'fuzzy two letters' 'src/main.c|build/main.o|' "mn" 
+	golden 'exact' 'src/main.c|build/main.o|' "'main" 
+	golden 'exact word boundary' 'src/util.c|src/Util.h|' "'util" 
+	golden 'prefix' 'src/main.c|src/util.c|src/Util.h|src/algo/score.c|' "^src" 
+	golden 'suffix' 'src/main.c|src/util.c|ünï/cödé.c|src/algo/score.c|' ".c$" 
+	golden 'negation' 'docs/README.md|README.md|my file.txt|Makefile|build/main.o|café.txt|ünï/cödé.c|a b c|a,b,c|x:1:foo|x:2:bar|y:3:foo|' "!src" 
+	golden 'or' 'src/main.c|src/util.c|src/Util.h|build/main.o|' "util | main" 
+	golden 'and with negation' 'src/main.c|src/algo/score.c|' "src !util" 
+	golden 'prefix and suffix' 'src/main.c|src/util.c|src/algo/score.c|' "^s c$" 
+	golden 'smart case lower' 'src/util.c|src/Util.h|' "util" 
+	golden 'smart case upper' 'src/Util.h|' "Util" 
+	golden 'case insensitive forced' 'src/util.c|src/Util.h|' "UTIL" -i
+	golden 'case sensitive forced' 'src/util.c|' "util" +i
+	golden 'exact mode' 'src/main.c|build/main.o|' "main" -e
+	golden 'tac' 'a b c|café.txt|a,b,c|ünï/cödé.c|src/util.c|src/main.c|src/algo/score.c|src/Util.h|docs/README.md|' "c" --tac
+	golden 'no sort' 'src/main.c|src/util.c|src/Util.h|src/algo/score.c|docs/README.md|café.txt|ünï/cödé.c|a b c|a,b,c|' "c" --no-sort
+	golden 'tiebreak length' 'a b c|café.txt|a,b,c|ünï/cödé.c|src/main.c|src/util.c|src/algo/score.c|src/Util.h|docs/README.md|' "c" --tiebreak=length
+	golden 'tiebreak end' 'a b c|café.txt|a,b,c|ünï/cödé.c|src/algo/score.c|src/main.c|src/util.c|src/Util.h|docs/README.md|' "c" --tiebreak=end
+	golden 'tiebreak begin' 'café.txt|a b c|ünï/cödé.c|a,b,c|src/main.c|src/util.c|src/algo/score.c|src/Util.h|docs/README.md|' "c" --tiebreak=begin
+	golden 'tiebreak index' 'café.txt|a b c|ünï/cödé.c|a,b,c|src/main.c|src/util.c|src/algo/score.c|src/Util.h|docs/README.md|' "c" --tiebreak=index
+	golden 'nth 1 with delimiter' 'x:1:foo|y:3:foo|' "foo" -d: --nth=3
+	golden 'nth 2..' 'x:2:bar|' "bar" -d: --nth=2..
+	golden 'with-nth' 'x:2:bar|' "2" -d: --with-nth=2,3
+	golden 'unicode normalization' 'café.txt|' "cafe" 
+	golden 'unicode query' 'ünï/cödé.c|' "ünï" 
+	golden 'space escaped' 'a b c|' "a\ b" 
+	golden 'empty query matches everything' 'src/main.c|src/util.c|src/Util.h|src/algo/score.c|docs/README.md|README.md|my file.txt|Makefile|build/main.o|café.txt|ünï/cödé.c|a b c|a,b,c|x:1:foo|x:2:bar|y:3:foo|' "" 
+	golden 'no match' '' "zzzzqqq" 
+	golden 'literal' 'src/main.c|src/util.c|ünï/cödé.c|src/algo/score.c|' ".c" --literal
+	golden 'algo v1' 'src/main.c|build/main.o|' "mn" --algo=v1
+}
+golden_cases
+
+echo "== exit codes"
+expect_rc "match is 0"            0 "$BIN" -f main
+expect_rc "no match is 1"         1 "$BIN" -f zzzzqqq
+expect_rc "unknown option is 2"   2 "$BIN" --no-such-option -f x
+expect_rc "--version is 0"        0 "$BIN" --version
+
+echo "== behaviour"
+case $("$BIN" --version) in 0.*) ok ;; *) bad "--version starts with a version number" "$("$BIN" --version)" ;; esac
+expect_out "-1 selects the only match without a tty"  "src/main.c" "$BIN" -f 'src/main'
+expect_out "--print0 ends items with NUL" "src/main.c" sh -c "'$BIN' -f src/main --print0 | tr '\\0' '\\n' | head -1"
+printf 'one\0two\0three\0' > "$T/nul"
+got=$("$BIN" -f t --read0 --print0 < "$T/nul" | tr '\0' '|')
+[ "$got" = "two|three|" ] && ok || bad "--read0/--print0 round trip" "got [$got]"
+printf 'plain\n\033[31mred\033[0m\n' > "$T/ansi"
+got=$("$BIN" -f red --ansi < "$T/ansi" | cat -v)
+[ "$got" = "red" ] && ok || bad "--ansi strips escape codes from the output" "got [$got]"
+got=$("$BIN" -f red < "$T/ansi" | cat -v)
+[ "$got" = "^[[31mred^[[0m" ] && ok || bad "without --ansi the line is kept verbatim" "got [$got]"
+got=$("$BIN" -f '^re' --ansi < "$T/ansi" 2>/dev/null | wc -l | tr -d ' ')
+[ "$got" = 1 ] && ok || bad "--ansi anchors ignore escape codes" "got [$got]"
+got=$(printf '' | "$BIN" -f x 2>&1; echo "rc=$?")
+[ "$got" = "rc=1" ] && ok || bad "empty input is a clean no-match" "got [$got]"
+long=$(awk 'BEGIN { for (i = 0; i < 20000; i++) printf "x"; print "needle" }')
+got=$(printf '%s\n' "$long" | "$BIN" -f needle | wc -c | tr -d ' ')
+[ "$got" -gt 20000 ] && ok || bad "very long line is matched" "got [$got]"
+got=$(awk 'BEGIN { for (i = 0; i < 50000; i++) print "line" i }' | "$BIN" -f 'line4999$' | tr '\n' '|')
+[ "$got" = "line4999|" ] && ok || bad "50k lines, anchored query" "got [$got]"
+
+echo "== differential against the real fzf"
+if [ -x "$REAL" ] && "$REAL" --version > /dev/null 2>&1; then
+	# generated data on top of the fixed one: paths, numbers, mixed case, unicode
+	awk 'BEGIN {
+		split("src lib test docs build include tools", d, " ")
+		split("main util parse Parse config Config index Readme score algo", f, " ")
+		split("c h md txt go rs py", e, " ")
+		srand(7)
+		for (i = 0; i < 250; i++)
+			printf "%s/%s%d.%s\n", d[1 + int(rand() * 7)], f[1 + int(rand() * 10)], int(rand() * 100), e[1 + int(rand() * 7)]
+	}' >> "$DATA"
+	QUERIES=$T/queries
+	cat > "$QUERIES" <<'Q'
+main
+mn
+'main
+^src
+.c$
+!util
+util | main
+src !util
+^s c$
+UTIL
+Parse
+cfg
+sc 1
+'lib/
+^lib/ .h$
+!^src
+foo:1
+Readme txt
+a b
+\ 
+cafe
+ü
+x
+Q
+	for opts in "" "-e" "-i" "+i" "--tac" "--no-sort" "--tiebreak=end" "--tiebreak=begin" \
+		"--tiebreak=length" "--tiebreak=index" "-d/ --nth=2" "-d/ --nth=1" "-d: --nth=2.." "--literal" "--algo=v1" "-x"; do
+		n=0 d=0
+		while IFS= read -r q; do
+			n=$((n + 1))
+			# shellcheck disable=SC2086  # options are a space separated list on purpose
+			exp=$("$REAL" -f "$q" $opts < "$DATA" 2>&1)
+			# shellcheck disable=SC2086
+			got=$("$BIN" -f "$q" $opts < "$DATA" 2>&1)
+			if [ "$exp" = "$got" ]; then ok
+			else
+				d=$((d + 1))
+				bad "differential [$q] opts [$opts]" "first difference: $(printf '%s\n%s\n' "$exp" "$got" | sort | uniq -u | head -1)"
+			fi
+		done < "$QUERIES"
+	done
+else
+	echo "   skipped: no real fzf at $REAL (set REAL_FZF)"
+fi
+
+echo
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

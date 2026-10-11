@@ -1,0 +1,15 @@
+.TH COLORADO 1 "2026-08-16" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+colorado \- generic stdin colorizer
+.SH SYNOPSIS
+\fIcmd\fR | \fBcolorado\fR
+.SH DESCRIPTION
+.B colorado
+colorizes stdin: log\-level words, quoted strings, IPv4 addresses,
+and numbers get ANSI colors (the same idea as
+.BR grc (1)
+or ccze, not a config\-file\-driven rule engine \- a fixed set of
+common patterns). Everything else passes through unchanged, so
+piping any command's output through
+.B colorado
+is always safe even on output it does not recognize.

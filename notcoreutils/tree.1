@@ -1,0 +1,209 @@
+.TH TREE 1 "2026-09-21" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+tree \- list directory contents as a tree
+.SH SYNOPSIS
+.B tree -a
+.br
+.B tree -d
+.br
+.B tree -l
+.br
+.B tree -f
+.br
+.B tree -x
+.br
+.B tree -L level
+.br
+.B tree -P pattern
+.br
+.B tree -I pattern
+.br
+.B tree --prune
+.br
+.B tree --matchdirs
+.br
+.B tree --ignore-case
+.br
+.B tree --filelimit n
+.br
+.B tree -p
+.br
+.B tree -u
+.br
+.B tree -g
+.br
+.B tree -s
+.br
+.B tree -h
+.br
+.B tree --si
+.br
+.B tree -D
+.br
+.B tree -F
+.br
+.B tree -i
+.br
+.B tree -q
+.br
+.B tree -N
+.br
+.B tree -Q
+.br
+.B tree -C
+.br
+.B tree -n
+.br
+.B tree -r
+.br
+.B tree -t
+.br
+.B tree -c
+.br
+.B tree -U
+.br
+.B tree -v
+.br
+.B tree --sort=key
+.br
+.B tree --dirsfirst
+.br
+.B tree --filesfirst
+.br
+.B tree --noreport
+.br
+.B tree -J
+.br
+.B tree -X
+.br
+.B tree -o file
+.br
+.B tree --charset set
+.br
+.B tree --timefmt fmt
+.SH DESCRIPTION
+.B tree
+tree lists a directory recursively with line drawing, like tree(1). Output matches tree v2.3.2 byte for byte for the options above; -H, -S, -A, --fromfile, --gitignore, --du, --inodes and --device are not implemented and are rejected with a message.
+.SH OPTIONS
+.TP
+.B -a
+list hidden files
+.TP
+.B -d
+directories only
+.TP
+.B -l
+follow symlinks
+.TP
+.B -f
+print the full path of each file
+.TP
+.B -x
+stay on this filesystem
+.TP
+.B -L level
+descend only level directories deep
+.TP
+.B -P pattern
+list only files matching pattern
+.TP
+.B -I pattern
+leave out files matching pattern
+.TP
+.B --prune
+drop empty directories
+.TP
+.B --matchdirs
+apply -P to directories too
+.TP
+.B --ignore-case
+case-insensitive patterns
+.TP
+.B --filelimit n
+do not open directories with more than n entries
+.TP
+.B -p
+show permissions
+.TP
+.B -u
+show owner
+.TP
+.B -g
+show group
+.TP
+.B -s
+show size in bytes
+.TP
+.B -h
+show size, human readable
+.TP
+.B --si
+like -h with powers of 1000
+.TP
+.B -D
+show modification date
+.TP
+.B -F
+append / * @ = | to names
+.TP
+.B -i
+no indentation lines
+.TP
+.B -q
+print non-printable characters as ?
+.TP
+.B -N
+print names raw
+.TP
+.B -Q
+quote names
+.TP
+.B -C
+colorize using LS_COLORS
+.TP
+.B -n
+no color
+.TP
+.B -r
+reverse the sort
+.TP
+.B -t
+sort by modification time
+.TP
+.B -c
+sort by status change time
+.TP
+.B -U
+do not sort
+.TP
+.B -v
+version sort
+.TP
+.B --sort=key
+name, version, size, mtime, ctime or none
+.TP
+.B --dirsfirst
+directories before files
+.TP
+.B --filesfirst
+files before directories
+.TP
+.B --noreport
+omit the count line
+.TP
+.B -J
+JSON output
+.TP
+.B -X
+XML output
+.TP
+.B -o file
+write to file
+.TP
+.B --charset set
+ascii or utf-8 line drawing
+.TP
+.B --timefmt fmt
+strftime format for -D
+.SH SEE ALSO
+ls(1), find(1), du(1)

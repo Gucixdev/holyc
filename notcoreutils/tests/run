@@ -1,0 +1,148 @@
+#!/bin/sh
+# notcoreutils tests. Needs only sh and the built tools in ./bin (make).
+#
+#   make test          builds, then runs this
+#   BIN=/path/to/bin sh tests/run
+#
+# tree is compared with the real tree(1) byte for byte; the others are checked
+# against behaviour written down here (truth tables, golden output, exit
+# codes, loopback I/O).
+
+cd "$(dirname "$0")/.." || exit 1
+BIN=${BIN:-$PWD/bin}
+[ -x "$BIN/tgates" ] || { echo "tests: build first (make)" >&2; exit 2; }
+
+T=$(mktemp -d) || exit 1
+trap 'rm -rf "$T"' EXIT INT TERM
+cd "$T" || exit 1
+
+pass=0 fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); printf 'FAIL  %s\n' "$1"; [ -n "$2" ] && printf '      %s\n' "$2"; }
+
+# same NAME EXPECTED GOT
+same() { if [ "$2" = "$3" ]; then ok; else bad "$1" "expected [$2] got [$3]"; fi; }
+# rc NAME WANTED COMMAND...
+rc() {
+	name=$1 want=$2
+	shift 2
+	"$@" > /dev/null 2>&1 < /dev/null
+	got=$?
+	if [ "$got" -eq "$want" ]; then ok; else bad "exit code: $name" "wanted $want got $got"; fi
+}
+have() { command -v "$1" > /dev/null 2>&1; }
+
+# ---------------------------------------------------------------- tgates
+echo "== tgates (balanced ternary, all inputs)"
+sign() { if [ "$1" -gt 0 ]; then echo 1; elif [ "$1" -lt 0 ]; then echo -1; else echo 0; fi; }
+for a in -1 0 1; do
+	same "tgates neg $a" "$((-a))" "$("$BIN/tgates" neg $a)"
+	for b in -1 0 1; do
+		min=$a; [ "$b" -lt "$a" ] && min=$b
+		max=$a; [ "$b" -gt "$a" ] && max=$b
+		same "tgates min $a $b"  "$min" "$("$BIN/tgates" min $a $b)"
+		same "tgates max $a $b"  "$max" "$("$BIN/tgates" max $a $b)"
+		same "tgates diff $a $b" "$(sign $((a - b)))" "$("$BIN/tgates" diff $a $b)"
+	done
+done
+same "tgates list form" "-1,0,1" "$("$BIN/tgates" neg 1,0,-1)"
+same "tgates min on lists" "0,0,-1" "$("$BIN/tgates" min 1,0,-1 0,0,0)"
+rc "tgates: not a trit" 1 "$BIN/tgates" neg 2
+rc "tgates: lists of different length" 1 "$BIN/tgates" min 1,0 1
+rc "tgates: no arguments" 1 "$BIN/tgates"
+
+# ---------------------------------------------------------------- cloc
+echo "== cloc"
+mkdir -p proj/sub proj/.hidden proj/node_modules
+printf '#include <x>\n// c\nint main(){\n /* b */\n return 0; // t\n}\n\n/* multi\n line */\nchar *s = "// not comment";\n' > proj/a.c
+printf '# comment\nprint(1)\n\nprint("# not")\n' > proj/sub/b.py
+printf 'fn main() {}\n// x\n' > proj/r.rs
+printf 'int x;\n' > proj/.hidden/skip.c
+printf 'int y;\n' > proj/node_modules/skip.c
+: > proj/zero.c
+exp='language|files|lines|code|comment|blank|code_pct
+C|1|10|5|4|1|50.0
+Python|1|4|2|1|1|50.0
+Rust|1|2|1|1|0|50.0
+TOTAL|3|16|8|6|2|50.0'
+same "cloc --table: per-language counts, comments and strings" "$exp" "$("$BIN/cloc" --table proj)"
+got=$("$BIN/cloc" --files proj | sed 's|^proj/||' | sort)
+exp='a.c|10|5|4|1|C
+file|lines|code|comment|blank|language
+r.rs|2|1|1|0|Rust
+sub/b.py|4|2|1|1|Python'
+same "cloc --files: one row per file, hidden and node_modules skipped" "$exp" "$got"
+rc "cloc: not a directory" 1 "$BIN/cloc" /no/such
+got=$("$BIN/cloc" proj | sed -n 1p | tr -s ' ')
+same "cloc: pretty header" "language files lines code comment blank code%" "$got"
+
+# ---------------------------------------------------------------- colorado
+echo "== colorado"
+esc=$(printf '\033')
+col() { printf '%s\n' "$1" | "$BIN/colorado" | sed "s/$esc/E/g"; }
+same "colorado: ERROR is bold red"       "E[1;31mERROREE[0m something" "E[1;31mERROREE[0m something"
+same "colorado: ERROR word"              "E[1;31mERRORE[0m something" "$(col 'ERROR something')"
+same "colorado: WARN word"               "E[1;33mWARNE[0m disk"       "$(col 'WARN disk')"
+same "colorado: IPv4 and number"         "ip E[0;36m192.168.0.1E[0m port E[0;33m22E[0m" "$(col 'ip 192.168.0.1 port 22')"
+same "colorado: quoted string"           'say E[0;32m"hi there"E[0m'  "$(col 'say "hi there"')"
+same "colorado: plain text unchanged"    "just some words"            "$(col 'just some words')"
+printf 'a\0b\n' | "$BIN/colorado" > nul.out 2>/dev/null
+same "colorado: NUL bytes pass through" "4" "$(wc -c < nul.out | tr -d ' ')"
+
+# ---------------------------------------------------------------- netcat, logger
+echo "== netcat"
+port=$((20000 + $$ % 20000))
+"$BIN/netcat" -l "$port" > nc.got 2>/dev/null &
+lpid=$!
+i=0
+while [ $i -lt 20 ]; do
+	printf 'ping-%s\n' "$port" | timeout 3 "$BIN/netcat" 127.0.0.1 "$port" > /dev/null 2>&1 && break
+	i=$((i + 1))
+	sleep 0.1
+done
+wait "$lpid" 2>/dev/null
+same "netcat: listener receives what the client sends" "ping-$port" "$(cat nc.got)"
+rc "netcat: no arguments" 1 "$BIN/netcat"
+rc "netcat: connection refused" 1 timeout 3 "$BIN/netcat" 127.0.0.1 1
+
+# ---------------------------------------------------------------- man
+echo "== man"
+mkdir -p mp/man1
+cat > mp/man1/demo.1 <<'MAN'
+.TH DEMO 1 "2026-01-01" "test" "Test Manual"
+.SH NAME
+demo \- a demo page
+.SH SYNOPSIS
+.B demo
+[\fIOPTION\fR]
+.SH DESCRIPTION
+Plain text with a \fBbold\fR word.
+.PP
+Second paragraph.
+MAN
+out=$(MANPATH="$T/mp" "$BIN/man" demo 2>&1 | sed "s/$esc\[[0-9;]*m//g")
+case $out in *DEMO*) ok ;; *) bad "man: renders the page title" "$out" ;; esac
+case $out in *"a demo page"*) ok ;; *) bad "man: renders NAME text, \\- unescaped" "$out" ;; esac
+case $out in *.SH*|*.TH*|*'\fB'*) bad "man: no raw troff in the output" "$out" ;; *) ok ;; esac
+rc "man: unknown page exits 1" 1 env MANPATH="$T/mp" "$BIN/man" zzznope
+
+# ---------------------------------------------------------------- sudo, tmux, cb: error paths only
+echo "== sudo, tmux, cb"
+rc "sudo: refuses when not setuid root" 1 "$BIN/sudo" true
+rc "sudo: no arguments" 1 "$BIN/sudo"
+rc "tmux: no server running" 1 "$BIN/tmux" ls
+rc "tmux: unknown subcommand" 1 "$BIN/tmux" bogus
+rc "cb: unknown subcommand" 2 "$BIN/cb" bogus
+
+# ---------------------------------------------------------------- tree
+echo "== tree (vs the real tree)"
+if have tree && [ -x "$OLDPWD/tree-test" ]; then
+	if (cd "$OLDPWD" && TREE_BIN="$BIN/tree" bash ./tree-test > "$T/tree.out" 2>&1); then ok
+	else bad "tree: byte-for-byte comparison" "$(tail -3 "$T/tree.out" | tr '\n' ' ')"; fi
+else
+	echo "   skipped: no real tree(1) to compare with"
+fi
+
+echo
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

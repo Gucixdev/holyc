@@ -1,0 +1,38 @@
+.TH TGATES 1 "2026-08-16" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+tgates \- real ternary logic gates (min/max/neg/diff)
+.SH SYNOPSIS
+.B tgates neg
+\fITRIT\fR[,\fITRIT\fR...]
+.br
+.B tgates min\fR|\fBmax\fR|\fBdiff
+\fITRIT\fR[,\fITRIT\fR...] \fITRIT\fR[,\fITRIT\fR...]
+.SH DESCRIPTION
+.B tgates
+computes the standard Kleene/Lukasiewicz three\-valued\-logic gates
+over balanced ternary values (each \fITRIT\fR is \-1, 0, or 1). It is
+the CLI half of this project's own
+.B tenary_gates.h
+(src/singlefile/tenary/) \- same relationship
+.BR units (1)
+has to its own conversion tables.
+.PP
+A single \fITRIT\fR or a comma\-separated list (the array/bulk form)
+both work; \fBmin\fR/\fBmax\fR/\fBdiff\fR require both operand lists to
+be the same length.
+.SH COMMANDS
+.TP
+.B neg \fITRIT\fR
+Ternary NOT: negation (\-\fITRIT\fR).
+.TP
+.B min \fITRIT\fR \fITRIT\fR
+Ternary AND: the lesser of the two values.
+.TP
+.B max \fITRIT\fR \fITRIT\fR
+Ternary OR: the greater of the two values.
+.TP
+.B diff \fITRIT\fR \fITRIT\fR
+Three\-way compare: \-1 if the first is less, 0 if equal, 1 if greater
+(the sign of their difference, saturated back into a single trit).
+.SH SEE ALSO
+.BR units (1)

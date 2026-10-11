@@ -1,0 +1,17 @@
+.TH NETCAT 1 "2026-08-16" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+netcat \- minimal TCP pipe
+.SH SYNOPSIS
+.B netcat
+\fIHOST\fR \fIPORT\fR
+.br
+.B netcat \-l
+\fIPORT\fR
+.SH DESCRIPTION
+.B "netcat HOST PORT"
+connects to HOST:PORT and shuttles stdin/stdout over the socket.
+.B "netcat \-l PORT"
+listens on PORT for one connection and does the same.
+.SH LIMITATIONS
+MVP scope: TCP/IPv4 only, one connection, no UDP mode \- a real scope
+cut vs full \fBnc\fR(1).

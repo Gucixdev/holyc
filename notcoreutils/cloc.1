@@ -1,0 +1,15 @@
+.TH CLOC 1 "2026-08-16" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+cloc \- count lines of code for this project
+.SH SYNOPSIS
+.B cloc
+[\fIROOT\fR]
+.SH DESCRIPTION
+.B cloc
+is a standalone cloc\-style line counter for this project. It walks
+src/, project/, tests/, benchmark/, and proof_cbmc/ under ROOT
+(defaulting to the directory this binary is invoked from \- walking
+upward is not attempted, pass the project root explicitly if not the
+current directory), classifies each file into a category by path
+prefix (code/demo/tests/bench/project/proof), and prints one row per
+category plus a total, distinguishing comment lines from code lines.

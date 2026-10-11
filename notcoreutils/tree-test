@@ -1,0 +1,19 @@
+#!/bin/bash
+# tree-test - compare ./tree (built from tree.c) with the real tree(1), byte for byte.
+# Needs a real tree in PATH. Builds the fixture itself; run from this directory.
+set -u
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+if [ -n "${TREE_BIN:-}" ]; then TREEC=$TREE_BIN; else TREEC=$T/tree-c; cc -O2 -Wall -Wextra -o "$TREEC" tree.c || exit 1; fi
+mkdir -p "$T"/{d1/sub,d2,.hid,hs,"we ird"}; touch "$T"/{a.txt,B.md,d1/x,d1/sub/y,.hid/z,run.sh,"we ird/na me","we ird/é ü"}
+chmod +x "$T/run.sh"; echo hello >"$T/a.txt"; head -c 5000 /dev/zero >"$T/d1/big"
+ln -s a.txt "$T/lnk"; ln -s d1 "$T/dlnk"; mkfifo "$T/fifo"
+for n in 1023 1024 10240 1048576; do head -c $n /dev/zero >"$T/hs/f$n"; done
+touch -d '2019-03-04 05:06' "$T/old.txt"
+cd "$T"; set -f; export LS_COLORS="di=01;34:ln=01;36:ex=01;32:*.md=00;33"; pass=0; fail=0
+for loc in C en_US.UTF-8; do
+  for f in "" -a -d "-L 1" "-L 2" -f -F -i -s -h --si -p -u -g -pug -D -pugsD -r -t -U -v --dirsfirst --filesfirst --noreport --prune -l -x -q -N -Q -X -C -n "-a -L 1 -f" "-I *.md" "-P *.txt" "-P *.txt --prune" "--filelimit 2" "-dL 2" "-aFp" "--sort=size" "--ignore-case -P A*"; do
+    a=$(LC_ALL=$loc tree $f . 2>&1); b=$(LC_ALL=$loc "$TREEC" $f . 2>&1)
+    if [ "$a" == "$b" ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "DIFF [$loc] tree $f"; fi
+  done
+done
+echo "pass=$pass fail=$fail"; [ $fail -eq 0 ]

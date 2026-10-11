@@ -1,0 +1,42 @@
+.TH MAN 1 "2026-08-16" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+man \- a minimal manual-page viewer
+.SH SYNOPSIS
+.B man
+[\fISECTION\fR] \fINAME\fR
+.SH DESCRIPTION
+.B man
+finds NAME's page under the usual manN/ tree (honoring
+.IR $MANPATH ,
+falling back to the standard FHS locations), gunzips it if needed
+(this project's own deflate.h, manually skipping the gzip wrapper),
+and renders the common troff/man(7) macros as plain readable text.
+.PP
+Deliberately not a groff reimplementation \- no macro expansion
+language, no tables (.TS/.TE), no real fill/adjust (line wrapping),
+no font metrics. Handles what the overwhelming majority of real man
+pages actually use:
+.BR .TH / .SH / .SS
+headers,
+.BR .PP / .P / .LP / .TP
+paragraph breaks,
+.BR .B / .I / .BR / .IR / .RB / .RI
+alternating bold/italic (rendered as ANSI bold/underline), the
+backslash\-f family of inline font escapes,
+.BR .nf / .fi
+literal blocks,
+.BR .RS / .RE
+indent, and the common backslash\-dash and named\-character escapes
+used in running text. Unknown macros are skipped rather than printed
+raw \- honest omission beats dumping troff source.
+.PP
+Pages written for this project's own tools use the classic man(7)
+macro set documented above, not mdoc (.Dd/.Dt/.Nm/.Op/.Fl/.Ar/.Bl/
+.It/.El) \- mdoc is a separate macro package this renderer does not
+speak, so an mdoc\-formatted page (as sbase/ubase's own upstream
+pages use) will render incompletely here.
+.SH ENVIRONMENT
+.TP
+.B MANPATH
+Colon\-separated list of manN/ tree roots to search, tried before
+the standard FHS locations.

@@ -1,0 +1,147 @@
+.TH TMUX 1 "2026-09-07" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+tmux \- a real terminal multiplexer with sessions, windows and real-pty panes
+.SH SYNOPSIS
+.B tmux
+.br
+.B tmux new-session
+[\fB\-s\fR \fINAME\fR]
+.br
+.B tmux attach
+[\fB\-t\fR \fINAME\fR]
+.br
+.B tmux list-sessions
+.br
+.B tmux kill-server
+.SH DESCRIPTION
+.B tmux
+is a real client/server terminal multiplexer: sessions contain
+windows, windows contain panes, and every pane is a real pty running
+a real shell (or whatever
+.B $SHELL
+points to). The
+.I server
+(the first invocation, if none is already running - forked and
+daemonized automatically) owns every pane and keeps every process
+alive across detach/attach; every invocation after that is a thin
+.I client
+that connects over a Unix socket
+(\fI/tmp/nctmux-<uid>/default\fR \- deliberately a different path
+than real tmux's own socket, so the two can never collide), puts the
+local terminal into raw mode, and both renders what the server sends
+and forwards local keystrokes back.
+.PP
+Bare
+.B tmux
+(no subcommand) attaches to any already-running session, starting
+both the server and a
+.B main
+session first if neither exists yet.
+.SH COMMANDS
+.TP
+.BI "new-session " "[-s NAME]"
+Create a new session (named
+.I NAME
+if given, otherwise
+.BR main )
+and attach to it.
+.TP
+.BI "attach " "[-t NAME]"
+Attach to session
+.IR NAME ,
+or to any already-running session if
+.I NAME
+is omitted.
+.TP
+.B list-sessions
+Print every session's name and window count, without attaching to
+anything.
+.TP
+.B kill-server
+Stop the server and every pane it owns.
+.SH KEY BINDINGS
+The prefix key (default
+.BR C-b ,
+rebindable \- see CONFIG) must be pressed before every binding below.
+.TP
+.B c
+Create a new window.
+.TP
+.B n\fR / \fBp
+Switch to the next / previous window.
+.TP
+.B 0\fR\-\fB9
+Switch directly to window N.
+.TP
+.B %
+Split the active pane vertically (side by side).
+.TP
+.B "\(dq"
+Split the active pane horizontally (stacked).
+.TP
+Arrow keys
+Move to the pane in that direction.
+.TP
+.B x
+Kill the active pane (asks
+.B y
+/
+.B n
+to confirm).
+.TP
+.B d
+Detach \- the server and every pane keep running.
+.TP
+.B :
+Open a command prompt. Accepts
+.BR new-window ,
+.BR "rename-window NAME" ,
+.BR split-window\ [-h|-v] ,
+.BR kill-pane ,
+.BR kill-window ,
+and
+.BR kill-server .
+This is real
+.BR tmux 's
+own idea of "scripting": an external shell script drives a running
+server through this exact same command vocabulary (piped in as raw
+keystrokes, prefix
+.B :
+included), not a separate embedded language.
+.SH CONFIG
+Read once, at server startup, from
+.I $HOME/.tmux.conf
+(or
+.I $XDG_CONFIG_HOME/tmux/tmux.conf
+/
+.I $HOME/.config/tmux/tmux.conf
+if that does not exist). One directive per line; blank lines and
+.B #
+comments are ignored. Supported:
+.TP
+.BI "set -g prefix C-" X
+Rebind the prefix key to Ctrl-\fIX\fR.
+.TP
+.BI "set -g status-bg " N
+.TQ
+.BI "set -g status-fg " N
+Status bar background/foreground, as an ANSI colour index (0\-255).
+.PP
+Every other real tmux.conf directive (including
+.BR bind-key )
+is recognised as "a config line" \- not a parse error \- but has no
+effect yet. A real, stated scope cut, not silently mis-parsed.
+.SH LIMITATIONS
+No copy-mode (scrollback search/selection), no true multi-client
+mirroring of one session (each attached client gets its own
+independently-sized render of the same underlying panes, not a
+shared view), no cross-session window linking, no hooks. The VT100/
+ECMA-48 emulator backing every pane's screen is a real, but real
+.I subset
+\- cursor movement, erase, and SGR colour/attributes are handled;
+anything else in a CSI sequence is consumed and silently ignored
+rather than corrupting the display. One grid cell holds exactly one
+byte \- UTF-8/wide characters pass through but are not handled with
+real terminal cell-width rules.
+.SH SEE ALSO
+.BR screen (1)

@@ -1,0 +1,29 @@
+.TH SUDO 8 "2026-08-16" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+sudo \- minimal, doas-style privilege escalation
+.SH SYNOPSIS
+.B sudo
+\fICMD\fR [\fIARGS\fR...]
+.SH DESCRIPTION
+.B sudo
+prompts for your own password and, if you are a member of the
+.I wheel
+group, execs CMD as root.
+.PP
+Deliberately doas\-sized, not sudo\-sized: no /etc/sudoers file or
+rule grammar, no per\-command matching, no session/timestamp caching
+(every invocation re\-prompts \- a deliberate choice, not a missing
+feature: no cached\-auth window for another process on the same tty
+to ride), no NOPASSWD, no logging pipeline. One group check, one
+password check, one exec.
+.SH INSTALLATION
+Must be installed setuid\-root to work at all:
+.RS
+.nf
+chown root:root sudo
+chmod 4755 sudo
+.fi
+.RE
+Refuses cleanly, with a clear error, if it is not.
+.SH SEE ALSO
+.BR su (1)

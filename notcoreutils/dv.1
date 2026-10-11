@@ -1,0 +1,30 @@
+.TH DISKVIEW 1 "2026-08-16" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+diskview \- recursively size a directory
+.SH SYNOPSIS
+.B diskview
+[\fB\-n\fR|\fB\-\-top\fR \fIN\fR] [\fB\-v\fR|\fB\-\-verbose\fR] [\fB\-q\fR|\fB\-\-quiet\fR] [\fB\-exclude\fR \fIPATTERN\fR]... [\fIDIR\fR]
+.SH DESCRIPTION
+.B diskview
+recursively sizes DIR and prints the biggest entries first \- a
+non\-interactive slice of what ncdu shows.
+.PP
+Formerly named \fBdv\fR - kept as an alias name, see this directory's
+own \fIalias\fR file. Not to be confused with \fBdd\fR(1)/\fBdf\fR(1)/
+\fBdu\fR(1) (real, unrelated classic Unix utilities kept under their
+own standard names) - the similarity of the short name \fBdv\fR to
+those was exactly the source of confusion this rename fixes.
+.SH OPTIONS
+.TP
+.B \-n\fR, \fB\-\-top \fIN\fR
+How many biggest entries to print (default 20).
+.TP
+.B \-v\fR, \fB\-\-verbose\fR
+Print each directory as it is entered during the scan.
+.TP
+.B \-q\fR, \fB\-\-quiet\fR
+Suppress the final entry listing entirely.
+.TP
+.B \-exclude \fIPATTERN\fR
+Prune any directory matching PATTERN (glob syntax) from the walk
+entirely, rather than just hiding it from the listing. Repeatable.
