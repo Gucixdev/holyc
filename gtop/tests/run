@@ -1,0 +1,62 @@
+#!/bin/sh
+# gtop tests: builds nothing, runs ./gtop --snapshot against the live system.
+cd "$(dirname "$0")/.." || exit 1
+BIN=./gtop
+[ -x "$BIN" ] || { echo "build first: make"; exit 1; }
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT INT TERM
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); echo "FAIL $1"; }
+has() { # name text pattern
+	printf '%s\n' "$2" | grep -q -- "$3" && ok || bad "$1 (no '$3')"
+}
+
+$BIN --help | grep -q usage && ok || bad "--help"
+$BIN --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok || bad "unknown option exits 2"
+$BIN </dev/null >/dev/null 2>&1; [ $? -eq 1 ] && ok || bad "no terminal exits 1"
+
+S=$($BIN --snapshot 130 40)
+for w in CPU RAM DISK NET "PROC \[app\]" NAME "CPU%" ACTIVITY; do has "frame has $w" "$S" "$w"; done
+[ "$(printf '%s\n' "$S" | wc -l)" -eq 40 ] && ok || bad "frame has 40 lines"
+S=$($BIN --snapshot 60 20); has "small terminal" "$S" PROC
+S=$($BIN --snapshot 30 12); has "tiny terminal does not crash" "$S" CPU
+
+S=$($BIN --snapshot 130 40 --keys R);  has "raw view lists [pid]" "$S" '\[[0-9][0-9]*\]'
+S=$($BIN --snapshot 130 40 -f systemd --keys RR); has "user/system view dividers" "$S" "system/kernel"
+S=$($BIN --snapshot 130 40 --keys L);  has "left wraps to user/system" "$S" "PROC \[user/system\]"
+S=$($BIN --snapshot 130 40 --keys a);  has "anonymous hides addresses" "$S" "hidden - anonymous mode"
+S=$($BIN --snapshot 130 40 -f systemd --keys a);  has "anonymous indicator" "$S" "anonymous mode - IPs and disk model"
+S=$($BIN --snapshot 130 40 --keys '+++'); has "interval keys" "$S" "refresh 1300ms"
+S=$($BIN --snapshot 130 40 --keys '/');   has "palette opens" "$S" "command (Enter: run, Esc: cancel)"
+
+# kill: a uniquely named sleeper (comm is at most 15 chars)
+V="gtv$$"; ln -s /bin/sleep "$T/$V"; "$T/$V" 60 & P=$!
+sleep 0.2
+S=$($BIN --snapshot 130 40 -f "$V" --keys ' k')
+has "kill message" "$S" "killed 1/1"
+wait $P 2>/dev/null; [ $? -eq 137 ] && ok || bad "process got SIGKILL"
+# filter really filters
+"$T/$V" 60 & P=$!; sleep 0.2
+S=$($BIN --snapshot 130 40 -f "$V")
+[ "$(printf '%s\n' "$S" | grep -c "$V")" -ge 1 ] && ok || bad "filter shows the process"
+kill $P 2>/dev/null; wait $P 2>/dev/null
+
+# palette runs commands/<name> with the marked pids as arguments
+mkdir "$T/cmds"; printf '#!/bin/sh\necho "args: $*"\n' > "$T/cmds/show"
+"$T/$V" 60 & P=$!; sleep 0.2
+S=$(GTOP_COMMANDS="$T/cmds" $BIN --snapshot 130 40 -f "$V" --keys '/show hello' )
+has "palette text typed" "$S" "show hello"
+kill $P 2>/dev/null; wait $P 2>/dev/null
+"$T/$V" 60 & P=$!; sleep 0.2
+S=$(GTOP_COMMANDS="$T/cmds" $BIN --snapshot 130 40 -f "$V" --keys '/show hello'$(printf 'E'))
+has "palette ran the command with extra word and pid" "$S" "show: args: hello $P"
+kill $P 2>/dev/null; wait $P 2>/dev/null
+S=$($BIN --snapshot 130 40 -f systemd --keys '/nosuchcmdE'); has "unknown command reported" "$S" "no such command"
+
+# record: a CSV with the header is created in the working directory
+( cd "$T" && "$OLDPWD/$BIN" --snapshot 100 30 --keys r >/dev/null ) 
+ls "$T"/gtop-record-*.csv >/dev/null 2>&1 && ok || bad "record file created"
+head -1 "$T"/gtop-record-*.csv 2>/dev/null | grep -q '^unix_ts,cpu_pct' && ok || bad "record header"
+
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

@@ -18,6 +18,7 @@ original licence text is in `THIRD_PARTY/`.
 | `exe_path.h` | [gpakosz/whereami](https://github.com/gpakosz/whereami) | Gregory Pakosz | WTFPL-2 or MIT, `LICENSE.whereami` |
 | `path.h` | API shape of [likle/cwalk](https://github.com/likle/cwalk), not a port | Leonard Ikle | MIT, `LICENSE.cwalk` |
 | `noise.h` | [Auburn/FastNoiseLite](https://github.com/Auburn/FastNoiseLite) | Jordan Peck and contributors | MIT, `LICENSE.FastNoiseLite` |
+| `cli.h` | xgetopt | its authors | public domain (Unlicense), stated in the header |
 | `curve.h` | the scalar Bezier formula from [recp/cglm](https://github.com/recp/cglm) | Recep Aslantas | MIT, `LICENSE.cglm` |
 
 Implementations written from scratch from the published algorithm, not ports: `hash/marmur.h`

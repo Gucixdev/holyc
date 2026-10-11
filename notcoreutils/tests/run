@@ -126,12 +126,10 @@ case $out in *"a demo page"*) ok ;; *) bad "man: renders NAME text, \\- unescape
 case $out in *.SH*|*.TH*|*'\fB'*) bad "man: no raw troff in the output" "$out" ;; *) ok ;; esac
 rc "man: unknown page exits 1" 1 env MANPATH="$T/mp" "$BIN/man" zzznope
 
-# ---------------------------------------------------------------- sudo, tmux, cb: error paths only
-echo "== sudo, tmux, cb"
+# ---------------------------------------------------------------- sudo, cb: error paths only
+echo "== sudo, cb"
 rc "sudo: refuses when not setuid root" 1 "$BIN/sudo" true
 rc "sudo: no arguments" 1 "$BIN/sudo"
-rc "tmux: no server running" 1 "$BIN/tmux" ls
-rc "tmux: unknown subcommand" 1 "$BIN/tmux" bogus
 rc "cb: unknown subcommand" 2 "$BIN/cb" bogus
 
 # ---------------------------------------------------------------- tree

@@ -2,7 +2,7 @@
 #   make test      build and run every tests/test_*.c (parallel)
 #   make bench     build and run the benchmarks in bench/ (each compares against malloc or a naive loop)
 CC ?= cc
-FLAGS = -std=gnu11 -O2 -w -D_GNU_SOURCE -Isrc -Ibench -Itests
+FLAGS = $(or $(CSTD),-std=gnu11) -O2 -w -D_GNU_SOURCE -Isrc -Ibench -Itests
 
 test:
 	sh tests/run

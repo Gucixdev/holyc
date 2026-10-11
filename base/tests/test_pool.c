@@ -2,7 +2,7 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define POOL_ALLOC_IMPLEMENTATION
 #include "core/arena_alloc.h"
-#include "core/pool_alloc.c"
+#include "core/pool_alloc.h"
 
 int main(void)
 {

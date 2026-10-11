@@ -289,6 +289,17 @@ f32 sse_max4(const f32 *data);
 #define HOLYC_RAD_TO_DEG (180.0 / HOLYC_PI)
 
 
+/* inline works in every -std mode on GCC/Clang (__inline__), is plain `inline` in C99+, and vanishes in strict C89 */
+#ifndef HC_INLINE
+#if defined(__GNUC__)
+#define HC_INLINE __inline__
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
+#define HC_INLINE inline
+#else
+#define HC_INLINE
+#endif
+#endif
+
 /* ################ types: Option, Result, TRY, Future, DEFER, Async_Signal ################ */
 #include <pthread.h>
 
@@ -300,14 +311,14 @@ f32 sse_max4(const f32 *data);
 #define OPTION_DEFINE(T, prefix)                                              \
 typedef enum { prefix##_SOME, prefix##_NONE } prefix##_Tag;                    \
 typedef struct { prefix##_Tag tag; T value; } prefix;                          \
-static inline prefix prefix##_some(T v)                                        \
+static HC_INLINE prefix prefix##_some(T v)                                        \
 {                                                                              \
     prefix o;                                                                  \
     o.tag = prefix##_SOME;                                                     \
     o.value = v;                                                               \
     return o;                                                                  \
 }                                                                              \
-static inline prefix prefix##_none(void)                                       \
+static HC_INLINE prefix prefix##_none(void)                                       \
 {                                                                              \
     prefix o;                                                                  \
     o.tag = prefix##_NONE;                                                     \
@@ -325,14 +336,14 @@ OPTION_DEFINE(void *, Option_ptr)
 #define RESULT_DEFINE(OkType, ErrType, prefix)                                 \
 typedef enum { prefix##_OK, prefix##_ERR } prefix##_Tag;                       \
 typedef struct { prefix##_Tag tag; union { OkType ok; ErrType err; } as; } prefix; \
-static inline prefix prefix##_ok(OkType v)                                     \
+static HC_INLINE prefix prefix##_ok(OkType v)                                     \
 {                                                                              \
     prefix r;                                                                  \
     r.tag = prefix##_OK;                                                       \
     r.as.ok = v;                                                               \
     return r;                                                                  \
 }                                                                              \
-static inline prefix prefix##_err(ErrType e)                                   \
+static HC_INLINE prefix prefix##_err(ErrType e)                                   \
 {                                                                              \
     prefix r;                                                                  \
     r.tag = prefix##_ERR;                                                      \
@@ -351,26 +362,26 @@ static inline prefix prefix##_err(ErrType e)                                   \
 #define FUTURE_DEFINE(T, prefix)                                               \
 typedef enum { prefix##_PENDING, prefix##_READY, prefix##_FAILED } prefix##_Tag; \
 typedef struct { prefix##_Tag tag; T value; } prefix;                          \
-static inline prefix prefix##_pending(void)                                    \
+static HC_INLINE prefix prefix##_pending(void)                                    \
 {                                                                              \
     prefix f;                                                                  \
     f.tag = prefix##_PENDING;                                                  \
     return f;                                                                  \
 }                                                                              \
-static inline prefix prefix##_ready(T v)                                       \
+static HC_INLINE prefix prefix##_ready(T v)                                       \
 {                                                                              \
     prefix f;                                                                  \
     f.tag = prefix##_READY;                                                    \
     f.value = v;                                                               \
     return f;                                                                  \
 }                                                                              \
-static inline prefix prefix##_failed(void)                                     \
+static HC_INLINE prefix prefix##_failed(void)                                     \
 {                                                                              \
     prefix f;                                                                  \
     f.tag = prefix##_FAILED;                                                   \
     return f;                                                                  \
 }                                                                              \
-static inline i32 prefix##_is_pending(const prefix *f)                         \
+static HC_INLINE i32 prefix##_is_pending(const prefix *f)                         \
 {                                                                              \
     return f->tag == prefix##_PENDING;                                         \
 }
@@ -380,7 +391,7 @@ static inline i32 prefix##_is_pending(const prefix *f)                         \
 #define TYPES_CONCAT_(a, b) a##b
 #define TYPES_CONCAT(a, b) TYPES_CONCAT_(a, b)
 
-static inline void types_defer_call_(void (**fn)(void))
+static HC_INLINE void types_defer_call_(void (**fn)(void))
 {
     if (*fn) (*fn)();
 }

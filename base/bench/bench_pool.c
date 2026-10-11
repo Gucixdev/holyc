@@ -3,7 +3,7 @@
 #define POOL_ALLOC_IMPLEMENTATION
 #include "core/base.h"
 #include "core/arena_alloc.h"
-#include "core/pool_alloc.c"
+#include "core/pool_alloc.h"
 #include "bench_util.h"
 #include <stdlib.h>
 

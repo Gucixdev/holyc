@@ -99,7 +99,7 @@ size_t arena_reserved(const Arena *a);                 /* bytes held in regions 
 
 /* Slab: many same-sized blocks with individual lifetimes. O(1) alloc/release from a
  * free list, grows by chunks, blocks never move, a double release is refused (returns 0).
- * Blocks are 16-byte aligned and come back zeroed. pool_alloc.c is the fixed-buffer
+ * Blocks are 16-byte aligned and come back zeroed. pool_alloc.h is the fixed-buffer
  * version of this with no growth and no malloc. Not thread-safe. */
 typedef struct Slab Slab;
 Slab *slab_new(size_t block_size, size_t blocks_per_chunk);   /* 0 chunk size = 64 */

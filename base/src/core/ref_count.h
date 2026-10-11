@@ -4,7 +4,7 @@
 /* Manual reference counting - the memory-management "yin" to arena/pool's
  * "yang". Deliberately NOT a replacement for either: arena/pool answer
  * WHERE memory comes from (a growing bump region / a fixed-size slab, see
- * arena_alloc.h and pool_alloc.c); this answers WHO decides WHEN a shared
+ * arena_alloc.h and pool_alloc.h); this answers WHO decides WHEN a shared
  * resource is done, for the cases where a single explicit owner isn't the
  * right model (a chunk with more than one live reference to it, a handle
  * shared across subsystems). Compose them: retain/release around a

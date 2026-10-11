@@ -1,13 +1,13 @@
 #ifndef HOLYC_PERSISTANT_POOL_H_
 #define HOLYC_PERSISTANT_POOL_H_
 
-/* pool_alloc.c's own fixed-chunk free-list pool, backed by a real file
+/* pool_alloc.h's own fixed-chunk free-list pool, backed by a real file
  * via mmap(MAP_SHARED, ...) instead of a caller-supplied in-memory
  * buffer - both the chunk CONTENT and which chunks are actually
  * allocated survive a process restart.
  *
- * The one real, non-obvious problem persistence adds that pool_alloc.c
- * never has to solve: pool_alloc.c's own Pool_Free_Node stores a real
+ * The one real, non-obvious problem persistence adds that pool_alloc.h
+ * never has to solve: pool_alloc.h's own Pool_Free_Node stores a real
  * `next` POINTER inside each free chunk, which is completely safe there
  * because that pool only ever lives in ONE process's ONE address space
  * for its entire life. A file-backed mapping has no such guarantee -
@@ -20,7 +20,7 @@
  * happens to be mapped this time, the same offset-not-pointer discipline
  * persistant_arena.h's own persistant_arena_offset/at exist for.
  *
- * Also unlike pool_alloc.c's own pool_init (which always calls
+ * Also unlike pool_alloc.h's own pool_init (which always calls
  * pool_free_all - a fresh pool is always "everything free", state that
  * only ever needs to exist once per process run): persistant_pool_open
  * only builds that initial free list ONCE, the first time a path is
@@ -59,7 +59,7 @@ typedef struct {
 
 /* persistant_pool_open - creates `path` (chunk_count chunks of
  * chunk_size bytes, aligned up to sizeof(u64) the same way
- * pool_alloc.c's own pool_init does) if it doesn't exist yet, otherwise
+ * pool_alloc.h's own pool_init does) if it doesn't exist yet, otherwise
  * reopens it and trusts the file's OWN persisted chunk_size/chunk_count/
  * free_head over whatever this call's arguments say (see this file's
  * own doc comment on why re-deriving free_head from scratch on reopen
@@ -97,7 +97,7 @@ static u8 *persistant_pool_chunk_at_(Persistant_Pool *pp, u64 index_1based)
 
 /* persistant_pool_build_free_list_ - links every chunk into the free
  * list in forward order (chunk 1 first) - real, deliberate departure
- * from pool_alloc.c's own pool_free_all, which links in REVERSE order
+ * from pool_alloc.h's own pool_free_all, which links in REVERSE order
  * (walks the buffer forward, pushing each onto the head, so chunk 0
  * ends up LAST in the list). Forward order here isn't load-bearing for
  * correctness (either order is a valid free list), just easier to

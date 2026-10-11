@@ -4,7 +4,7 @@
 #define FGJOB_IMPLEMENTATION
 #define REF_COUNT_IMPLEMENTATION
 #include "core/arena_alloc.h"
-#include "core/pool_alloc.c"
+#include "core/pool_alloc.h"
 #include "core/fine_grained.h"
 #include "core/ref_count.h"
 

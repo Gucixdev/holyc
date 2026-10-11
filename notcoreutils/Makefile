@@ -16,7 +16,7 @@ OUT     ?= bin
 PREFIX  ?= /usr/local
 INC      = -Ideps/utils -Ideps/libutil -Ideps/singlefile/abstract
 
-TOOLS   := cb cloc colorado dv man netcat sudo tgates tmux tree
+TOOLS   := cb cloc colorado dv man netcat sudo tgates tree
 
 LIBS_cb   = -lX11
 LIBS_sudo = -lcrypt
