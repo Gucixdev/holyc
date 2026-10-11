@@ -17,7 +17,7 @@
 
 #include "core/base.h"
 #include "core/arena_alloc.h"
-#include "core/str.h"
+#include "core/base.h"
 
 typedef enum {
     CSV_ESUCCESS   = 0,

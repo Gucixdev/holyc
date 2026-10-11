@@ -9,8 +9,10 @@
  *   - WIN32/WASM backends dropped for now, add back when actually needed
  */
 
+#define HOLYC_ARENA_ALLOC_IN_PROGRESS_ /* base.h must not re-enter this file */
 #include "core/base.h"
 #include "core/contracts.h"
+#undef HOLYC_ARENA_ALLOC_IN_PROGRESS_
 #include <stdarg.h> /* va_list is part of arena_vsprintf's declaration below, not implementation-only */
 #include <string.h> /* memcpy - arena_memcpy's underlying primitive */
 
@@ -35,9 +37,9 @@ struct Arena_Region {
     u64 data[1]; /* struct-hack: real allocation is offsetof(Arena_Region, data) + capacity*sizeof(u64) */
 };
 
-typedef struct {
+struct Arena { /* `typedef struct Arena Arena;` is in base.h (Arena_String needs it) */
     Arena_Region *begin, *end;
-} Arena;
+};
 
 typedef struct {
     Arena_Region *region;
@@ -90,6 +92,23 @@ void arena_reset(Arena *a);
 void arena_rewind(Arena *a, Arena_Mark m);
 void arena_free(Arena *a);
 void arena_trim(Arena *a);
+
+void *arena_calloc(Arena *a, size_t size_bytes);       /* zeroed */
+size_t arena_used(const Arena *a);                     /* bytes handed out, 8-byte granules */
+size_t arena_reserved(const Arena *a);                 /* bytes held in regions */
+
+/* Slab: many same-sized blocks with individual lifetimes. O(1) alloc/release from a
+ * free list, grows by chunks, blocks never move, a double release is refused (returns 0).
+ * Blocks are 16-byte aligned and come back zeroed. pool_alloc.c is the fixed-buffer
+ * version of this with no growth and no malloc. Not thread-safe. */
+typedef struct Slab Slab;
+Slab *slab_new(size_t block_size, size_t blocks_per_chunk);   /* 0 chunk size = 64 */
+void slab_destroy(Slab *s);
+void *slab_alloc(Slab *s);                              /* NULL on OOM */
+i32 slab_release(Slab *s, void *block);                 /* 0 on NULL / double release */
+void slab_reset(Slab *s);                               /* every block free again, memory kept */
+size_t slab_used(const Slab *s);                        /* live blocks */
+size_t slab_capacity(const Slab *s);
 
 #ifndef ARENA_DA_INIT_CAP
 #define ARENA_DA_INIT_CAP 256
@@ -478,5 +497,221 @@ void arena_trim(Arena *a)
     a->end->next = NULL;
 }
 
+
+void *arena_calloc(Arena *a, size_t size_bytes)
+{
+    void *p = arena_alloc(a, size_bytes);
+    if (p) {
+        u8 *b = (u8 *)p;
+        size_t n = (size_bytes + sizeof(u64) - 1) / sizeof(u64) * sizeof(u64), i;
+        for (i = 0; i < n; i++) b[i] = 0;
+    }
+    return p;
+}
+
+size_t arena_used(const Arena *a)
+{
+    const Arena_Region *r;
+    size_t n = 0;
+    for (r = a->begin; r != NULL; r = r->next) n += r->count * sizeof(u64);
+    return n;
+}
+
+size_t arena_reserved(const Arena *a)
+{
+    const Arena_Region *r;
+    size_t n = 0;
+    for (r = a->begin; r != NULL; r = r->next) n += r->capacity * sizeof(u64);
+    return n;
+}
+
+#define SLAB_FREE_MAGIC_ 0xF4EEB10CF4EEB10CULL
+typedef struct Slab_Chunk_ { struct Slab_Chunk_ *next; u64 pad_; } Slab_Chunk_; /* 16 bytes: blocks stay 16-aligned */
+typedef struct Slab_Free_ { struct Slab_Free_ *next; u64 magic; } Slab_Free_;
+
+struct Slab {
+    size_t block, per_chunk, used, capacity;
+    Slab_Chunk_ *chunks;
+    Slab_Free_ *free_list;
+};
+
+static void slab_link_chunk_(Slab *s, Slab_Chunk_ *c)
+{
+    u8 *base = (u8 *)c + sizeof(Slab_Chunk_);
+    size_t i;
+    for (i = s->per_chunk; i-- > 0;) { /* reverse, so allocation walks the chunk forward */
+        Slab_Free_ *b = (Slab_Free_ *)(base + i * s->block);
+        b->magic = SLAB_FREE_MAGIC_;
+        b->next = s->free_list;
+        s->free_list = b;
+    }
+}
+
+Slab *slab_new(size_t block_size, size_t blocks_per_chunk)
+{
+    Slab *s = (Slab *)malloc(sizeof *s);
+    if (!s) return NULL;
+    if (block_size < sizeof(Slab_Free_)) block_size = sizeof(Slab_Free_);
+    s->block = (block_size + 15) & ~(size_t)15;
+    s->per_chunk = blocks_per_chunk ? blocks_per_chunk : 64;
+    s->used = s->capacity = 0;
+    s->chunks = NULL;
+    s->free_list = NULL;
+    return s;
+}
+
+void slab_destroy(Slab *s)
+{
+    Slab_Chunk_ *c;
+    if (!s) return;
+    for (c = s->chunks; c;) {
+        Slab_Chunk_ *n = c->next;
+        free(c);
+        c = n;
+    }
+    free(s);
+}
+
+void *slab_alloc(Slab *s)
+{
+    Slab_Free_ *b;
+    if (!s->free_list) {
+        Slab_Chunk_ *c = (Slab_Chunk_ *)malloc(sizeof(Slab_Chunk_) + s->block * s->per_chunk);
+        if (!c) return NULL;
+        c->next = s->chunks;
+        s->chunks = c;
+        slab_link_chunk_(s, c);
+        s->capacity += s->per_chunk;
+    }
+    b = s->free_list;
+    s->free_list = b->next;
+    { u8 *p = (u8 *)b; size_t i; for (i = 0; i < s->block; i++) p[i] = 0; }
+    s->used++;
+    return b;
+}
+
+i32 slab_release(Slab *s, void *block)
+{
+    Slab_Free_ *b = (Slab_Free_ *)block;
+    if (!s || !block) return 0;
+    if (b->magic == SLAB_FREE_MAGIC_) return 0; /* already free */
+    b->magic = SLAB_FREE_MAGIC_;
+    b->next = s->free_list;
+    s->free_list = b;
+    s->used--;
+    return 1;
+}
+
+void slab_reset(Slab *s)
+{
+    Slab_Chunk_ *c;
+    s->free_list = NULL;
+    for (c = s->chunks; c; c = c->next) slab_link_chunk_(s, c);
+    s->used = 0;
+}
+
+size_t slab_used(const Slab *s) { return s->used; }
+size_t slab_capacity(const Slab *s) { return s->capacity; }
+
 #endif /* ARENA_ALLOC_IMPLEMENTATION_ */
 #endif /* ARENA_ALLOC_IMPLEMENTATION */
+
+/* ---- Arena_String bodies (declared in base.h) ---- */
+#ifdef ARENA_STRING_IMPLEMENTATION
+#ifndef ARENA_STRING_IMPLEMENTATION_
+#define ARENA_STRING_IMPLEMENTATION_
+
+
+void arena_string_init(Arena_String *s, Arena *a)
+{
+    s->a = a;
+    s->items = 0;
+    s->count = 0;
+    s->capacity = 0;
+}
+
+void arena_string_clear(Arena_String *s)
+{
+    s->count = 0;
+}
+
+void arena_string_append_char(Arena_String *s, char c)
+{
+    arena_da_append(s->a, s, c);
+}
+
+void arena_string_append_buf(Arena_String *s, const char *buf, size_t n)
+{
+    arena_da_append_many(s->a, s, buf, n);
+}
+
+void arena_string_append_cstr(Arena_String *s, const char *cstr)
+{
+    arena_string_append_buf(s, cstr, arena_strlen(cstr));
+}
+
+/* same two-digits-per-division trick print.h's print_u64_base(v,10) uses -
+ * reimplemented here rather than reused, since print.h's version writes
+ * straight to its own internal write(2) buffer with no way to redirect
+ * output into an arbitrary caller buffer. */
+static const char arena_string_digit_pairs_[] =
+    "00010203040506070809"
+    "10111213141516171819"
+    "20212223242526272829"
+    "30313233343536373839"
+    "40414243444546474849"
+    "50515253545556575859"
+    "60616263646566676869"
+    "70717273747576777879"
+    "80818283848586878889"
+    "90919293949596979899";
+
+void arena_string_append_u64(Arena_String *s, u64 v)
+{
+    char tmp[24];
+    size_t n = 0;
+
+    if (v == 0) {
+        arena_string_append_char(s, '0');
+        return;
+    }
+
+    while (v >= 100) {
+        u32 pair = (u32)(v % 100) * 2;
+        v /= 100;
+        tmp[n++] = arena_string_digit_pairs_[pair + 1];
+        tmp[n++] = arena_string_digit_pairs_[pair];
+    }
+    if (v >= 10) {
+        u32 pair = (u32)v * 2;
+        tmp[n++] = arena_string_digit_pairs_[pair + 1];
+        tmp[n++] = arena_string_digit_pairs_[pair];
+    } else {
+        tmp[n++] = (char)('0' + v);
+    }
+
+    while (n > 0) arena_string_append_char(s, tmp[--n]);
+}
+
+void arena_string_append_i64(Arena_String *s, i64 v)
+{
+    u64 uv;
+    if (v < 0) {
+        arena_string_append_char(s, '-');
+        uv = (u64)(-(v + 1)) + 1; /* safe negation, avoids overflow at i64 min - same idiom as print.h */
+    } else {
+        uv = (u64)v;
+    }
+    arena_string_append_u64(s, uv);
+}
+
+const char *arena_string_cstr(Arena_String *s)
+{
+    size_t saved_count = s->count;
+    arena_da_append(s->a, s, '\0');
+    s->count = saved_count; /* NUL written but not counted, same convention arena_sb_append_null documents */
+    return s->items;
+}
+
+#endif /* ARENA_STRING_IMPLEMENTATION_ */
+#endif /* ARENA_STRING_IMPLEMENTATION */

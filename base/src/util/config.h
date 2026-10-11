@@ -10,7 +10,7 @@
  * queried with a default so a missing key is never a crash. */
 
 #include "data/hash/hashmap.h"
-#include "core/str.h"
+#include "core/base.h"
 
 typedef enum { CONFIG_I32, CONFIG_F64, CONFIG_STRING, CONFIG_BOOL } Config_Type;
 

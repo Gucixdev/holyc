@@ -2,7 +2,7 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define ARENA_STRING_IMPLEMENTATION
 #include "core/arena_alloc.h"
-#include "core/str.h"
+#include "core/base.h"
 
 #include <string.h>
 

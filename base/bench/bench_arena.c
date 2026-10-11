@@ -1,6 +1,6 @@
 #define PRINT_IMPLEMENTATION
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "core/print.h"
+#include "core/base.h"
 #include "core/arena_alloc.h"
 #include "bench_util.h"
 #include <stdlib.h>

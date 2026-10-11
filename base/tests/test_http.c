@@ -4,7 +4,7 @@
 #define SOCKET_IMPLEMENTATION
 #define HTTP_IMPLEMENTATION
 #include "core/arena_alloc.h"
-#include "core/str.h"
+#include "core/base.h"
 #include "net/socket.h"
 #include "net/http.h"
 #include <pthread.h>

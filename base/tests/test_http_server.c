@@ -5,7 +5,7 @@
 #define HTTP_IMPLEMENTATION
 #define HTTP_SERVER_IMPLEMENTATION
 #include "core/arena_alloc.h"
-#include "core/str.h"
+#include "core/base.h"
 #include "net/socket.h"
 #include "net/http.h"
 #include "net/http_server.h"

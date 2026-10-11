@@ -1,5 +1,5 @@
 #include "test_common.h"
-#include "core/constant.h"
+#include "core/base.h"
 
 int main(void)
 {

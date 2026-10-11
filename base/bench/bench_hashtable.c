@@ -2,7 +2,7 @@
 #define BASE_TYPE_IMPLEMENTATION
 #define ARENA_ALLOC_IMPLEMENTATION
 #define HASHTABLE_IMPLEMENTATION
-#include "core/print.h"
+#include "core/base.h"
 #include "core/arena_alloc.h"
 #include "data/hash/hashtable.h"
 #include "bench_util.h"

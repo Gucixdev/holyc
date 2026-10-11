@@ -2,25 +2,27 @@
 
 A library of single-file C headers: types, allocators, queues and jobs, data structures, math,
 codecs, a few crypto primitives and the utilities that keep coming up. It holds the
-80 modules that proved useful on their own, each with a test.
+modules that proved useful on their own, each with a test.
 
 Everything is a header you include. The implementation of a module is pulled in by defining its
 `<NAME>_IMPLEMENTATION` macro in exactly one translation unit (the stb convention); a few
 modules also ship a `.c` file next to the header (`core/pool_alloc.c`, `core/flags.c`).
 
 ```c
-#define ARENA_SLAB_IMPLEMENTATION     // once
-#define MEM_HOOK_IMPLEMENTATION       // once
-#include "core/arena_slab.h"
+#define ARENA_ALLOC_IMPLEMENTATION    // once
+#include "core/arena_alloc.h"
 
-hc_arena *a = hc_arena_new(1 << 20);
-void *p = hc_arena_alloc(a, 256);     // a pointer add; freed all at once
+Arena a = {0};
+void *p = arena_alloc(&a, 256);       // a pointer add; freed all at once
+Arena_Mark m = arena_snapshot(&a);    // ... temporaries ...
+arena_rewind(&a, m);
+arena_free(&a);
 ```
 
 ## Layout
 
 ```
-src/core/     types (Option, Result, TRY, Future, DEFER), allocators (arena, slab, pool, mem_hook),
+src/core/     base.h (types, str, print, constants), arena_alloc, pool, queues, jobs, coroutines,
               job pool and queues, coroutines, fsm, io, print, log, args, flags, str, utf8
 src/data/     array, list, tree, slot_map, hex; data/hash/ has the hash tables and functions
 src/math/     linear algebra, trig, curves, noise, rng, statistics
@@ -36,15 +38,19 @@ THIRD_PARTY/  licence texts of the code some headers are ported from, see THIRD_
 `make test` (or `sh tests/run [filter]`) builds and runs every test on its own, in parallel.
 `make bench` runs `bench/`: the arena against glibc malloc, the pool against malloc/free, the job
 pool against spawning a thread per job, the hash table and Morton encoding against naive versions.
-Compile with `-Isrc` and include as `"core/arena_slab.h"`, `"core/types.h"`, ...
+Compile with `-Isrc` and include as `"core/arena_alloc.h"`, `"core/base.h"`, ...
 
 ## What is in it
 
-**Types and allocators**: `types`, `base`, `contracts`. `types` is Option, Result, TRY,
-Future, DEFER and Async_Signal in one header, taken apart with a plain `switch`.
-Allocators: `arena_alloc`, `arena_slab`, `mem_hook`, `persistant_arena`, `persistant_pool`, `pool_alloc`, `ref_count`.
-`arena_slab` is a bump arena and a fixed-size slab on a replaceable allocator hook (`mem_hook`);
-`arena_alloc` is a C89 arena; `pool_alloc` a fixed-size pool.
+**`core/base.h`** is the one base header: constants, fixed-width types, Option/Result/TRY/Future/
+DEFER/Async_Signal (taken apart with a plain `switch`), `str` and `String_View`, `Arena_String` and
+`print`. Each part keeps its own `*_IMPLEMENTATION` macro (`BASE_TYPE_`, `TYPES_`, `STR_`,
+`STRING_VIEW_`, `ARENA_STRING_`, `PRINT_`). `contracts` sits beside it.
+
+**Allocators**: `arena_alloc` is the arena (regions, mark/rewind, realloc, sprintf, growable
+arrays and string builders; plus a growable `Slab` of fixed-size blocks with double-release
+detection). `pool_alloc` is a fixed-buffer pool, `persistant_arena`/`persistant_pool` the file-backed
+variants, `ref_count` reference counting.
 
 **Concurrency and queues**: `fine_grained`, `action_queue`, `event_queue`, `ring_buffer`, `priority_queue`, `corountines`, `fsm`, `pipe`, `socket`.
 `fine_grained` is a worker pool that claims disjoint chunks of an index range with no locks around

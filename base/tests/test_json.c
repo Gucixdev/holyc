@@ -3,7 +3,7 @@
 #define STRING_VIEW_IMPLEMENTATION
 #define JSON_IMPLEMENTATION
 #include "core/arena_alloc.h"
-#include "core/str.h"
+#include "core/base.h"
 #include "codec/json.h"
 #include <string.h>
 
