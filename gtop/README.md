@@ -34,7 +34,7 @@ A real frame from `gtop --snapshot 118 22 --keys a -f systemd` (anonymous mode, 
 
 ```sh
 make            # ./gtop
-make test       # tests/run: 39 checks against the live system
+make test       # tests/run: 40 checks against the live system
 sudo make install   # PREFIX=/usr/local: bin/gtop and share/gtop/commands/
 ```
 
@@ -54,25 +54,24 @@ source. Needs `-lm`.
 - **NET**: aggregate rate graph; per interface: rx/tx, link speed bar (or a graph when the speed is
   unknown), addresses (IPv4/IPv6, link-local filtered).
 - **PROC**: two views, switched with left/right.
-  - `clean`: user programs grouped by name, kernel threads left out. This is the everyday view.
-  - `raw`: every process, one row per pid, kernel threads included (all the `kworker`, `ksoftirqd`,
-    `rcu_*`, `migration/N` rows live here).
+  - `clean`: programs grouped by name, kernel threads left out, in two sections: `── user ──`
+    (accounts with uid 1000 and up) and `── system ──` (root, dbus, polkitd and other system
+    accounts). A program with several processes is one row with the sums, and its processes are
+    always shown below it as a tree, biggest CPU first:
+
+    ```
+    ▾ firefox (3)             12.4%  ...
+    ├── firefox [4101]         9.8%  ...
+    ├── firefox [4177]         2.1%  ...
+    └── firefox [4190]         0.5%  ...
+    ```
+
+  - `raw`: every process, one row per pid, kernel threads included (all the `kworker`,
+    `ksoftirqd`, `rcu_*`, `migration/N` rows live here).
 
   Columns: `NAME CPU% MEM% MEM DISK% DISK [GPU% GPU] ACTIVITY`. ACTIVITY is a CPU graph of the last
   two minutes that fills all the width left over. Rows of processes that just exited stay for 3
   seconds in grey. Order only re-sorts every 4 seconds so rows do not jump.
-- **Process tree**: a program with several processes is one row, `▸ firefox (12)`, with the sums.
-  Enter opens it into a tree, one row per process, biggest CPU first:
-
-  ```
-  ▾ firefox (3)             12.4%  ...
-  ├── firefox [4101]         9.8%  ...
-  ├── firefox [4177]         2.1%  ...
-  └── firefox [4190]         0.5%  ...
-  ```
-
-  Every child row can be marked, killed or used as a palette target on its own. Enter on the
-  program row (or on a child) closes the tree again.
 
 ## Keys
 
@@ -82,7 +81,6 @@ source. Needs `-lm`.
 | left / right | switch PROC view: clean / raw |
 | up / down | move the cursor (dividers are skipped) |
 | space | mark / unmark the row (several rows can be marked; a child row marks just that process) |
-| Enter | open / close the process tree of the program under the cursor |
 | `k` | SIGKILL every pid of the marked rows, or of the row under the cursor (a program row: all its processes; a child row: that one) |
 | `/` | command palette: type a name, Enter runs `commands/<name>` |
 | `r` | record all numbers to `gtop-record-<unix time>.csv` (toggle) |
@@ -115,5 +113,5 @@ literally; a refresh happens after them), `-f` keeps only processes whose name c
 ## History
 
 gtop started as a 1:1 port of an earlier Rust/ratatui version (`bsc`) with the same panels, layout,
-numbers and keys. The process tree and the reduced PROC columns were added in C afterwards. It is
+numbers and keys. The process tree, the clean/raw views and the reduced PROC columns were added in C afterwards. It is
 a single file, `gtop.c`.

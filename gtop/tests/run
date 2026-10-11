@@ -44,15 +44,16 @@ S=$($BIN --snapshot 130 40 -f "$V")
 kill $P 2>/dev/null; wait $P 2>/dev/null
 
 
-# process tree: several processes of one program fold into one row, Enter opens it
+# process tree: several processes of one program are one row with its processes always shown below it
 "$T/$V" 60 & P1=$!; "$T/$V" 60 & P2=$!; "$T/$V" 60 & P3=$!
 sleep 0.2
 S=$($BIN --snapshot 130 40 -f "$V");        has "program row shows the count" "$S" "$V (3)"
-printf "%s\n" "$S" | grep "├── $V" | grep -q . && bad "tree is closed by default" || ok
-S=$($BIN --snapshot 130 40 -f "$V" --keys E); has "Enter opens the tree" "$S" "├── $V \\["
+has "the tree is always open" "$S" "├── $V \\["
 has "last child uses the corner" "$S" "└── $V \\["
-S=$($BIN --snapshot 130 40 -f "$V" --keys EE); printf "%s\n" "$S" | grep "├── $V" | grep -q . && bad "Enter closes it again" || ok
-S=$($BIN --snapshot 130 40 -f "$V" --keys EDk)
+has "user section divider" "$S" "── user ──"
+S=$($BIN --snapshot 130 40 -f "$V" --keys E); has "Enter changes nothing, the tree stays open" "$S" "├── $V \\["
+S=$($BIN --snapshot 130 40 -f systemd); has "system section divider" "$S" "── system ──"
+S=$($BIN --snapshot 130 40 -f "$V" --keys Dk)
 has "kill on a child row kills one process" "$S" "killed 1/1"
 sleep 0.2
 alive=0; for p in $P1 $P2 $P3; do kill -0 $p 2>/dev/null && alive=$((alive + 1)); done

@@ -621,7 +621,7 @@ typedef struct {
 	char comm[48];
 	double cpu, disk_bps, gpu_pct;
 	unsigned long long mem_mb, gpu_mb, jiff, io;
-	int kernel;
+	int kernel, system;
 } Ent;
 
 typedef struct {
@@ -660,8 +660,6 @@ typedef struct {
 	int nhist;
 	Row *rows;
 	int nrows;
-	char (*expanded)[80];
-	int nexp, cexp;
 	GhostG *ghosts;
 	int nghost;
 	int *pj_pid;
@@ -748,12 +746,13 @@ static void apply_pct(Group *g, int n, double mem_total, double disk_bps)
 	}
 }
 
-static void by_name(GVec *out, const Ent *e, int n, int want_kernel, double mem_total, double disk_bps)
+static void by_name(GVec *out, const Ent *e, int n, int want_sys, double mem_total, double disk_bps)
 {
 	int start = out->n, i, j;
 	for (i = 0; i < n; i++) {
 		Group *g = NULL;
-		if (want_kernel >= 0 && e[i].kernel != want_kernel) continue;
+		if (e[i].kernel) continue; /* kernel threads live in the raw view only */
+		if (want_sys >= 0 && e[i].system != want_sys) continue;
 		for (j = start; j < out->n; j++) if (!strcmp(out->g[j].name, e[i].comm)) { g = &out->g[j]; break; }
 		if (!g) {
 			g = gv_push(out);
@@ -805,14 +804,8 @@ static void nvidia_pmon(Ent *e, int n)
 	pclose(p);
 }
 
-static int is_expanded(const Procs *P, const char *name)
-{
-	int i;
-	for (i = 0; i < P->nexp; i++) if (!strcmp(P->expanded[i], name)) return 1;
-	return 0;
-}
-
-/* a group of two or more processes can be opened into a tree (raw view is already one row per pid) */
+/* in the clean view a program with two or more processes is always shown as a tree; the raw view is
+ * already one row per pid */
 static int expandable(const Procs *P, const Group *g) { return P->mode != 1 && !g->divider && !g->ghost && g->nkids >= 2; }
 
 static void build_rows(Procs *P)
@@ -822,7 +815,7 @@ static void build_rows(Procs *P)
 	P->rows = malloc((size_t)(P->ng * 2 + 1) * sizeof(Row));
 	for (i = 0; i < P->ng; i++) {
 		const Group *g = &P->g[i];
-		int open = expandable(P, g) && is_expanded(P, g->name);
+		int open = expandable(P, g);
 		if (open) {
 			size_t need = (size_t)(n + 1 + g->nkids + (P->ng - i)) * sizeof(Row);
 			P->rows = realloc(P->rows, need + (size_t)P->ng * sizeof(Row));
@@ -902,6 +895,8 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 		if (read_file(path, buf, sizeof buf) > 0) {
 			char *v = strstr(buf, "VmRSS:");
 			if (v) e.mem_mb = strtoull(v + 6, NULL, 10) / 1024;
+			v = strstr(buf, "\nUid:");
+			e.system = v ? strtoul(v + 5, NULL, 10) < 1000 : 0; /* system accounts: root, dbus, polkitd... */
 		}
 		snprintf(path, sizeof path, "/proc/%d/io", pid);
 		if (read_file(path, buf, sizeof buf) > 0) {
@@ -929,10 +924,20 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 	}
 	nvidia_pmon(cur, n);
 
-	/* two views: clean = user programs grouped by name (kernel threads left out), raw = every
-	 * process one row per pid, kernel threads included */
-	if (P->mode == 0) by_name(&groups, cur, n, 0, mem_total, total_disk_bps);
-	else raw_groups(&groups, cur, n, mem_total, total_disk_bps);
+	/* two views. clean: programs grouped by name in two sections, user accounts and system accounts,
+	 * kernel threads left out. raw: every process, one row per pid, kernel threads included. */
+	if (P->mode == 0) {
+		static const char *titles[2] = {"\xE2\x94\x80\xE2\x94\x80 user \xE2\x94\x80\xE2\x94\x80", "\xE2\x94\x80\xE2\x94\x80 system \xE2\x94\x80\xE2\x94\x80"};
+		int sec;
+		for (sec = 0; sec < 2; sec++) {
+			int before = groups.n;
+			Group *dv = gv_push(&groups);
+			snprintf(dv->name, sizeof dv->name, "%s", titles[sec]);
+			dv->divider = 1;
+			by_name(&groups, cur, n, sec, mem_total, total_disk_bps);
+			if (groups.n == before + 1) { group_free(&groups.g[before]); groups.n--; } /* empty section: no divider */
+		}
+	} else raw_groups(&groups, cur, n, mem_total, total_disk_bps);
 
 	/* ghosts: rows of the previous display that are gone now */
 	for (i = 0; i < P->ng; i++) {
@@ -1057,29 +1062,6 @@ static void cursor_move(Procs *P, int dir)
 	int i = P->cursor + dir;
 	while (i >= 0 && i < P->nrows && row_is_divider(P, i)) i += dir;
 	if (i >= 0 && i < P->nrows) P->cursor = i;
-}
-
-/* Enter: open or close the process tree under a program; on a child row it closes its parent */
-static void toggle_expand(Procs *P)
-{
-	const Row *r;
-	const Group *g;
-	int i;
-	if (P->cursor >= P->nrows) return;
-	r = &P->rows[P->cursor];
-	g = &P->g[r->g];
-	if (!expandable(P, g)) return;
-	for (i = 0; i < P->nexp; i++)
-		if (!strcmp(P->expanded[i], g->name)) {
-			memcpy(P->expanded[i], P->expanded[P->nexp - 1], 80);
-			P->nexp--;
-			build_rows(P);
-			for (i = 0; i < P->nrows; i++) if (P->rows[i].g == r->g && P->rows[i].kid < 0) { P->cursor = i; break; }
-			return;
-		}
-	if (P->nexp == P->cexp) { P->cexp = P->cexp ? P->cexp * 2 : 16; P->expanded = realloc(P->expanded, (size_t)P->cexp * 80); }
-	snprintf(P->expanded[P->nexp++], 80, "%.79s", g->name);
-	build_rows(P);
 }
 
 /* the pids a kill or a palette command acts on: marked rows, or the row under the cursor */
@@ -1285,7 +1267,6 @@ static void handle_key(App *A, int k)
 	case K_UP: cursor_move(P, -1); break;
 	case K_DOWN: cursor_move(P, 1); break;
 	case ' ': toggle_mark(P); break;
-	case K_ENTER: toggle_expand(P); break;
 	case 'k': kill_selected(A); break;
 	case '/': A->palette = 1; A->palette_in[0] = 0; break;
 	case 'r': toggle_record(A); break;
@@ -1746,13 +1727,21 @@ static void draw_proc(const App *A, int x, int y, int w, int h)
 		if (g->divider) { span(&r, row++, &col, C_ACCENT, 0, g->name); continue; }
 		if (kd) {
 			int last = rw->kid == g->nkids - 1;
-			snprintf(label, sizeof label, "%s%.60s [%d]", last ? "\xE2\x94\x94\xE2\x94\x80\xE2\x94\x80 " : "\xE2\x94\x9C\xE2\x94\x80\xE2\x94\x80 ", g->name, kd->pid);
+			char tail[24], head[96];
+			int room, kk = 0, by = 0;
+			const char *q;
+			snprintf(tail, sizeof tail, " [%d]", kd->pid);
+			room = 24 - 4 - ncells(tail); /* keep the pid visible, shorten the program name instead */
+			if (room < 1) room = 1;
+			for (q = g->name; *q && kk < room; ) { int l = u8len((unsigned char)*q); by += l; q += l; kk++; }
+			snprintf(head, sizeof head, "%.*s", by, g->name);
+			snprintf(label, sizeof label, "%s%s%s", last ? "\xE2\x94\x94\xE2\x94\x80\xE2\x94\x80 " : "\xE2\x94\x9C\xE2\x94\x80\xE2\x94\x80 ", head, tail);
 			maxc = 24;
 			cpu = kd->cpu; mem_mb = kd->mem_mb; disk_bps = kd->disk_bps; gpu_pct = kd->gpu_pct; gpu_mb = kd->gpu_mb;
 			mem_pct = g->mem_mb ? g->mem_pct * (double)kd->mem_mb / (double)g->mem_mb : 0;
 			disk_pct = g->disk_bps > 0 ? g->disk_pct * kd->disk_bps / g->disk_bps : 0;
 		} else {
-			const char *glyph = expandable(P, g) ? (is_expanded(P, g->name) ? "\xE2\x96\xBE " : "\xE2\x96\xB8 ") : "  ";
+			const char *glyph = expandable(P, g) ? "\xE2\x96\xBE " : "  ";
 			if (g->count > 1 && P->mode != 1) snprintf(label, sizeof label, "%s%s (%d)", glyph, g->name, g->count);
 			else snprintf(label, sizeof label, "%s%s", glyph, g->name);
 			maxc = 24;
@@ -1788,7 +1777,7 @@ static void draw_proc(const App *A, int x, int y, int w, int h)
 		char scroll[48] = "", hint[400];
 		if (total > visible) snprintf(scroll, sizeof scroll, " [%d-%d/%d]", start + 1, end, total);
 		snprintf(hint, sizeof hint,
-		         "\xE2\x86\x91/\xE2\x86\x93 select%s  \xE2\x86\x90\xE2\x86\x92 mode  space: mark  enter: expand  k: kill  /: command  +/-: refresh %dms  r: record  a: anonymous",
+		         "\xE2\x86\x91/\xE2\x86\x93 select%s  \xE2\x86\x90\xE2\x86\x92 mode  space: mark  k: kill  /: command  +/-: refresh %dms  r: record  a: anonymous",
 		         scroll, A->interval_ms);
 		col = 0;
 		span(&r, row++, &col, C_ACCENT, 0, hint);
