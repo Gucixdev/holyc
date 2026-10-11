@@ -34,7 +34,7 @@ A real frame from `gtop --snapshot 118 22 --keys a -f systemd` (anonymous mode, 
 
 ```sh
 make            # ./gtop
-make test       # tests/run: 37 checks against the live system
+make test       # tests/run: 39 checks against the live system
 sudo make install   # PREFIX=/usr/local: bin/gtop and share/gtop/commands/
 ```
 
@@ -53,10 +53,13 @@ source. Needs `-lm`.
   a partition tree with mount points and usage.
 - **NET**: aggregate rate graph; per interface: rx/tx, link speed bar (or a graph when the speed is
   unknown), addresses (IPv4/IPv6, link-local filtered).
-- **PROC**: three views, switched with left/right: `app` (grouped by program), `raw` (one row per
-  pid) and `user/system` (kernel threads in their own section). Columns:
-  `NAME CPU% MEM% MEM DISK% DISK [GPU% GPU] ACTIVITY`. ACTIVITY is a CPU graph of the last two
-  minutes that fills all the width left over. Rows of processes that just exited stay for 3
+- **PROC**: two views, switched with left/right.
+  - `clean`: user programs grouped by name, kernel threads left out. This is the everyday view.
+  - `raw`: every process, one row per pid, kernel threads included (all the `kworker`, `ksoftirqd`,
+    `rcu_*`, `migration/N` rows live here).
+
+  Columns: `NAME CPU% MEM% MEM DISK% DISK [GPU% GPU] ACTIVITY`. ACTIVITY is a CPU graph of the last
+  two minutes that fills all the width left over. Rows of processes that just exited stay for 3
   seconds in grey. Order only re-sorts every 4 seconds so rows do not jump.
 - **Process tree**: a program with several processes is one row, `▸ firefox (12)`, with the sums.
   Enter opens it into a tree, one row per process, biggest CPU first:
@@ -76,7 +79,7 @@ source. Needs `-lm`.
 | key | action |
 |---|---|
 | `q` | quit |
-| left / right | previous / next PROC view |
+| left / right | switch PROC view: clean / raw |
 | up / down | move the cursor (dividers are skipped) |
 | space | mark / unmark the row (several rows can be marked; a child row marks just that process) |
 | Enter | open / close the process tree of the program under the cursor |

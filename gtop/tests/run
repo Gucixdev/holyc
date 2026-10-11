@@ -16,14 +16,16 @@ $BIN --bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok || bad "unknown option exits 2"
 $BIN </dev/null >/dev/null 2>&1; [ $? -eq 1 ] && ok || bad "no terminal exits 1"
 
 S=$($BIN --snapshot 130 40)
-for w in CPU RAM DISK NET "PROC \[app\]" NAME "CPU%" ACTIVITY; do has "frame has $w" "$S" "$w"; done
+for w in CPU RAM DISK NET "PROC \[clean\]" NAME "CPU%" ACTIVITY; do has "frame has $w" "$S" "$w"; done
 [ "$(printf '%s\n' "$S" | wc -l)" -eq 40 ] && ok || bad "frame has 40 lines"
 S=$($BIN --snapshot 60 20); has "small terminal" "$S" PROC
 S=$($BIN --snapshot 30 12); has "tiny terminal does not crash" "$S" CPU
 
 S=$($BIN --snapshot 130 40 --keys R);  has "raw view lists [pid]" "$S" '\[[0-9][0-9]*\]'
-S=$($BIN --snapshot 130 40 -f systemd --keys RR); has "user/system view dividers" "$S" "system/kernel"
-S=$($BIN --snapshot 130 40 --keys L);  has "left wraps to user/system" "$S" "PROC \[user/system\]"
+S=$($BIN --snapshot 130 40 --keys L);  has "left switches to the raw view" "$S" "PROC \[raw\]"
+S=$($BIN --snapshot 130 40 --keys LL); has "two switches come back to clean" "$S" "PROC \[clean\]"
+S=$($BIN --snapshot 200 70 -f kthreadd); printf "%s\n" "$S" | grep -q "kthreadd" && bad "clean view hides kernel threads" || ok
+S=$($BIN --snapshot 200 70 -f kthreadd --keys R); has "raw view shows kernel threads" "$S" "kthreadd \[2\]"
 S=$($BIN --snapshot 130 40 --keys a);  has "anonymous hides addresses" "$S" "hidden - anonymous mode"
 S=$($BIN --snapshot 130 40 -f systemd --keys a);  has "anonymous indicator" "$S" "anonymous mode - IPs and disk model"
 S=$($BIN --snapshot 130 40 --keys '+++'); has "interval keys" "$S" "refresh 1300ms"

@@ -10,7 +10,7 @@
  *   TPU/NPU  boxes only when the hardware exists
  *   DISK   aggregate usage bar and graph, per device: usage bar, activity graph, partition tree
  *   NET    aggregate graph, per interface: rates, link speed bar or graph, addresses
- *   PROC   three views (app / raw / user+system), mark, kill, command palette, ghost rows
+ *   PROC   two views (clean / raw), process tree, mark, kill, command palette, ghost rows
  *
  * keys:  q quit   left/right view   up/down move   space mark   k SIGKILL marked (or the row)
  *        /  command palette (runs commands/<name> with the marked pids as arguments)
@@ -870,7 +870,7 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 	while ((de = readdir(d))) {
 		char path[64], buf[4096], *rp, *lp;
 		Ent e;
-		int pid, idx = 0;
+		int pid, idx = 0, ppid = 0;
 		unsigned long long ut = 0, st = 0;
 		char *tok, *sv = NULL, *copy;
 		if (!isdigit((unsigned char)de->d_name[0])) continue;
@@ -891,6 +891,7 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 		/* fields after ") ": index 0 = state; utime = 11, stime = 12 */
 		copy = strdup(rp + 2);
 		for (tok = strtok_r(copy, " ", &sv); tok; tok = strtok_r(NULL, " ", &sv), idx++) {
+			if (idx == 1) ppid = atoi(tok);
 			if (idx == 11) ut = strtoull(tok, NULL, 10);
 			if (idx == 12) { st = strtoull(tok, NULL, 10); break; }
 		}
@@ -910,12 +911,9 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 			if (v) wb = strtoull(v + 12, NULL, 10);
 			e.io = rb + wb;
 		}
-		{
-			char exe[64], tgt[8];
-			snprintf(exe, sizeof exe, "/proc/%d/exe", pid);
-			/* a kernel thread has no exe link; a long target only truncates into tgt, which is fine */
-			e.kernel = readlink(exe, tgt, sizeof tgt) < 0;
-		}
+		/* kernel threads are children of kthreadd (pid 2); /proc/<pid>/exe cannot tell them apart from
+		 * other users' processes without root, because both fail to resolve */
+		e.kernel = (pid == 2 || ppid == 2);
 		if (P->filter[0] && !strstr(e.comm, P->filter)) continue;
 		if (n == cap) { cap = cap ? cap * 2 : 512; cur = realloc(cur, (size_t)cap * sizeof(Ent)); }
 		cur[n++] = e;
@@ -931,18 +929,10 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 	}
 	nvidia_pmon(cur, n);
 
-	if (P->mode == 0) by_name(&groups, cur, n, -1, mem_total, total_disk_bps);
-	else if (P->mode == 1) raw_groups(&groups, cur, n, mem_total, total_disk_bps);
-	else {
-		Group *dv = gv_push(&groups);
-		snprintf(dv->name, sizeof dv->name, "\xE2\x94\x80\xE2\x94\x80 user \xE2\x94\x80\xE2\x94\x80");
-		dv->divider = 1;
-		by_name(&groups, cur, n, 0, mem_total, total_disk_bps);
-		dv = gv_push(&groups);
-		snprintf(dv->name, sizeof dv->name, "\xE2\x94\x80\xE2\x94\x80 system/kernel \xE2\x94\x80\xE2\x94\x80");
-		dv->divider = 1;
-		by_name(&groups, cur, n, 1, mem_total, total_disk_bps);
-	}
+	/* two views: clean = user programs grouped by name (kernel threads left out), raw = every
+	 * process one row per pid, kernel threads included */
+	if (P->mode == 0) by_name(&groups, cur, n, 0, mem_total, total_disk_bps);
+	else raw_groups(&groups, cur, n, mem_total, total_disk_bps);
 
 	/* ghosts: rows of the previous display that are gone now */
 	for (i = 0; i < P->ng; i++) {
@@ -990,12 +980,10 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 	} else {
 		P->last_sort = t;
 	}
-	if (P->mode != 2) {
-		for (i = 0; i < P->nghost; i++) {
-			Group *gg = gv_push(&groups);
-			*gg = group_clone(&P->ghosts[i].g);
-			gg->ghost = 1;
-		}
+	for (i = 0; i < P->nghost; i++) {
+		Group *gg = gv_push(&groups);
+		*gg = group_clone(&P->ghosts[i].g);
+		gg->ghost = 1;
 	}
 
 	for (i = 0; i < P->ng; i++) group_free(&P->g[i]);
@@ -1292,8 +1280,8 @@ static void handle_key(App *A, int k)
 	}
 	switch (k) {
 	case 'q': A->quit = 1; break;
-	case K_LEFT: P->mode = (P->mode + 2) % 3; P->cursor = 0; P->nmarked = 0; build_rows(P); break;
-	case K_RIGHT: P->mode = (P->mode + 1) % 3; P->cursor = 0; P->nmarked = 0; build_rows(P); break;
+	case K_LEFT: P->mode = (P->mode + 1) % 2; P->cursor = 0; P->nmarked = 0; build_rows(P); break;
+	case K_RIGHT: P->mode = (P->mode + 1) % 2; P->cursor = 0; P->nmarked = 0; build_rows(P); break;
 	case K_UP: cursor_move(P, -1); break;
 	case K_DOWN: cursor_move(P, 1); break;
 	case ' ': toggle_mark(P); break;
@@ -1725,7 +1713,7 @@ static void draw_net(const App *A, int x, int y, int w, int h)
 static void draw_proc(const App *A, int x, int y, int w, int h)
 {
 	const Procs *P = &A->procs;
-	static const char *labels[] = {"app", "raw", "user/system"};
+	static const char *labels[] = {"clean", "raw"};
 	char title[64], hdr[256];
 	Rect r;
 	int show_gpu = A->gpu.found, visible = h - 4, total = P->nrows, start = 0, end, i, row = 0, col;
@@ -1972,7 +1960,7 @@ static int key_from_char(char c)
 static void usage(void)
 {
 	puts("usage: gtop [-f SUBSTR] [--snapshot [W H]] [--keys KEYS]\n"
-	     "  q quit   left/right view (app / raw / user+system)   up/down move   space mark\n"
+	     "  q quit   left/right view (clean / raw)   up/down move   space mark\n"
 	     "  k kill (SIGKILL) marked or current row   / command palette   r record to CSV\n"
 	     "  a anonymous mode   +/- refresh interval (100 ms .. 5 s)\n"
 	     "  --snapshot  draw one frame as plain text and exit\n"
