@@ -1,6 +1,7 @@
 /* gtop - system monitor TUI for Linux. C99 + POSIX.1-2008, libc only.
  *
- * A 1:1 port of the Rust/ratatui version: same panels, same layout, same numbers, same keys.
+ * Started as a 1:1 port of a Rust/ratatui version (same panels, layout, numbers, keys); the process
+ * tree and the PROC columns came after.
  * Reads /proc and /sys directly (no sysinfo-style library).
  *
  *   CPU    aggregate bar (user/sys/iowait), trend graph, per-core %, frequency, temperature

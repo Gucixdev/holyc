@@ -111,5 +111,6 @@ literally; a refresh happens after them), `-f` keeps only processes whose name c
 
 ## History
 
-This is a port of an earlier Rust/ratatui version (`bsc`) with the same panels, layout, numbers and
-keys; the C version is a single file, `gtop.c`.
+gtop started as a 1:1 port of an earlier Rust/ratatui version (`bsc`) with the same panels, layout,
+numbers and keys. The process tree and the reduced PROC columns were added in C afterwards. It is
+a single file, `gtop.c`.

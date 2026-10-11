@@ -100,7 +100,7 @@ A system monitor for the terminal in C99, libc and libm only, reading `/proc` an
 directly: CPU with per-core frequency and temperature, RAM split into used/zram/cache/swap, GPU
 (NVIDIA, amdgpu, Intel), disks with a partition tree, network, and a process table with three
 views, a collapsible process tree per program, multi-select, kill and a command palette. `gtop --snapshot` prints a frame as plain text,
-which the 37 checks in `tests/run` use. It is a 1:1 port of an earlier Rust/ratatui version.
+which the 37 checks in `tests/run` use. It started as a 1:1 port of an earlier Rust/ratatui version; the process tree and the new PROC columns came after.
 
 ### The Wayland desktop: dwl, dmenu, lemonbar, nnn
 Forks kept as `git subtree`s with the full upstream history, so `git log <dir>/` shows who
