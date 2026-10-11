@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Buduje ten fork (branch Gucixdev-hl-toggle) i instaluje do ~/.local/bin/nnn
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+make O_NORL=1 -j"$(nproc)"
+install -m 755 nnn "$HOME/.local/bin/nnn"
+echo "Zainstalowano: $HOME/.local/bin/nnn ($("$HOME/.local/bin/nnn" -V))"

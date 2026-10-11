@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# nnn opener - numeryczne TUI menu do otwierania plikow
+###todo 
+#obsluga dokumentów, 3D stl/fbx/gltf/material, filmy, wav, 
+#obsluga vlc,  
+#dynamiczne sprawdzanie dostepnych programów 
+
+
+file="$1"
+mime=$(file --mime-type -b "$file" 2>/dev/null)
+ext="${file##*.}"
+ext="${ext,,}"
+
+
+
+case "$mime" in
+    image/*)
+        echo ""
+        echo "  Obrazek: $(basename "$file")"
+        echo ""
+        PS3="  Wybierz [1-4]: "
+        select opt in "GIMP" "Krita" "imv (podglad)" "Anuluj"; do
+            case $REPLY in
+                1) gimp "$file" & ;;
+                2) krita "$file" & ;;
+                3) imv "$file" ;;
+                4) ;;
+                *) echo "  Zly wybor" ; continue ;;
+            esac
+            break
+        done
+        ;;
+
+    video/*|audio/*)
+        mpv "$file"
+        ;;
+
+    application/pdf)
+        echo ""
+        echo "  PDF: $(basename "$file")"
+        echo ""
+        PS3="  Wybierz [1-3]: "
+        select opt in "Zathura" "Firefox" "Anuluj"; do
+            case $REPLY in
+                1) zathura "$file" & ;;
+                2) firefox "$file" & ;;
+                3) ;;
+                *) echo "  Zly wybor" ; continue ;;
+            esac
+            break
+        done
+        ;;
+
+    application/zip|application/x-tar|application/gzip|application/x-bzip2|\
+    application/x-xz|application/x-7z-compressed|application/x-rar|application/zstd)
+        echo ""
+        echo "  Archiwum: $(basename "$file")"
+        echo ""
+        PS3="  Wybierz [1-3]: "
+        select opt in "Podglad zawartosci" "Rozpakuj tutaj" "Anuluj"; do
+            case $REPLY in
+                1)
+                    case "$ext" in
+                        zip)          unzip -l "$file" | less ;;
+                        tar)          tar tf "$file" | less ;;
+                        gz|tgz)       tar tzf "$file" | less ;;
+                        bz2|tbz2)     tar tjf "$file" | less ;;
+                        xz|txz)       tar tJf "$file" | less ;;
+                        7z)           7z l "$file" | less ;;
+                        zst)          zstd -l "$file" | less ;;
+                        *)            tar tf "$file" 2>/dev/null | less ;;
+                    esac
+                    ;;
+                2)
+                    dir="${file%.*}"
+                    mkdir -p "$dir"
+                    case "$ext" in
+                        zip)       unzip "$file" -d "$dir" ;;
+                        tar)       tar xf "$file" -C "$dir" ;;
+                        gz|tgz)    tar xzf "$file" -C "$dir" ;;
+                        bz2|tbz2)  tar xjf "$file" -C "$dir" ;;
+                        xz|txz)    tar xJf "$file" -C "$dir" ;;
+                        7z)        7z x "$file" -o"$dir" ;;
+                        zst)       zstd -d "$file" -o "$dir/$(basename "${file%.zst}")" ;;
+                        *)         tar xf "$file" -C "$dir" ;;
+                    esac
+                    echo "  Rozpakowano do: $dir"
+                    read -r -p "  [Enter aby kontynuowac]"
+                    ;;
+                3) ;;
+                *) echo "  Zly wybor" ; continue ;;
+            esac
+            break
+        done
+        ;;
+
+    text/*|application/json|application/javascript|application/x-sh|\
+    application/x-shellscript|inode/x-empty)
+        emacs "$file" &
+        ;;
+
+    *)
+        if file "$file" | grep -q -i "text\|script\|source"; then
+            emacs "$file" &
+        else
+            echo ""
+            echo "  Plik: $(basename "$file") [$mime]"
+            echo ""
+            PS3="  Wybierz [1-3]: "
+            select opt in "Emacs (edytor)" "mpv" "Anuluj"; do
+                case $REPLY in
+                    1) emacs "$file" & ;;
+                    2) mpv "$file" ;;
+                    3) ;;
+                    *) echo "  Zly wybor" ; continue ;;
+                esac
+                break
+            done
+        fi
+        ;;
+esac
