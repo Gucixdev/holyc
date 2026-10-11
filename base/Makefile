@@ -1,8 +1,8 @@
-# Header-only library: tests and benchmarks compile against include/ and src/.
+# Header-only library: tests and benchmarks compile against src/.
 #   make test      build and run every tests/test_*.c (parallel)
 #   make bench     build and run the benchmarks in bench/ (each compares against malloc or a naive loop)
 CC ?= cc
-FLAGS = -std=gnu11 -O2 -w -D_GNU_SOURCE -Iinclude -Iinclude/hash -Isrc -Ibench -Itests
+FLAGS = -std=gnu11 -O2 -w -D_GNU_SOURCE -Isrc -Isrc/hash -Ibench -Itests
 
 test:
 	sh tests/run

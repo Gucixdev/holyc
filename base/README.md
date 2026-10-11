@@ -2,12 +2,11 @@
 
 A library of single-file C headers: types, allocators, queues and jobs, data structures, math,
 codecs, a few crypto primitives and the utilities that keep coming up. It holds the
-80 modules that proved useful on their own, each with a test. `lazytui/` (a terminal UI
-library) lives here too.
+80 modules that proved useful on their own, each with a test.
 
 Everything is a header you include. The implementation of a module is pulled in by defining its
 `<NAME>_IMPLEMENTATION` macro in exactly one translation unit (the stb convention); a few
-modules also ship a `.c` file in `src/`.
+modules also ship a `.c` file next to the header.
 
 ```c
 #define ARENA_SLAB_IMPLEMENTATION     // once
@@ -21,18 +20,17 @@ void *p = hc_arena_alloc(a, 256);     // a pointer add; freed all at once
 ## Layout
 
 ```
-include/      the headers (include/hash/ holds the hash tables and hash functions)
-src/          the few modules that are a .c file (pool_alloc.c, flags.c, ...)
+src/          everything: the headers, src/hash/ (hash tables and hash functions) and the
+              two modules that are a .c file (pool_alloc.c, flags.c)
 tests/        one program per module: tests/test_NAME.c
 bench/        benchmarks
-lazytui/      terminal UI library (compiled, own Makefile and tests)
 THIRD_PARTY/  licence texts of the code some headers are ported from, see THIRD_PARTY.md
 ```
 
 `make test` (or `sh tests/run [filter]`) builds and runs every test on its own, in parallel.
 `make bench` runs `bench/`: the arena against glibc malloc, the pool against malloc/free, the job
 pool against spawning a thread per job, the hash table and Morton encoding against naive versions.
-Add `-Iinclude -Iinclude/hash -Isrc` to compile your own code against it.
+Add `-Isrc -Isrc/hash` to compile your own code against it.
 
 ## What is in it
 
@@ -58,12 +56,6 @@ lock-free single producer/consumer; `event_queue` carries ticked events for dete
 **I/O, text and utilities**: `io`, `stream`, `serialize`, `print`, `log`, `args`, `flags`, `str`, `utf8`, `text_ops`, `path`, `exe_path`, `vfs`, `config`, `date_util`, `time_util`, `units`, `fuzzy_match`, `uuid4`, `xmacro`.
 
 **Network**: `http`, `http_server`, `net`.
-
-## lazytui
-
-`lazytui/` is a terminal UI library on plain ANSI escapes: Cassowary layout, spring animation,
-a diff-rendered canvas, widgets (progress and pacman bars, charts, lists, trees, pickers, a world
-map), themes and mouse input. Build and test it from its own directory (`make`, `make test`).
 
 ## Design rules
 

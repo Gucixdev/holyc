@@ -26,11 +26,12 @@ otherwise plain copies - see each entry):
   `sudo`, `tgates`, `tmux` helpers) (plain copy - same reason as `fzf`).
 
 
-- **base** — the most useful single-file C libraries in one place (`include/`): types (`Option`, `Result`,
+- **base** — the most useful single-file C libraries in one place (`src/`): types (`Option`, `Result`,
   `TRY`, `Future`, `DEFER`), arena, slab and pool allocators, queues and jobs, data structures, math,
   codecs, crypto and utilities, 97 tests and benchmarks. Ported code is credited in
-  `base/THIRD_PARTY.md`. **`base/lazytui`** is the terminal UI library (Cassowary layout, spring
-  animation, diff-rendered canvas, widgets, mouse).
+  `base/THIRD_PARTY.md`. 
+- **lazytui** — terminal UI library in C on plain ANSI escapes: Cassowary layout, spring
+  animation, diff-rendered canvas, widgets, mouse. Own Makefile, tests and demo.
 - **ragdb** — an embedded note/vector database in C89: IVF and HNSW indexes with bit-packed
   quantizers, a hybrid lexical + vector search, crash-safe on-disk format, an optional agent-memory
   layer. Self-tests, fuzzers and crash tests in `./run`; benchmark data is not included (see its README).
