@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define STRING_VIEW_IMPLEMENTATION
 #define TEXT_OPS_IMPLEMENTATION
-#include "str.h"
-#include "text_ops.h"
+#include "util/str.h"
+#include "util/text_ops.h"
 
 static String_View sv_(const char *s) { return sv_from_cstr(s); }
 

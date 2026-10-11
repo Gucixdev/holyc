@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define EVENT_QUEUE_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "event_queue.h"
+#include "alloc/arena_alloc.h"
+#include "sync/event_queue.h"
 
 int main(void)
 {

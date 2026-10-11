@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define INI_DEC_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "ini_dec.h"
+#include "alloc/arena_alloc.h"
+#include "codec/ini_dec.h"
 
 #include <stdio.h>
 #include <string.h>

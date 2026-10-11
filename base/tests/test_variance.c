@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define MEAN_IMPLEMENTATION
 #define VARIANCE_IMPLEMENTATION
-#include "mean.h"
-#include "variance.h"
+#include "math/mean.h"
+#include "math/variance.h"
 
 int main(void)
 {

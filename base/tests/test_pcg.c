@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define PCG_IMPLEMENTATION
-#include "pcg.h"
+#include "math/pcg.h"
 
 int main(void)
 {

@@ -2,8 +2,8 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define DEFLATE_IMPLEMENTATION
 #define PNG_DEC_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "png_dec.h"
+#include "alloc/arena_alloc.h"
+#include "codec/png_dec.h"
 #include "png_test_data.h"
 
 /* pixel formulas mirror exactly what generated tests/png_test_data.h (see

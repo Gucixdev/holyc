@@ -2,9 +2,9 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define STRING_VIEW_IMPLEMENTATION
 #define JSON_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "str.h"
-#include "json.h"
+#include "alloc/arena_alloc.h"
+#include "util/str.h"
+#include "codec/json.h"
 #include <string.h>
 
 static i32 sv_eq_cstr_(String_View sv, const char *expected)

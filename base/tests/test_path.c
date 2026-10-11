@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define PATH_IMPLEMENTATION
-#include "path.h"
+#include "util/path.h"
 
 #include <string.h>
 

@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define MARMUR_IMPLEMENTATION
-#include "marmur.h"
+#include "data/hash/marmur.h"
 #include <string.h>
 
 /* every expected value below was cross-checked against the real

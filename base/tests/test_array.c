@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define ARRAY_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "array.h"
+#include "alloc/arena_alloc.h"
+#include "data/array.h"
 
 int main(void)
 {

@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define PRIORITY_QUEUE_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "priority_queue.h"
+#include "alloc/arena_alloc.h"
+#include "sync/priority_queue.h"
 
 int main(void)
 {

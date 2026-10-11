@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define DATE_UTIL_IMPLEMENTATION
-#include "date_util.h"
+#include "util/date_util.h"
 
 int main(void)
 {

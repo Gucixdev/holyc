@@ -4,11 +4,11 @@
 #define SOCKET_IMPLEMENTATION
 #define HTTP_IMPLEMENTATION
 #define HTTP_SERVER_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "str.h"
-#include "socket.h"
-#include "http.h"
-#include "http_server.h"
+#include "alloc/arena_alloc.h"
+#include "util/str.h"
+#include "net/socket.h"
+#include "net/http.h"
+#include "net/http_server.h"
 #include <pthread.h>
 #include <string.h>
 

@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define ACTION_QUEUE_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "action_queue.h"
+#include "alloc/arena_alloc.h"
+#include "sync/action_queue.h"
 
 static i32 counter_ = 0;
 

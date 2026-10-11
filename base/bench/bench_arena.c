@@ -1,7 +1,7 @@
 #define PRINT_IMPLEMENTATION
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "print.h"
-#include "arena_alloc.h"
+#include "util/print.h"
+#include "alloc/arena_alloc.h"
 #include "bench_util.h"
 #include <stdlib.h>
 

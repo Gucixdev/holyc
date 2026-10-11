@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define RING_BUFFER_IMPLEMENTATION
-#include "ring_buffer.h"
+#include "sync/ring_buffer.h"
 #include <pthread.h>
 
 #define CAP 16

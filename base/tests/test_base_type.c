@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define BASE_TYPE_IMPLEMENTATION
-#include "base.h"
+#include "types/base.h"
 
 /* a real, file-scope static_assert - if this ever failed to compile,
  * that failure IS the test (a runtime TEST_CHECK can't exercise a

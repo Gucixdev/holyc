@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define POOL_ALLOC_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "pool_alloc.c"
+#include "alloc/arena_alloc.h"
+#include "alloc/pool_alloc.c"
 
 int main(void)
 {

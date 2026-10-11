@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define TREE_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "tree.h"
+#include "alloc/arena_alloc.h"
+#include "data/tree.h"
 
 static i32 collect_(Tree_Node *node, void *ctx)
 {

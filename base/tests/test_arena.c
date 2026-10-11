@@ -7,7 +7,7 @@
  * backend, not a different one swapped in just to make the test work. */
 #define ARENA_REGION_DEFAULT_CAPACITY 64
 #define ARENA_FLAT_RESERVE_BYTES 512
-#include "arena_alloc.h"
+#include "alloc/arena_alloc.h"
 
 typedef struct { i32 *items; size_t count; size_t capacity; } I32_DA_;
 

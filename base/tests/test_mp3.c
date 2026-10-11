@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define MP3_DEC_IMPLEMENTATION
-#include "mp3_dec.h"
+#include "codec/mp3_dec.h"
 #include "mp3_fixture.h"
 #include <string.h>
 

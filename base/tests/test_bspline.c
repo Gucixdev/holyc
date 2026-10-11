@@ -1,9 +1,9 @@
 #include "test_common.h"
 #define VECTOR_IMPLEMENTATION
 #define BSPLINE_IMPLEMENTATION
-#include "base.h"
-#include "mathx.h"
-#include "curve.h"
+#include "types/base.h"
+#include "math/mathx.h"
+#include "math/curve.h"
 
 int main(void)
 {

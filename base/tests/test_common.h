@@ -13,7 +13,7 @@
  * SPECIFIC to it: the module(s) it's testing, and (for the ~half that
  * need it) arena_alloc.h. test_util.h already includes print.h itself,
  * so defining PRINT_IMPLEMENTATION before including it is sufficient -
- * no separate #include "base.h" needed. */
+ * no separate #include "types/base.h" needed. */
 
 #define PRINT_IMPLEMENTATION
 #include "test_util.h"

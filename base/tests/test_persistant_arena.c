@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define PERSISTANT_ARENA_IMPLEMENTATION
-#include "persistant_arena.h"
+#include "alloc/persistant_arena.h"
 #include <string.h>
 #include <unistd.h>
 

@@ -1,9 +1,9 @@
 #define PRINT_IMPLEMENTATION
 #define ARENA_ALLOC_IMPLEMENTATION
 #define FGJOB_IMPLEMENTATION
-#include "print.h"
-#include "arena_alloc.h"
-#include "fine_grained.h"
+#include "util/print.h"
+#include "alloc/arena_alloc.h"
+#include "sync/fine_grained.h"
 #include "bench_util.h"
 
 static void noop_job(i64 id, void *ctx) { (void)id; (void)ctx; }

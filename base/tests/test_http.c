@@ -3,10 +3,10 @@
 #define STRING_VIEW_IMPLEMENTATION
 #define SOCKET_IMPLEMENTATION
 #define HTTP_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "str.h"
-#include "socket.h"
-#include "http.h"
+#include "alloc/arena_alloc.h"
+#include "util/str.h"
+#include "net/socket.h"
+#include "net/http.h"
 #include <pthread.h>
 
 #define TEST_PORT 18842

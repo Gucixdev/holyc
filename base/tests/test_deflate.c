@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define DEFLATE_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "deflate.h"
+#include "alloc/arena_alloc.h"
+#include "codec/deflate.h"
 #include "deflate_test_data.h"
 #include <string.h>
 

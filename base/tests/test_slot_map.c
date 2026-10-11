@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define SLOT_MAP_IMPLEMENTATION
-#include "slot_map.h"
+#include "data/slot_map.h"
 
 int main(void)
 {

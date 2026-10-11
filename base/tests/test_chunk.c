@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "arena_alloc.h"
+#include "alloc/arena_alloc.h"
 #define CHUNK_IMPLEMENTATION
-#include "chunk.h"
+#include "alloc/chunk.h"
 
 int main(void)
 {

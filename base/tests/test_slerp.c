@@ -3,11 +3,11 @@
 #define TRIGONOMETRY_IMPLEMENTATION
 #define LINEAR_ALGEBRA_IMPLEMENTATION
 #define SLERP_IMPLEMENTATION
-#include "base.h"
-#include "mathx.h"
-#include "trigonometry.h"
-#include "linear_algebra.h"
-#include "easing.h"
+#include "types/base.h"
+#include "math/mathx.h"
+#include "math/trigonometry.h"
+#include "math/linear_algebra.h"
+#include "math/easing.h"
 #include <math.h>
 
 static i32 f32_close(f32 a, f32 b, f32 eps)

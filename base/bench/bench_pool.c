@@ -1,9 +1,9 @@
 #define PRINT_IMPLEMENTATION
 #define ARENA_ALLOC_IMPLEMENTATION
 #define POOL_ALLOC_IMPLEMENTATION
-#include "print.h"
-#include "arena_alloc.h"
-#include "pool_alloc.c"
+#include "util/print.h"
+#include "alloc/arena_alloc.h"
+#include "alloc/pool_alloc.c"
 #include "bench_util.h"
 #include <stdlib.h>
 

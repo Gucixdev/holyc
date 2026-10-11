@@ -6,12 +6,12 @@ codecs, a few crypto primitives and the utilities that keep coming up. It holds 
 
 Everything is a header you include. The implementation of a module is pulled in by defining its
 `<NAME>_IMPLEMENTATION` macro in exactly one translation unit (the stb convention); a few
-modules also ship a `.c` file next to the header.
+modules also ship a `.c` file next to the header (`alloc/pool_alloc.c`, `util/flags.c`).
 
 ```c
 #define ARENA_SLAB_IMPLEMENTATION     // once
 #define MEM_HOOK_IMPLEMENTATION       // once
-#include "arena_slab.h"
+#include "alloc/arena_slab.h"
 
 hc_arena *a = hc_arena_new(1 << 20);
 void *p = hc_arena_alloc(a, 256);     // a pointer add; freed all at once
@@ -20,8 +20,15 @@ void *p = hc_arena_alloc(a, 256);     // a pointer add; freed all at once
 ## Layout
 
 ```
-src/          everything: the headers, src/hash/ (hash tables and hash functions) and the
-              two modules that are a .c file (pool_alloc.c, flags.c)
+src/types/    types (Option, Result, TRY, Future, DEFER), base, contracts, constant, xmacro
+src/alloc/    arena_alloc, arena_slab, mem_hook, pool_alloc, persistant_*, ref_count, chunk
+src/sync/     job pool, queues, ring buffer, coroutines, fsm
+src/data/     array, list, tree, slot_map, hex; data/hash/ has the hash tables and functions
+src/math/     linear algebra, trig, curves, noise, rng, statistics
+src/codec/    deflate, png, jpeg, qoi, wav, mp3, json, csv, tar, base64, serialize
+src/crypto/   aes256, sha256
+src/net/      http, http_server, net, socket, pipe
+src/util/     io, streams, print, log, args, flags, str, utf8, path, vfs, time, units, uuid...
 tests/        one program per module: tests/test_NAME.c
 bench/        benchmarks
 THIRD_PARTY/  licence texts of the code some headers are ported from, see THIRD_PARTY.md
@@ -30,7 +37,7 @@ THIRD_PARTY/  licence texts of the code some headers are ported from, see THIRD_
 `make test` (or `sh tests/run [filter]`) builds and runs every test on its own, in parallel.
 `make bench` runs `bench/`: the arena against glibc malloc, the pool against malloc/free, the job
 pool against spawning a thread per job, the hash table and Morton encoding against naive versions.
-Add `-Isrc -Isrc/hash` to compile your own code against it.
+Compile with `-Isrc` and include as `"alloc/arena_slab.h"`, `"types/types.h"`, ...
 
 ## What is in it
 

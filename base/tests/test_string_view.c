@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define STRING_VIEW_IMPLEMENTATION
-#include "str.h"
+#include "util/str.h"
 
 static i32 is_digit_(char c) { return c >= '0' && c <= '9'; }
 

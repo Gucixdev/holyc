@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define EXE_PATH_IMPLEMENTATION
-#include "exe_path.h"
+#include "util/exe_path.h"
 
 #include <sys/stat.h>
 

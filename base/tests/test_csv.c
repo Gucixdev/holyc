@@ -2,9 +2,9 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define STRING_VIEW_IMPLEMENTATION
 #define CSV_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "str.h"
-#include "csv.h"
+#include "alloc/arena_alloc.h"
+#include "util/str.h"
+#include "codec/csv.h"
 #include <string.h>
 
 static i32 field_eq_(String_View sv, const char *expected)

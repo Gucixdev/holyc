@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define BASE64_ENCODE_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "base64.h"
+#include "alloc/arena_alloc.h"
+#include "codec/base64.h"
 #include <string.h>
 
 static i32 check_vec_(Arena *a, const char *input, const char *expected)

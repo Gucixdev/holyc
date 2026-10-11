@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define TINYXXHASH_IMPLEMENTATION
-#include "tinyxxhash.h"
+#include "data/hash/tinyxxhash.h"
 #include <string.h>
 
 /* every expected value below was cross-checked against TWO independent

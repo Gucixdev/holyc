@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define HEX_IMPLEMENTATION
-#include "hex.h"
+#include "data/hex.h"
 
 int main(void)
 {

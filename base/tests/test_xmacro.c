@@ -1,5 +1,5 @@
 #include "test_common.h"
-#include "xmacro.h"
+#include "types/xmacro.h"
 #include <string.h>
 
 /* the one canonical list - everything below is generated from this,

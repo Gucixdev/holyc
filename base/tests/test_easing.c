@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define EASING_IMPLEMENTATION
-#include "easing.h"
+#include "math/easing.h"
 
 int main(void)
 {

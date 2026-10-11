@@ -2,9 +2,9 @@
 #define BASE_TYPE_IMPLEMENTATION
 #define BIT_IMPLEMENTATION
 #define MORTON_IMPLEMENTATION
-#include "print.h"
-#include "base.h"
-#include "curve.h"
+#include "util/print.h"
+#include "types/base.h"
+#include "math/curve.h"
 #include "bench_util.h"
 
 /* morton.h's real encode uses the "spread bits by magic-number AND/shift"

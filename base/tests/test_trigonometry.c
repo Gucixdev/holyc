@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define TRIGONOMETRY_IMPLEMENTATION
-#include "trigonometry.h"
+#include "math/trigonometry.h"
 
 int main(void)
 {

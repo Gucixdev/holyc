@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "arena_alloc.h"
+#include "alloc/arena_alloc.h"
 #define PIPE_IMPLEMENTATION
-#include "pipe.h"
+#include "net/pipe.h"
 
 int main(void)
 {

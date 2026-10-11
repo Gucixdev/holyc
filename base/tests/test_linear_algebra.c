@@ -3,10 +3,10 @@
 #define TRIGONOMETRY_IMPLEMENTATION
 #define QUAT_IMPLEMENTATION
 #define MATRIX_IMPLEMENTATION
-#include "base.h"
-#include "mathx.h"
-#include "trigonometry.h"
-#include "linear_algebra.h"
+#include "types/base.h"
+#include "math/mathx.h"
+#include "math/trigonometry.h"
+#include "math/linear_algebra.h"
 
 static i32 f32_close(f32 a, f32 b, f32 eps)
 {

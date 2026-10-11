@@ -2,8 +2,8 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define BASE64_ENCODE_IMPLEMENTATION
 #define BASE64_DECODE_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "base64.h"
+#include "alloc/arena_alloc.h"
+#include "codec/base64.h"
 #include <string.h>
 
 static i32 decode_matches_(Arena *a, const char *b64, const char *expected)

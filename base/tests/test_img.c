@@ -4,8 +4,8 @@
 #define PNG_DEC_IMPLEMENTATION
 #define JPEG_DEC_IMPLEMENTATION
 #define IMG_IMPLEMENTATION
-#include "arena_alloc.h"
-#include "img.h"
+#include "alloc/arena_alloc.h"
+#include "codec/img.h"
 #include <string.h>
 
 /* writes a minimal, valid uncompressed 24-bit BI_RGB BMP (BITMAPFILEHEADER
