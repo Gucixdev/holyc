@@ -1,0 +1,5 @@
+#!/bin/sh
+# run - builds lazytui (in parallel) and starts the demo (needs a terminal). No arguments. Tests: `make test` (slow: fuzzing), `make asan`.
+cd "$(dirname "$0")" || exit 1
+make -s -j"$(nproc 2>/dev/null || echo 4)" all || exit 1
+exec ./examples/demo
