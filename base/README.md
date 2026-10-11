@@ -19,10 +19,15 @@ modules also ship a `.c` file in `src/`.
 include/      the headers (include/hash/ holds the hash tables and hash functions)
 src/          the few modules that are a .c file (pool_alloc.c, flags.c, ...)
 tests/        one program per module: tests/test_NAME.c
+bench/        benchmarks
 THIRD_PARTY/  licence texts of the code some headers are ported from, see THIRD_PARTY.md
 ```
 
 `make test` (or `sh tests/run [filter]`) builds and runs every test on its own, in parallel.
+`make bench` runs `bench/`: the arena against glibc malloc, the pool against malloc/free, the job
+pool against spawning a thread per job, the hash table and Morton encoding against naive versions.
+On the author's machine the arena is about 2.7x faster than malloc, the pool about 10x and the job
+pool about 8x; run it yourself, the numbers depend on the machine.
 Add `-Iinclude -Iinclude/hash -Isrc` to compile your own code against it.
 
 ## What is in it
