@@ -739,8 +739,9 @@ i32 clamp_i32(i32 x, i32 lo, i32 hi)
 
 i32 abs_i32(i32 x)
 {
-    i32 mask = x >> 31; /* all-1s if negative, 0 if non-negative (arithmetic shift) */
-    return (x ^ mask) - mask;
+    /* unsigned math: INT32_MIN wraps to itself instead of overflowing (signed overflow is UB) */
+    u32 mask = 0u - ((u32)x >> 31); /* all-1s if negative, 0 otherwise */
+    return (i32)(((u32)x ^ mask) - mask);
 }
 
 u16 byteswap16(u16 x)

@@ -110,7 +110,7 @@ int main(void)
         TEST_CHECK(abs_i32(5) == 5 && abs_i32(-5) == 5, "abs_i32: positive and negative");
         TEST_CHECK(abs_i32(0) == 0, "abs_i32: zero");
         TEST_CHECK(abs_i32(-2147483647 - 1) == -2147483647 - 1,
-                   "abs_i32: INT32_MIN has no positive representation, returns itself (matches abs()/labs() UB-free convention here)");
+                   "abs_i32: INT32_MIN has no positive representation, wraps to itself (computed unsigned, no signed overflow)");
     }
 
     /* endianness */
