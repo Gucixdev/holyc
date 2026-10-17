@@ -8,7 +8,6 @@ is a nod, not a claim: this has nothing to do with TempleOS's HolyC language, it
 |---|---|---|---|
 | [`base`](base) | Single-header C library: 107 modules (types, allocators, queues, data structures, math, codecs, crypto, net) | C89 style, one `long long` beyond C89; tests pass with `-std=c89`, `gnu89`, `c99`, `gnu99`, `c11`, `gnu11`, `gnu17`; default `-std=gnu11` | own |
 | [`lazytui`](lazytui) | Terminal UI library on plain ANSI escapes | C99: `-std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE` | own |
-| [`ragdb`](ragdb) | Embedded note/vector database, IVF + HNSW, hybrid search | C89: `-std=c89 -pedantic -Wall -Wextra -Werror`; its sanitizer, fuzz and crash tools use `-std=gnu99` | own |
 | [`fzf`](fzf) | Fuzzy finder compatible with fzf 0.74's command line | C11 GNU: `-std=gnu11` | own, not a fork of the Go fzf |
 | [`notcoreutils`](notcoreutils) | `cb cloc colorado dv man netcat sudo tgates tree` | C11 GNU: `-std=gnu11 -D_GNU_SOURCE` | own |
 | [`gtop`](gtop) | System monitor TUI (CPU/GPU, RAM, disk, net, processes) | C99: `-std=c99` plus POSIX.1-2008 (set in the source), links `-lm` | own, C port of an earlier Rust version |
@@ -19,6 +18,9 @@ is a nod, not a claim: this has nothing to do with TempleOS's HolyC language, it
 
 The "language" column is what each directory's own Makefile or `run` script passes to the
 compiler, not a claim about what else would compile.
+
+The vector and note database that lived here as `ragdb/` is now its own repository,
+[vecindex](https://github.com/Gucixdev/vecindex), history included.
 
 Every directory builds on its own; there is no top-level build. Each has its own README with
 the details, this page is the map.
@@ -32,7 +34,6 @@ git clone https://github.com/Gucixdev/holyc && cd holyc
 (cd base && make test)            # 130 test programs
 (cd base && make bench)           # 5 benchmarks against malloc / naive loops
 (cd lazytui && make test)         # widgets, layout, solver, fuzzed input
-(cd ragdb && ./run)               # self-tests, fuzzers, thread and crash-safety tests
 
 # tools
 (cd fzf && make && make test)     # 413 tests, differential against /usr/bin/fzf when present
@@ -73,15 +74,6 @@ lists, trees, pickers, a world map and globe), themes and mouse input. Works on 
 console too (ASCII, 16 colours, no alternate screen). `examples/demo --snapshot W H` prints a
 frame without a terminal. Design notes: [`lazytui/DESIGN.md`](lazytui/DESIGN.md).
 
-### ragdb
-An embedded vector and note database: bit-packed quantizers, IVF and HNSW routers, BM25 lexical
-search fused with vector search, a crash-safe on-disk format and an optional agent-memory layer.
-Single node, library only (no server, no auth, no replication). Its README has the measured
-scale and recall numbers and what was and was not independently reviewed. Benchmark data
-(94 MB) is not in the repository; the README says how to generate it. Some optional helpers
-(`embedsrv.py`, `rerank_srv.py`, `wikiprep.py`) are Python and only needed for benchmarking and
-reranking; the core has no Python dependency.
-
 ### fzf
 A from-scratch fzf in C (libc and pthreads only): the FuzzyMatchV2 scoring, extended search
 syntax, `--bind` grammar and actions, preview windows, `--listen`, mouse, borders. Not done
@@ -118,7 +110,7 @@ wrote what. Local changes on top of upstream:
 
 | Piece | Needs |
 |---|---|
-| base, lazytui, ragdb, fzf, notcoreutils | a C compiler (gcc or clang), make, Linux. ragdb's `./run` wants bash and gcc |
+| base, lazytui, fzf, notcoreutils | a C compiler (gcc or clang), make, Linux |
 | gtop | a C compiler and make; optional `nvidia-smi`, `intel_gpu_top`, `lsusb` for GPU and TPU info |
 | dwl | wlroots 0.20, wayland, xkbcommon, pkg-config |
 | dmenu, lemonbar | wayland-client, xkbcommon, fontconfig, freetype2 |
@@ -130,12 +122,12 @@ The code is developed and tested on Linux (x86-64). Other platforms are not test
 
 This repository is where the pieces are published together. The five forked or standalone
 subtrees (`dwl`, `dmenu`, `lemonbar`, `nnn`, `gtop`) keep their own upstream history; `base`,
-`lazytui`, `ragdb`, `fzf` and `notcoreutils` start here. Issues and patches welcome; run the
+`lazytui`, `fzf` and `notcoreutils` start here. Issues and patches welcome; run the
 directory's tests before sending one.
 
 ## Licence
 
-My own code (`base`, `lazytui`, `ragdb`, `fzf`, `notcoreutils`, `gtop`) is MIT, see
+My own code (`base`, `lazytui`, `fzf`, `notcoreutils`, `gtop`) is MIT, see
 [`LICENSE`](LICENSE). The forks keep the licences of their upstreams, in each directory:
 `dwl` (GPLv3 with dwm/sway/tinywl notices), `dmenu` (MIT/X), `lemonbar` (MIT), `nnn` (BSD
 2-Clause). Third-party code ported into `base` is listed with its licence in
