@@ -3,7 +3,7 @@
 
 usage: bench.py DATA_DIR METHOD [--threads T] [--lat N]
 methods: vecindex, vecindex-i8, vecindex-2bit, vecindex-2bit-i8, turbovec4, turbovec2, faiss-hnsw, faiss-ivfflat,
-         faiss-ivfpqfs, qdrant
+         faiss-ivfpqfs, qdrant, vecgrid
 
 Per method: build (timed, T threads), index size, save and load (timed, warm page cache), then for every
 search setting, on the LOADED index: recall@10 over all queries, single-thread QPS (one query per call,
@@ -279,6 +279,64 @@ class Qdrant:
             shutil.rmtree(self.path, ignore_errors=True)
 
 
+class VecGrid:
+    """VecGrid (vecgrid on PyPI), one embedded node: vectors hashed over 271 partitions, one HNSW graph each (hnswlib:
+    M=16, ef_construction=200, cosine), every query searched in every partition and the hits merged. It has no batch
+    insert and no batch search: one put per vector, and batch QPS comes from T Python threads, one query per call.
+    In memory only (data_dir None: no WAL fsync per put), so save and load are no-ops; the size is the growth of the
+    process's peak RSS during the build."""
+    pins_threads = True
+
+    def __init__(self, dim, threads):
+        import importlib.metadata
+        from vecgrid import VecGrid as Grid
+        self.Grid, self.dim, self.threads, self.ef = Grid, dim, threads, 50
+        self.version = "vecgrid " + importlib.metadata.version("vecgrid")
+        self.rss = 0
+
+    def build(self, X):
+        import resource
+        r0 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        self.grid = self.Grid("bench", dim=self.dim, backup_count=0, heartbeat=False,
+                              hnsw_config={"M": 16, "M0": 32, "ef_construction": 200, "ef_search": 50,
+                                           "distance_metric": "cosine"})
+        self.grid.start()
+        for i in range(len(X)):
+            self.grid.put(str(i), X[i])
+        self.rss = (resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - r0) * 1024
+
+    def size(self):
+        return int(self.rss)
+
+    def save(self, path):
+        pass
+
+    def load(self, path):
+        pass
+
+    def sweep(self):
+        # each partition is searched with ef >= 3k (VecGrid's own fetch_k), so 30 is the floor at k=10
+        return [{"ef": e} for e in (30, 50, 100, 200, 400, 800)]
+
+    def set(self, prm):
+        self.ef = prm["ef"]
+
+    def single_thread(self, on):
+        pass
+
+    def search_one(self, q, k):
+        ids = [int(r.vector_id) for r in self.grid.search(q, k=k, ef=self.ef)][:k]
+        return np.array(ids + [-1] * (k - len(ids)), np.int64)
+
+    def search_batch(self, Q, k, threads):
+        with concurrent.futures.ThreadPoolExecutor(threads) as ex:
+            return np.stack(list(ex.map(lambda q: self.search_one(q, k), Q)))
+
+    def cleanup(self):
+        if hasattr(self, "grid"):
+            self.grid.stop()
+
+
 def make(method, dim, threads):
     if method == "vecindex":
         return VecIndex(dim, threads)
@@ -303,6 +361,8 @@ def make(method, dim, threads):
                      [{"nprobe": p, "k_factor": f} for p in (16, 32, 64, 128, 256, 512) for f in (4, 16, 64)])
     if method == "qdrant":
         return Qdrant(dim, threads)
+    if method == "vecgrid":
+        return VecGrid(dim, threads)
     raise SystemExit(f"unknown method {method}")
 
 

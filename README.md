@@ -2,9 +2,9 @@
 
 A vector database in C89 for approximate nearest-neighbour search: a TurboQuant-style rotated 4-bit (or 2-bit)
 fast-scan with exact re-scoring, IVF clustering, bit-packed 1-8 bit quantizers, BM25 hybrid search and an optional
-agent-memory layer. It runs embedded in a program, or as `vserv`, a small epoll server (Unix and TCP sockets, a
-binary protocol and HTTP/1.1, TLS 1.2 through the vendored BearSSL). Nothing beyond libc, libm and pthreads (and
-BearSSL for TLS).
+agent-memory layer. It runs inside a program in any language through its C API (`include/vecindex.h`, one shared
+or static library), or as `vserv`, a small epoll server (Unix and TCP sockets, a binary protocol and HTTP/1.1, TLS
+1.2 through the vendored BearSSL). Nothing beyond libc, libm and pthreads (and BearSSL for TLS).
 
 It used to live in [holyc](https://github.com/Gucixdev/holyc) as `ragdb/`; its history came along.
 
@@ -12,6 +12,7 @@ It used to live in [holyc](https://github.com/Gucixdev/holyc) as `ragdb/`; its h
 
 | path | what is there |
 |---|---|
+| `include/vecindex.h` | the C API: one opaque handle, plain C types; `libvecindex.so` / `.a` export nothing else |
 | `src/` | the library and the server: headers, quantizers, indexes, the store, vecdb, mem.c, `vserv.c`, `vecdb_cli.c` |
 | `tests/` | one self-test per module (`NAME_test.c`), plus the crash, fuzz, thread and stress tests |
 | `bench/` | benchmark programs in C and `run_all.sh`, which runs every measurement in [docs/benchmarks.md](docs/benchmarks.md) |
@@ -36,6 +37,7 @@ part of `LAYER.c`, which includes it; it is not compiled on its own.
 | `vecdb.c`, `vecdb_embed.c`, `vecdb_search.c`, `vecdb_graph.c`, `vecdb_disk.c`, `vecdb_cli.c` | the note database: notes, links, tags; embedding servers; hybrid search; MCTS and the query language; files; the command line |
 | `mem.c`, `mem_rules.c`, `mem_disk.c` | agent memory: lifetime and tiers; the rule engine; its files |
 | `rerank.c` | a cross-encoder second pass over vecdb's hybrid search |
+| `vecindex.c` | the C API of `include/vecindex.h` over the store |
 | `vserv.c`, `vserv_proto.c`, `vserv_pem.c` | the server: sockets, workers, TLS; the binary and HTTP protocols; certificates and keys |
 
 ## Build and test
@@ -48,38 +50,38 @@ git clone https://github.com/Gucixdev/vecindex && cd vecindex
 
 ## Use it
 
-In a C program:
+From any language: `./run` builds `.build/libvecindex.so` and `.build/libvecindex.a`, whose only exports are the
+`vi_*` functions of `include/vecindex.h`. In C:
 
 ```c
-#include "store.c"
+#include "vecindex.h"
 #include <stdio.h>
 
 int main(void)
 {
-    static Arena arena;
-    RagStore *s = store_new(&arena, 4);
-    f32 a[4] = { 1, 0, 0, 0 }, b[4] = { 0, 1, 0, 0 }, q[4] = { 0.9f, 0.1f, 0, 0 };
-    i64 ids[2];
-    f32 score[2];
-    i32 n, i;
-    store_add(s, a, 1);
-    store_add(s, b, 2);
-    store_build(s);
-    n = store_search(s, q, 2, ids, score);           /* your ids, best first; score = -|q - v|^2 */
-    for (i = 0; i < n; ++i) printf("%d %.3f\n", (int)ids[i], score[i]);
-    store_save(s, "demo.vxi");                       /* store_load(&arena, "demo.vxi") maps it back */
-    store_destroy(s);
+    vi_db *db = vi_open("demo.vxi", 4, 0);
+    float a[4] = { 1, 0, 0, 0 }, b[4] = { 0, 1, 0, 0 }, q[4] = { 0.9f, 0.1f, 0, 0 }, scores[2];
+    vi_i64 ids[2];
+    int n, i;
+    vi_add(db, 1, a);
+    vi_add(db, 2, b);
+    n = vi_search(db, q, 2, ids, scores);
+    for (i = 0; i < n; ++i) printf("%d %.3f\n", (int)ids[i], scores[i]);
+    vi_close(db);
     return 0;
 }
 ```
 
 ```sh
-gcc -std=c89 -O2 -march=native -D_POSIX_C_SOURCE=200112L -Isrc demo.c -lm -lpthread -o demo && ./demo
+cc -Iinclude demo.c -L.build -lvecindex -lm -lpthread -o demo && LD_LIBRARY_PATH=.build ./demo
 1 -0.012
 2 -1.779
 ```
 
-Over a socket: `vserv` serves one store file to any language that can open a socket ([docs/server.md](docs/server.md)).
+The same from Python (ctypes), Go (cgo) and Rust (`extern "C"`), every function, and how durability works:
+[docs/api.md](docs/api.md). Inside a C program the library can also be one more file of the build (`src/vecindex.c`,
+or `store.c` itself for the internal API). Over a socket, `vserv` serves one store file to anything that can open a
+socket ([docs/server.md](docs/server.md)).
 
 ## Results
 
@@ -105,7 +107,8 @@ measured: the older rows on a GTX 1050 Ti box (7.8 GB RAM, 12 cores), the scale,
 
 | area | status | evidence |
 |---|---|---|
-| Crash safety | atomic per-file + cross-file (generation-suffix) writes | `tests/vcrash.c`/`tests/vcrash2.c`, 25-90 rounds, always consistent |
+| Crash safety | atomic per-file + cross-file (generation-suffix) writes; the store's journal and background snapshots | `tests/vcrash.c`/`tests/vcrash2.c`, 25-90 rounds, always consistent; `tests/scrash.c` kills a store writer (and in every other round its snapshot child) at random moments: every synced row there exactly once |
+| C API | `include/vecindex.h`, only `vi_*` exported | `tests/api_test.c` against the shared and the static library; Python, Go and Rust bindings run by hand ([docs/api.md](docs/api.md)) |
 | Concurrency | one rwlock per layer, TSan-clean, the store's live thread too | `tests/vthreads.c`/`tests/mthreads.c` and the store self-test under TSan in `./run` (it found two real races in live mode, fixed) |
 | Fuzzing | 3 fuzzers (parser, rule engine, malformed input) | `tests/vfuzz.c`/`tests/mrfuzz.c` - the rule-parser one found and fixed a real stack-overflow crash on its first run |
 | Adversarial stress | invariant checks, not just "doesn't crash" | `tests/stress.c`/`tests/mstress.c` - found and fixed 5 bugs this way |
@@ -119,6 +122,7 @@ measured: the older rows on a GTX 1050 Ti box (7.8 GB RAM, 12 cores), the scale,
 
 ## Documentation
 
+- [docs/api.md](docs/api.md) - the C API, bindings from Python, Go and Rust, durability (journal and snapshots).
 - [docs/benchmarks.md](docs/benchmarks.md) - GloVe-100 against FAISS, turbovec and Qdrant; scale; the priority table
   of optimisations; bottlenecks; how to reproduce.
 - [docs/server.md](docs/server.md) - `vserv`: sockets, protocols, TLS, live mode.

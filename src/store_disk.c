@@ -35,8 +35,11 @@ static int store_goal_r_(FILE *f, EngGoal *g)
     return 0;
 }
 
-/* ---- journal: PATH.j = 'VXJ1' base_live(i32) base_bytes(i64) dim(i32), then records A/D/M ---- */
-#define STORE_JMAGIC 0x314a5856u
+/* ---- the journal: PATH.j = 'VXJ2' dim(i32) stamp(u64), then records A/P/D/M/R (store_jrec_). The stamp is the one in
+ * the header of the file it belongs to (v7), so a journal is replayed only onto that file. A file from before v7 has
+ * no stamp: its journal is 'VXJ1' base_live(i32) base_bytes(i64) dim(i32), matched on rows and file size. ---- */
+#define STORE_JMAGIC  0x314a5856u
+#define STORE_JMAGIC2 0x324a5856u
 
 /* flush a stdio file all the way to the disk */
 static i32 store_fsync_(FILE *f)
@@ -64,75 +67,125 @@ static i64 store_file_size_(const char *path)
     return stat(path, &st) == 0 ? (i64)st.st_size : -1;
 }
 
-static char *store_jname_(const char *path)
+/* path + suffix, malloc'd */
+static char *store_jname_(const char *path, const char *suffix)
 {
-    char *j = (char *)malloc(strlen(path) + 3);
-    strcpy(j, path); strcat(j, ".j");
+    char *j = (char *)malloc(strlen(path) + strlen(suffix) + 1);
+    strcpy(j, path); strcat(j, suffix);
     return j;
 }
 
-/* the base file at `path` was just written (or loaded): start a fresh journal against it */
+/* a stamp for a new file: 8 bytes of /dev/urandom, or the clock, the pid and a counter mixed when there is none;
+ * never 0 (0 means "no stamp") */
+static u64 store_stamp_new_(void)
+{
+    static u32 ctr;
+    u64 v = 0;
+    FILE *r = fopen("/dev/urandom", "rb");
+    if (r) { if (fread(&v, 8, 1, r) != 1) v = 0; fclose(r); }
+    if (!v) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        v = h64_mix_(((u64)ts.tv_sec << 32) ^ (u64)ts.tv_nsec ^ ((u64)getpid() << 20) ^ (u64)++ctr);
+    }
+    return v ? v : 1;
+}
+
+/* a journal's header: VXJ2 for a stamped file, VXJ1 for an older one; 0 or -1 */
+static i32 store_jhead_(FILE *f, i32 dim, u64 stamp, i32 live, i64 bytes)
+{
+    u32 m = stamp ? STORE_JMAGIC2 : STORE_JMAGIC;
+    if (fwrite(&m, 4, 1, f) != 1) return -1;
+    if (stamp) return fwrite(&dim, 4, 1, f) == 1 && fwrite(&stamp, 8, 1, f) == 1 ? 0 : -1;
+    return fwrite(&live, 4, 1, f) == 1 && fwrite(&bytes, 8, 1, f) == 1 && fwrite(&dim, 4, 1, f) == 1 ? 0 : -1;
+}
+
+/* the file at `path` was just written (or loaded): start a fresh journal against it */
 static void store_journal_reset_(RagStore *s, const char *path)
 {
-    char *jn = store_jname_(path);
-    u32 magic = STORE_JMAGIC;
-    i32 live = s->count, dim = s->dim;
-    i64 bytes = store_file_size_(path);
+    char *jn = store_jname_(path, ".j");
     if (s->jf) { fclose(s->jf); s->jf = (FILE *)0; }
     free(s->jpath); s->jpath = (char *)0;
     s->jf = fopen(jn, "wb");
     if (s->jf) {
-        fwrite(&magic, 4, 1, s->jf); fwrite(&live, 4, 1, s->jf); fwrite(&bytes, 8, 1, s->jf); fwrite(&dim, 4, 1, s->jf);
+        store_jhead_(s->jf, s->dim, s->stamp, s->count, store_file_size_(path));
         store_fsync_(s->jf);
-        s->jpath = (char *)malloc(strlen(path) + 1); strcpy(s->jpath, path);
+        s->jpath = store_jname_(path, "");
     }
     free(jn);
 }
 
-/* replay PATH.j onto a freshly loaded store; a torn last record is ignored; a journal that belongs to another
- * base is ignored. Afterwards the journal stays open for appending. */
-static void store_journal_replay_(RagStore *s, const char *path)
+/* Replays the journal file jn onto a freshly loaded store when it belongs to the file at path. Returns the length of
+ * its good part (a torn last record is not in it), or -1 when it belongs to another file or cannot be read. */
+static long store_journal_play_(RagStore *s, const char *path, const char *jn)
 {
-    char *jn = store_jname_(path);
     FILE *f = fopen(jn, "rb");
-    u32 magic; i32 live, dim; i64 bytes;
-    f32 *vec = (f32 *)malloc((size_t)s->dim * sizeof(f32));
-    if (f && fread(&magic, 4, 1, f) == 1 && fread(&live, 4, 1, f) == 1 && fread(&bytes, 8, 1, f) == 1 && fread(&dim, 4, 1, f) == 1
-        && magic == STORE_JMAGIC && live == s->count && dim == s->dim && bytes == store_file_size_(path)) {
-        long good = ftell(f);
-        for (;;) {
-            u8 op; i64 id, meta;
-            if (fread(&op, 1, 1, f) != 1) break;
-            if (op == 'A') {
-                if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1 || fread(vec, sizeof(f32), (size_t)s->dim, f) != (size_t)s->dim) break;
-                store_add_meta(s, vec, id, meta);
-            } else if (op == 'D') {
-                if (fread(&id, 8, 1, f) != 1) break;
-                store_delete(s, id);
-            } else if (op == 'M') {
-                if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1) break;
-                store_set_meta(s, id, meta);
-            } else break;
-            good = ftell(f);
+    u32 magic;
+    i32 match = 0;
+    long good;
+    f32 *vec;
+    if (!f) return -1;
+    if (fread(&magic, 4, 1, f) == 1) {
+        if (magic == STORE_JMAGIC2) {
+            i32 dim; u64 stamp;
+            match = s->stamp && fread(&dim, 4, 1, f) == 1 && fread(&stamp, 8, 1, f) == 1 && dim == s->dim && stamp == s->stamp;
+        } else if (magic == STORE_JMAGIC) {
+            i32 live, dim; i64 bytes;
+            match = !s->stamp && fread(&live, 4, 1, f) == 1 && fread(&bytes, 8, 1, f) == 1 && fread(&dim, 4, 1, f) == 1
+                 && live == s->count && dim == s->dim && bytes == store_file_size_(path);
         }
-        fclose(f); f = (FILE *)0;
-        /* drop a torn tail, then append after the good part. If the tail cannot be dropped, run
-         * without a journal (as when fopen fails): records appended behind a torn one would never
-         * be replayed. */
-        if (truncate(jn, (off_t)good) == 0) {
-            s->jf = fopen(jn, "ab");
-            if (s->jf) { s->jpath = (char *)malloc(strlen(path) + 1); strcpy(s->jpath, path); }
-        }
-    } else {
-        if (f) fclose(f);
-        store_journal_reset_(s, path);
     }
-    free(vec); free(jn);
+    if (!match) { fclose(f); return -1; }
+    vec = (f32 *)malloc((size_t)s->dim * sizeof(f32));
+    good = ftell(f);
+    for (;;) {
+        u8 op; i64 id, meta;
+        if (fread(&op, 1, 1, f) != 1) break;
+        if (op == 'A' || op == 'P') {
+            if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1 || fread(vec, sizeof(f32), (size_t)s->dim, f) != (size_t)s->dim) break;
+            if (op == 'A') store_add_meta(s, vec, id, meta); else store_put(s, vec, id, meta);
+        } else if (op == 'D') {
+            if (fread(&id, 8, 1, f) != 1) break;
+            store_delete(s, id);
+        } else if (op == 'M' || op == 'R') {
+            if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1) break;
+            if (op == 'M') store_set_meta(s, id, meta); else store_delete_range(s, id, meta);
+        } else break;
+        good = ftell(f);
+    }
+    fclose(f);
+    free(vec);
+    return good;
 }
 
-/* v5 layout: every array starts on a 64-byte boundary, so store_load can map the file and point straight into
- * it (no copy, pages come in when first touched). The scan index (tq) is saved as well: a load is O(header),
- * not a rebuild. */
+/* Replays PATH.j onto a freshly loaded store, or PATH.jn when a snapshot replaced the file and its journal had not
+ * moved over yet (then it moves now). Afterwards the journal stays open for appending; when none belongs to this
+ * file, a fresh one starts. */
+static void store_journal_replay_(RagStore *s, const char *path)
+{
+    char *jn = store_jname_(path, ".j"), *jn2 = store_jname_(path, ".jn");
+    const char *use = jn;
+    long good = store_journal_play_(s, path, jn);
+    if (good < 0 && s->stamp && (good = store_journal_play_(s, path, jn2)) >= 0) {
+        if (rename(jn2, jn) == 0) store_fsync_dir_(path);
+        else use = jn2;                                          /* append where it is: the next load finds it there too */
+    } else if (good >= 0)
+        remove(jn2);                                             /* left by a snapshot that never finished: it matches nothing */
+    if (good >= 0) {
+        /* drop a torn tail, then append after the good part. If the tail cannot be dropped, run without a journal (as
+         * when fopen fails): records appended behind a torn one would never be replayed. */
+        if (truncate(use, (off_t)good) == 0) {
+            s->jf = fopen(use, "ab");
+            if (s->jf) s->jpath = store_jname_(path, "");
+        }
+    } else
+        store_journal_reset_(s, path);
+    free(jn); free(jn2);
+}
+
+/* v5+ layout: every array starts on a 64-byte boundary, so store_load can map the file and point straight into it
+ * (no copy, pages come in when first touched). The scan index (tq) is saved as well: a load is O(header), not a
+ * rebuild. */
 #define STORE_AL(x) (((size_t)(x) + 63u) & ~(size_t)63u)
 static int store_pad_(FILE *f)
 {
@@ -153,6 +206,23 @@ static int store_col_w_(FILE *f, const SCol *c, i64 n)
         i64 rows = n - ((i64)i << STORE_CSHIFT);
         if (rows > STORE_CROWS) rows = STORE_CROWS;
         if (engs_wle_(f, c->chunk[i], per, (size_t)rows * (c->esz / per))) return -1;
+    }
+    return 0;
+}
+
+/* rows [0, n) of a column except the tombstoned ones (dead NULL: none), in runs of consecutive live rows */
+static int store_col_w_live_(FILE *f, const SCol *c, i64 n, const u64 *dead)
+{
+    i64 r = 0, e, lim;
+    size_t per = c->elem, k = c->esz / per;
+    if (!dead) return store_col_w_(f, c, n);
+    while (r < n) {
+        if ((dead[r >> 6] >> (r & 63)) & 1u) { ++r; continue; }
+        lim = ((r >> STORE_CSHIFT) + 1) << STORE_CSHIFT;         /* a run stays inside its chunk */
+        if (lim > n) lim = n;
+        for (e = r + 1; e < lim && !((dead[e >> 6] >> (e & 63)) & 1u); ++e) {}
+        if (engs_wle_(f, SCOL_AT(c, r), per, (size_t)(e - r) * k)) return -1;
+        r = e;
     }
     return 0;
 }
@@ -186,14 +256,63 @@ static int store_tq_w_(FILE *f, const Tq *t)
     return bad ? -1 : 0;
 }
 
-i32 store_save(RagStore *s, const char *path)
+/* Writes the store to tmp, flushes it to the disk, renames it over path and makes the rename durable: 0 or -1. Takes
+ * no lock - the caller holds the write lock (store_save, after its compaction), or is the snapshot child, alone with
+ * a private image of the store. Tombstoned rows are left out; only the child (child = 1) may then renumber the scan
+ * index to match, since that edits the index in place (its own copy). */
+static i32 store_write_file_(RagStore *s, const char *path, const char *tmp, u64 stamp, i32 child)
 {
     FILE *f;
-    char *tmp;
-    i32 hdr[4], ext[4];
-    i32 live, had_idx;
+    i32 hdr[4], ext[4], live = s->count, all_in, bad;
+    i64 w, nw = ((i64)s->count + 63) >> 6;
+    const u64 *dead = (const u64 *)0;
     u8 kind;
+    for (w = 0; w < nw; ++w) {                                   /* tombstones among rows [0, count) */
+        u64 x = s->dead[w];
+        if (w == nw - 1 && (s->count & 63)) x &= ((u64)1 << (s->count & 63)) - 1u;
+        live -= tq_pop64_(x);
+    }
+    all_in = s->built_upto == s->count;                          /* every row is in the index */
+    if (live != s->count) {
+        if (!child) return -1;                                   /* store_save compacts first */
+        dead = s->dead;
+        if (s->tq && all_in && s->tq->n == s->count) {           /* renumber the scan index as a compaction would */
+            i32 *pre = (i32 *)malloc((size_t)(nw + 1) * sizeof(i32)), acc = 0;
+            if (!pre) return -1;
+            for (w = 0; w <= nw; ++w) { pre[w] = acc; if (w < nw) acc += tq_pop64_(s->dead[w]); }
+            tq_remap(s->tq, s->dead, pre, live);
+            free(pre);
+        }
+    }
+    /* 0: no index (a load rebuilds it), 1: the engine index, 2: the scan index */
+    kind = (u8)(s->idx && all_in && !dead ? 1 : (s->tq && all_in && s->tq->n == live ? 2 : 0));
+    f = fopen(tmp, "wb");                                        /* the old file stays intact until the new one is complete */
+    if (!f) return -1;
+    hdr[0] = (i32)STORE_MAGIC; hdr[1] = STORE_VERSION7; hdr[2] = s->dim; hdr[3] = live;
+    ext[0] = s->vbytes == 1 ? 1 : 0; ext[1] = 0;
+    ext[2] = (i32)(u32)(stamp & 0xffffffffu); ext[3] = (i32)(u32)(stamp >> 32);
+    bad = STORE_W32(f, hdr, 4) || STORE_W32(f, ext, 4) || store_goal_w_(f, &s->goal)
+       || store_pad_(f) || store_col_w_live_(f, &s->vec, s->count, dead)
+       || (s->vbytes == 1 && (store_pad_(f) || store_col_w_live_(f, &s->vsc, s->count, dead)))
+       || store_pad_(f) || store_col_w_live_(f, &s->idc, s->count, dead)
+       || store_pad_(f) || store_col_w_live_(f, &s->metac, s->count, dead)
+       || fwrite(&kind, 1, 1, f) != 1
+       || (kind == 1 && engine_save(s->idx, f))
+       || (kind == 2 && store_tq_w_(f, s->tq));
+    if (bad || store_fsync_(f) != 0) { fclose(f); remove(tmp); return -1; }
+    if (fclose(f) != 0 || rename(tmp, path) != 0) { remove(tmp); return -1; }
+    store_fsync_dir_(path);
+    return 0;
+}
 
+i32 store_save(RagStore *s, const char *path)
+{
+    char *tmp;
+    i32 live, had_idx, r;
+    u64 stamp = store_stamp_new_();
+
+    pthread_mutex_lock(&s->snap_mu);                             /* never beside a snapshot child: it may be reading rows */
+    store_snap_reap_(s, 1);                                      /* the compaction below moves, and writing the same file */
     pthread_mutex_lock(&s->rb_mu);                               /* a compaction must not run under a live rebuild */
     pthread_mutex_lock(&s->mt_mu);
     store_index_pending_(s, store_ncpu_());                      /* the pending tail into the index, searches going on */
@@ -202,57 +321,202 @@ i32 store_save(RagStore *s, const char *path)
     had_idx = s->idx != (EngIndex *)0;
     live = store_compact_(s);                                    /* the scan index follows its rows */
     if (had_idx && !s->idx && live > 0) { store_engine_build_(s, live); s->built_upto = live; }   /* an engine index cannot */
-    tmp = (char *)malloc(strlen(path) + 5); strcpy(tmp, path); strcat(tmp, ".tmp");
-    f = fopen(tmp, "wb");                                        /* the old file stays intact until the new one is complete and on disk */
-    if (!f) { free(tmp); pthread_rwlock_unlock(&s->lock); pthread_mutex_unlock(&s->mt_mu); pthread_mutex_unlock(&s->rb_mu); return -1; }
-
-    hdr[0] = (i32)STORE_MAGIC; hdr[1] = s->vbytes == 1 ? STORE_VERSION_I8 : STORE_VERSION;   /* f32 stores stay v5 */
-    hdr[2] = s->dim; hdr[3] = live;
-    ext[0] = 1; ext[1] = ext[2] = ext[3] = 0;                    /* v6: rows are int8 */
-    /* 0: no index (load rebuilds), 1: engine index, 2: the scan index */
-    kind = (u8)(s->idx != (EngIndex *)0 && s->built_upto == live ? 1
-              : (s->tq && s->built_upto == live && s->tq->n == live ? 2 : 0));
-
+    tmp = store_jname_(path, ".tmp");
     store_advise_(s, MADV_SEQUENTIAL);                           /* the save streams every row: read ahead */
-    if (STORE_W32(f, hdr, 4)
-        || (s->vbytes == 1 && STORE_W32(f, ext, 4))
-        || store_goal_w_(f, &s->goal)
-        || store_pad_(f) || store_col_w_(f, &s->vec, live)
-        || (s->vbytes == 1 && (store_pad_(f) || store_col_w_(f, &s->vsc, live)))
-        || store_pad_(f) || store_col_w_(f, &s->idc, live)
-        || store_pad_(f) || store_col_w_(f, &s->metac, live)
-        || fwrite(&kind, 1, 1, f) != 1
-        || (kind == 1 && engine_save(s->idx, f))
-        || (kind == 2 && store_tq_w_(f, s->tq))) {
-        store_advise_(s, MADV_RANDOM);
-        fclose(f); remove(tmp); free(tmp); pthread_rwlock_unlock(&s->lock); pthread_mutex_unlock(&s->mt_mu); pthread_mutex_unlock(&s->rb_mu); return -1;
-    }
+    r = store_write_file_(s, path, tmp, stamp, 0);
     store_advise_(s, MADV_RANDOM);
-    if (store_fsync_(f) != 0 || fclose(f) != 0 || rename(tmp, path) != 0) {
-        remove(tmp); free(tmp); pthread_rwlock_unlock(&s->lock); pthread_mutex_unlock(&s->mt_mu); pthread_mutex_unlock(&s->rb_mu); return -1;
-    }
     free(tmp);
-    store_fsync_dir_(path);
-    store_journal_reset_(s, path);
+    if (r == 0) { s->stamp = stamp; store_journal_reset_(s, path); }
     pthread_rwlock_unlock(&s->lock);
     pthread_mutex_unlock(&s->mt_mu);
     pthread_mutex_unlock(&s->rb_mu);
-    return 0;
+    pthread_mutex_unlock(&s->snap_mu);
+    return r;
 }
 
-/* Cheap durable save: the first call (or one after the base changed) writes the full file; later calls only
- * flush the journal of what was added/deleted since, so the cost tracks the change, not the store size.
- * store_load replays the journal. Returns 0 on success. */
+/* Cheap durable save: the first call (or one after the file changed) writes the full file; later calls only flush the
+ * journal of what was added/deleted since, so the cost tracks the change, not the store size. The write lock is held
+ * while the stdio buffers go to the kernel, not through the fsync. store_load replays the journal. 0 on success. */
 i32 store_sync(RagStore *s, const char *path)
 {
-    i32 r;
     if (s->jf && s->jpath && strcmp(s->jpath, path) == 0) {
-        pthread_rwlock_wrlock(&s->lock);
-        r = store_fsync_(s->jf);
+        int fd[2], i;
+        i32 r = 0;
+        fd[0] = fd[1] = -1;
+        pthread_rwlock_wrlock(&s->lock);                         /* adders write these buffers under the same lock */
+        if (fflush(s->jf) != 0) r = -1; else fd[0] = dup(fileno(s->jf));
+        if (s->jf2) { if (fflush(s->jf2) != 0) r = -1; else fd[1] = dup(fileno(s->jf2)); }
         pthread_rwlock_unlock(&s->lock);
+        for (i = 0; i < 2; ++i)
+            if (fd[i] >= 0) { if (fsync(fd[i]) != 0) r = -1; close(fd[i]); }
         return r;
     }
     return store_save(s, path);
+}
+
+/* ---- background snapshots ---- */
+
+/* the stamp in the header of the file at path (0: no stamp, or not a v7 file) */
+static u64 store_file_stamp_(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    i32 h[8];
+    u64 st = 0;
+    if (!f) return 0;
+    if (!STORE_R32(f, h, 8) && (u32)h[0] == STORE_MAGIC && h[1] == STORE_VERSION7)
+        st = (u64)(u32)h[6] | ((u64)(u32)h[7] << 32);
+    fclose(f);
+    return st;
+}
+
+static i64 store_now_us_(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (i64)ts.tv_sec * 1000000 + (i64)ts.tv_nsec / 1000;
+}
+
+/* the child keeps none of the parent's descriptors (sockets, the journal): a client connection or a listening port
+ * never outlives the server because a snapshot is still being written */
+static void store_child_fds_(void)
+{
+    long fd, mx = sysconf(_SC_OPEN_MAX);
+#if defined(__linux__) && defined(SYS_close_range)
+    if (syscall(SYS_close_range, 3u, ~0u, 0u) == 0) return;
+#endif
+    if (mx < 0 || mx > 65536) mx = 65536;
+    for (fd = 3; fd < mx; ++fd) close((int)fd);
+}
+
+/* With snap_mu held: reaps the snapshot child when it is done (block: waits for it). When it replaced the journal's
+ * own file, the new file's journal takes over. Returns 1 while it runs, else the outcome of the last one (0 ok, -1
+ * failed, 2 none yet). */
+static i32 store_snap_reap_(RagStore *s, i32 block)
+{
+    int st = 0;
+    pid_t r;
+    i32 ok;
+    if (s->snap_pid <= 0) return s->snap_last;
+    do r = waitpid((pid_t)s->snap_pid, &st, block ? 0 : WNOHANG); while (r < 0 && errno == EINTR);
+    if (r == 0) return 1;
+    if (r < 0) ok = store_file_stamp_(s->snap_path) == s->snap_stamp;   /* reaped elsewhere (SIGCHLD ignored): the file tells */
+    else ok = WIFEXITED(st) && WEXITSTATUS(st) == 0;
+    pthread_rwlock_wrlock(&s->lock);
+    if (s->jf2) {
+        if (ok) {                                                /* the new file is on disk: its journal takes over */
+            char *jn = store_jname_(s->snap_path, ".j");
+            fflush(s->jf2);
+            rename(s->jn2, jn);                                  /* if this fails, the next load finds PATH.jn */
+            free(jn);
+            if (s->jf) fclose(s->jf);
+            s->jf = s->jf2;
+            free(s->jpath); s->jpath = store_jname_(s->snap_path, "");
+            s->stamp = s->snap_stamp;
+        } else {
+            fclose(s->jf2);
+            remove(s->jn2);
+        }
+        s->jf2 = (FILE *)0;
+    }
+    pthread_rwlock_unlock(&s->lock);
+    if (ok && s->jn2) store_fsync_dir_(s->snap_path);
+    free(s->jn2); s->jn2 = (char *)0;
+    s->snap_pid = 0;
+    s->snap_last = ok ? 0 : -1;
+    s->snap_took_us = store_now_us_() - s->snap_t0_us;
+#if defined(__GNUC__)
+    __atomic_store_n(&s->snap_run, 0, __ATOMIC_RELEASE);
+#else
+    s->snap_run = 0;
+#endif
+    return s->snap_last;
+}
+
+/* Background snapshot: the store as it is now, written to path by a child process (fork: the child sees a
+ * copy-on-write image of this moment) while this process goes on answering searches and taking writes. When path is
+ * the file the journal belongs to (or there is no journal yet), writes made meanwhile go to the old journal and to the
+ * new file's (PATH.jn), which takes over once the file is complete (store_snapshot_poll). Pages the parent writes
+ * while the child runs are copied, so memory can grow by what changes meanwhile. Returns 0 started, 1 one is running
+ * (or the store is busy with a build or a save), -1 failed (fork, files). */
+i32 store_snapshot(RagStore *s, const char *path)
+{
+    char *tmp, *jn2 = (char *)0;
+    FILE *j2 = (FILE *)0;
+    u64 stamp = store_stamp_new_();
+    i32 home;
+    pid_t pid;
+    if (pthread_mutex_trylock(&s->snap_mu) != 0) return 1;     /* a build or a save holds it: try later */
+    if (store_snap_reap_(s, 0) == 1) { pthread_mutex_unlock(&s->snap_mu); return 1; }
+    home = !s->jpath || strcmp(s->jpath, path) == 0;
+    if (home) {                                                  /* the new file's journal, ready before the fork */
+        jn2 = store_jname_(path, ".jn");
+        j2 = fopen(jn2, "wb");
+        if (!j2 || store_jhead_(j2, s->dim, stamp, 0, 0) || store_fsync_(j2)) {
+            if (j2) { fclose(j2); remove(jn2); }
+            free(jn2); pthread_mutex_unlock(&s->snap_mu);
+            return -1;
+        }
+    }
+    tmp = store_jname_(path, ".snap");
+    pthread_mutex_lock(&s->mt_mu);                               /* not beside a maintenance step */
+    store_index_pending_(s, store_ncpu_());                      /* the pending tail into the index, searches going on */
+    pthread_rwlock_wrlock(&s->lock);                             /* nobody is in the middle of a change: a clean image */
+    store_index_locked_(s);
+    pid = fork();
+    if (pid == 0) {
+        store_child_fds_();
+        _exit(store_write_file_(s, path, tmp, stamp, 1) == 0 ? 0 : 1);
+    }
+    if (pid > 0) {
+        s->jf2 = j2; s->jn2 = jn2;                               /* from here on every record goes to both journals */
+        s->snap_pid = (i32)pid; s->snap_stamp = stamp;
+        free(s->snap_path); s->snap_path = store_jname_(path, "");
+        s->snap_t0_us = store_now_us_();
+#if defined(__GNUC__)
+        __atomic_store_n(&s->snap_run, 1, __ATOMIC_RELEASE);
+#else
+        s->snap_run = 1;
+#endif
+    }
+    pthread_rwlock_unlock(&s->lock);
+    pthread_mutex_unlock(&s->mt_mu);
+    if (pid < 0 && j2) { fclose(j2); remove(jn2); free(jn2); }
+    free(tmp);
+    pthread_mutex_unlock(&s->snap_mu);
+    return pid > 0 ? 0 : -1;
+}
+
+/* Reaps a finished snapshot (block: waits for a running one): 1 while it runs, 0 when the last one was written, -1
+ * when it failed, 2 when there has been none. A non-blocking call never waits for a build or a save either. */
+i32 store_snapshot_poll(RagStore *s, i32 block)
+{
+    i32 r;
+    if (block) pthread_mutex_lock(&s->snap_mu);
+    else if (pthread_mutex_trylock(&s->snap_mu) != 0) return 1;
+    r = store_snap_reap_(s, block);
+    pthread_mutex_unlock(&s->snap_mu);
+    return r;
+}
+
+/* For stats, without waiting: whether a snapshot runs, how the last one ended (0 ok, -1 failed, 2 none yet) and how
+ * many microseconds it took (or, while one runs, how long it has been running). */
+void store_snapshot_info(RagStore *s, i32 *running, i32 *last, i64 *us)
+{
+    i32 run;
+#if defined(__GNUC__)
+    run = __atomic_load_n(&s->snap_run, __ATOMIC_ACQUIRE);
+#else
+    run = s->snap_run;
+#endif
+    if (running) *running = run;
+    if (pthread_mutex_trylock(&s->snap_mu) == 0) {
+        if (last) *last = s->snap_last;
+        if (us) *us = run ? store_now_us_() - s->snap_t0_us : s->snap_took_us;
+        pthread_mutex_unlock(&s->snap_mu);
+    } else {
+        if (last) *last = 1;
+        if (us) *us = 0;
+    }
 }
 
 /* n elements of esz bytes at byte offset off: a pointer into the mapping when there is one (no copy), else
@@ -334,24 +598,27 @@ static Tq *store_tq_r_(u8 *map, size_t len, FILE *f, size_t off, i32 rows)
     return t;
 }
 
-/* v5: map the file privately (copy-on-write: the store may still edit rows in place, the file is never
+/* v5, v6, v7: map the file privately (copy-on-write: the store may still edit rows in place, the file is never
  * written through the mapping) and point the columns and the scan index into it. Nothing is read up front;
  * pages arrive on first touch, the id lookups are built on first use. */
 static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *hdr)
 {
     RagStore *s;
-    i32 live = hdr[3], dim = hdr[2], ext[4], i8rows = hdr[1] == STORE_VERSION_I8;
+    i32 live = hdr[3], dim = hdr[2], ext[4], v7 = hdr[1] == STORE_VERSION7, i8rows = hdr[1] == STORE_VERSION_I8;
     struct stat st;
     size_t len, o_vecs, o_vsc = 0, o_ids, o_meta, o_kind;
     u8 *map = (u8 *)0, kind = 0;
+    u64 stamp = 0;
 
     if (live < 0 || dim <= 0 || fstat(fileno(f), &st) != 0) { fclose(f); return (RagStore *)0; }
     len = (size_t)st.st_size;
-    if (i8rows && (STORE_R32(f, ext, 4) || ext[0] != 1)) { fclose(f); return (RagStore *)0; }
+    if ((v7 || i8rows) && STORE_R32(f, ext, 4)) { fclose(f); return (RagStore *)0; }
+    if (v7) { i8rows = ext[0] & 1; stamp = (u64)(u32)ext[2] | ((u64)(u32)ext[3] << 32); }
+    else if (i8rows && ext[0] != 1) { fclose(f); return (RagStore *)0; }
     s = store_new(a, dim);
     if (i8rows) store_set_vec_bytes(s, 1);
     if (store_goal_r_(f, &s->goal)) { fclose(f); store_destroy(s); return (RagStore *)0; }
-    o_vecs = STORE_AL((i8rows ? 32 : 16) + 32);
+    o_vecs = STORE_AL((v7 || i8rows ? 32 : 16) + 32);
     if (i8rows) { o_vsc = STORE_AL(o_vecs + (size_t)live * (size_t)dim); o_ids = STORE_AL(o_vsc + (size_t)live * 4); }
     else o_ids = STORE_AL(o_vecs + (size_t)live * (size_t)dim * 4);
     o_meta = STORE_AL(o_ids + (size_t)live * 8);
@@ -391,6 +658,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
         if (s->tq) s->built_upto = live;
         else store_build(s);                                      /* no saved scan index (or an unreadable one): build it */
     }
+    s->stamp = stamp;
     store_journal_replay_(s, path);
     return s;
 }
@@ -404,8 +672,8 @@ RagStore *store_load(Arena *a, const char *path)
     u8 has_idx;
     if (!f) return (RagStore *)0;
     if (STORE_R32(f, hdr, 4) || (u32)hdr[0] != STORE_MAGIC
-        || (hdr[1] != 4 && hdr[1] != STORE_VERSION && hdr[1] != STORE_VERSION_I8)) { fclose(f); return (RagStore *)0; }
-    if (hdr[1] == STORE_VERSION || hdr[1] == STORE_VERSION_I8) return store_load_v5_(a, path, f, hdr);
+        || (hdr[1] != 4 && hdr[1] != STORE_VERSION && hdr[1] != STORE_VERSION_I8 && hdr[1] != STORE_VERSION7)) { fclose(f); return (RagStore *)0; }
+    if (hdr[1] != 4) return store_load_v5_(a, path, f, hdr);
 
     /* v4: packed sections, no saved scan index - read everything, rebuild the scan */
     s = store_new(a, hdr[2]);

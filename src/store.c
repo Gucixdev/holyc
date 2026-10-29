@@ -20,6 +20,13 @@
  *   store_save / store_load : the compacted vectors + doc ids + meta +
  *       build goal AND the built index itself to one .vxi file, so load
  *       is O(file), not O(rebuild).
+ *   store_sync             : flush the journal of adds/deletes since the last save (PATH.j) to the disk;
+ *       the write lock is held only while the stdio buffers go out, not through the fsync.
+ *   store_snapshot / store_snapshot_poll : the same file, written in the background by a child process (fork:
+ *       a copy-on-write image of the store at this moment) while searches and writes go on. Writes made
+ *       meanwhile go to the old journal and to the new file's (PATH.jn), which takes over once the file is
+ *       complete; whenever a crash comes, the file on disk and one of the journals belong together (the v7
+ *       header and the journal carry the same 64-bit stamp).
  *
  * Memory, so a store can grow far past RAM:
  *   - rows live in column chunks of 65536 rows (vectors, doc ids, tags). A chunk never moves, so growing never
@@ -78,6 +85,9 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <sys/wait.h>
+#include <sys/syscall.h>
+#include <errno.h>
 #include "hdict.c"
 #include "tq.c"
 
@@ -122,6 +132,8 @@ static void store_prefetch_row_(const f32 *row, i32 dim)
 #define STORE_MAGIC   0x34584956u   /* 'VIX4' - v4 = goal gains max_candidates */
 #define STORE_VERSION 5             /* v5: 64-byte aligned sections, the scan index saved too, loaded by mmap */
 #define STORE_VERSION_I8 6          /* v6: v5 + a 16-byte extension after the header (int8 rows) and their scales */
+#define STORE_VERSION7 7            /* v7: the extension on every file - flags (bit 0: int8 rows), 0, and the 64-bit
+                                     * stamp its journal carries too */
 
 /* ---- column chunks ---- */
 #define STORE_CSHIFT 16                           /* 65536 rows a chunk */
@@ -145,6 +157,18 @@ typedef struct { u32 *row, *tag; u32 cap, n, bits; } SIdx;
 typedef struct {
     FILE    *jf;            /* write-ahead journal of adds/deletes since the last full save (store_sync) */
     char    *jpath;
+    u64      stamp;         /* the stamp of the file the journal belongs to (v7); 0: an older file, or none */
+    /* background snapshot (store_snapshot): one child process at a time writes the store's image to snap_path */
+    pthread_mutex_t snap_mu;/* guards the fields below; store_save / store_build hold it through their compaction */
+    i32      snap_pid;      /* the child writing a snapshot; 0: none */
+    u64      snap_stamp;    /* the stamp it writes */
+    char    *snap_path;
+    FILE    *jf2;           /* the snapshot replaces the journal's own file: the new file's journal, fed beside jf */
+    char    *jn2;           /* its name (PATH.jn) */
+    i32      snap_run;      /* 1 while a child writes (read without snap_mu, atomically) */
+    i32      snap_last;     /* the last finished one: 0 ok, -1 failed, 2 none yet */
+    i64      snap_t0_us;    /* when the running one started (CLOCK_MONOTONIC) */
+    i64      snap_took_us;  /* how long the last finished one took */
     i32      tq_probe;      /* IVF: clusters scanned per query (0 = the index default) */
     i32      tq_threads;    /* threads one query's scan may use (0 = auto: up to 4 on big stores) */
     i32      tq_rerank;     /* candidates re-scored exactly per query (0 = auto: max(20 k, 256)) */
@@ -549,6 +573,8 @@ RagStore *store_new(Arena *a, i32 dim)
     pthread_mutex_init(&s->rb_mu, (const pthread_mutexattr_t *)0);
     pthread_mutex_init(&s->mt_cmu, (const pthread_mutexattr_t *)0);
     pthread_cond_init(&s->mt_cv, (const pthread_condattr_t *)0);
+    pthread_mutex_init(&s->snap_mu, (const pthread_mutexattr_t *)0);
+    s->snap_last = 2;
     s->spill_fd = -1;
     s->spill_min = STORE_SPILL_MIN;
     if (!sp || strcmp(sp, "off") != 0) {                     /* VECINDEX_SPILL=off keeps everything in memory */
@@ -584,10 +610,16 @@ void store_set_spill(RagStore *s, const char *dir, i64 min_bytes)
 }
 
 static void store_live_stop_(RagStore *s);
+static i32 store_snap_reap_(RagStore *s, i32 block);
 
 void store_destroy(RagStore *s)
 {
     store_live_stop_(s);
+    pthread_mutex_lock(&s->snap_mu);
+    store_snap_reap_(s, 1);                                      /* a snapshot still being written finishes first */
+    pthread_mutex_unlock(&s->snap_mu);
+    pthread_mutex_destroy(&s->snap_mu);
+    free(s->snap_path); s->snap_path = (char *)0;
     pthread_mutex_destroy(&s->mt_mu); pthread_mutex_destroy(&s->rb_mu); pthread_mutex_destroy(&s->mt_cmu); pthread_cond_destroy(&s->mt_cv);
     pthread_rwlock_destroy(&s->lock); tq_free(s->tq); s->tq = (Tq *)0;
     pthread_mutex_destroy(&s->qlog_mu); free(s->qlog); s->qlog = (f32 *)0;
@@ -755,17 +787,28 @@ void store_set_goal(RagStore *s, EngGoal g)
     pthread_rwlock_unlock(&s->lock);
 }
 
-/* -1 if the vector has a non-finite component (not added) or memory ran out, else 0. */
-i32 store_add_meta(RagStore *s, const f32 *vec, i64 doc_id, i64 meta)
+/* One journal record, under the write lock: 'A' (add) and 'P' (put: replace) id meta vec[dim] (the normalised row),
+ * 'D' id, 'M' id meta, 'R' lo hi (a range of ids deleted). It goes to the journal and, while a snapshot is being
+ * written over the journal's own file, to that file's journal too. */
+static void store_jrec_(RagStore *s, u8 op, i64 id, i64 meta, const f32 *vec)
 {
-    i32 r;
-    f32 *v;
-    if (!store_finite_(vec, s->dim)) return -1;
-    pthread_rwlock_wrlock(&s->lock);
-    store_idmap_locked_(s);
-    if (store_reserve_(s, (i64)s->count + 1) != 0) { pthread_rwlock_unlock(&s->lock); return -1; }
-    r = s->count;
-    v = s->addbuf;
+    FILE *fs[2];
+    i32 i;
+    fs[0] = s->jf; fs[1] = s->jf2;
+    for (i = 0; i < 2; ++i) {
+        if (!fs[i]) continue;
+        fwrite(&op, 1, 1, fs[i]); fwrite(&id, 8, 1, fs[i]);
+        if (op != 'D') fwrite(&meta, 8, 1, fs[i]);
+        if (op == 'A' || op == 'P') fwrite(vec, sizeof(f32), (size_t)s->dim, fs[i]);
+    }
+}
+
+/* one more row at the end, under the write lock (vec is finite; store_reserve_ already made room): normalised into
+ * s->addbuf, which keeps it for the journal record */
+static void store_append_locked_(RagStore *s, const f32 *vec, i64 doc_id, i64 meta)
+{
+    i32 r = s->count;
+    f32 *v = s->addbuf;
     memcpy(v, vec, (size_t)s->dim * sizeof(f32));
     store_normalise_(v, s->dim);
     store_put_row_(s, r, v);
@@ -777,12 +820,28 @@ i32 store_add_meta(RagStore *s, const f32 *vec, i64 doc_id, i64 meta)
     s->count += 1;
     ++s->mods;
     if (((i64)s->count & (STORE_CROWS - 1)) == 0) store_chunk_done_(s, (i32)(((i64)s->count >> STORE_CSHIFT) - 1));
-    if (s->jf) {                                                  /* journal: 'A' id meta vec[dim] (the normalised row) */
-        u8 op = 'A';
-        fwrite(&op, 1, 1, s->jf); fwrite(&doc_id, 8, 1, s->jf); fwrite(&meta, 8, 1, s->jf);
-        fwrite(v, sizeof(f32), (size_t)s->dim, s->jf);
-    }
     if (s->live_on && ((s->count - s->built_upto) & 255) == 1) pthread_cond_signal(&s->mt_cv);   /* the live thread */
+}
+
+/* tombstones every live row with this id, under the write lock; returns how many */
+static i32 store_kill_id_locked_(RagStore *s, i64 doc_id)
+{
+    i32 r, hit = 0;
+    for (r = store_find_(s, doc_id); r >= 0; r = store_prev_(s, r))
+        if (!STORE_DEAD(s, r)) { STORE_KILL(s, r); ++hit; --s->live; ++s->mods; }
+    return hit;
+}
+
+/* -1 if the vector has a non-finite component (not added) or memory ran out, else 0. An id already in the store gets
+ * a second row (store_put replaces instead). */
+i32 store_add_meta(RagStore *s, const f32 *vec, i64 doc_id, i64 meta)
+{
+    if (!store_finite_(vec, s->dim)) return -1;
+    pthread_rwlock_wrlock(&s->lock);
+    store_idmap_locked_(s);
+    if (store_reserve_(s, (i64)s->count + 1) != 0) { pthread_rwlock_unlock(&s->lock); return -1; }
+    store_append_locked_(s, vec, doc_id, meta);
+    store_jrec_(s, 'A', doc_id, meta, s->addbuf);
     pthread_rwlock_unlock(&s->lock);
     return 0;
 }
@@ -800,14 +859,41 @@ i32 store_add_batch(RagStore *s, const f32 *vecs, const i64 *doc_ids, i32 m)
     return ok;
 }
 
+/* Replace (upsert): every row with doc_id goes and the new one comes in, as one change - one journal record, so a
+ * crash never leaves the id with neither. Returns as store_add_meta; on -1 nothing changed. */
+i32 store_put(RagStore *s, const f32 *vec, i64 doc_id, i64 meta)
+{
+    if (!store_finite_(vec, s->dim)) return -1;
+    pthread_rwlock_wrlock(&s->lock);
+    store_idmap_locked_(s);
+    if (store_reserve_(s, (i64)s->count + 1) != 0) { pthread_rwlock_unlock(&s->lock); return -1; }   /* before the kill */
+    store_kill_id_locked_(s, doc_id);
+    store_append_locked_(s, vec, doc_id, meta);
+    store_jrec_(s, 'P', doc_id, meta, s->addbuf);
+    pthread_rwlock_unlock(&s->lock);
+    return 0;
+}
+
 i32 store_delete(RagStore *s, i64 doc_id)
+{
+    i32 hit;
+    pthread_rwlock_wrlock(&s->lock);
+    store_idmap_locked_(s);
+    hit = store_kill_id_locked_(s, doc_id);
+    store_jrec_(s, 'D', doc_id, 0, (const f32 *)0);
+    pthread_rwlock_unlock(&s->lock);
+    return hit;
+}
+
+/* tombstones every row whose id is in [lo, hi] (a whole document when ids are doc << bits | chunk); one pass over
+ * the id column; returns how many */
+i32 store_delete_range(RagStore *s, i64 lo, i64 hi)
 {
     i32 r, hit = 0;
     pthread_rwlock_wrlock(&s->lock);
-    store_idmap_locked_(s);
-    for (r = store_find_(s, doc_id); r >= 0; r = store_prev_(s, r))
-        if (!STORE_DEAD(s, r)) { STORE_KILL(s, r); ++hit; --s->live; ++s->mods; }
-    if (s->jf) { u8 op = 'D'; fwrite(&op, 1, 1, s->jf); fwrite(&doc_id, 8, 1, s->jf); }
+    for (r = 0; r < s->count; ++r)
+        if (!STORE_DEAD(s, r) && STORE_ID(s, r) >= lo && STORE_ID(s, r) <= hi) { STORE_KILL(s, r); ++hit; --s->live; ++s->mods; }
+    store_jrec_(s, 'R', lo, hi, (const f32 *)0);
     pthread_rwlock_unlock(&s->lock);
     return hit;
 }
@@ -879,7 +965,7 @@ i32 store_set_meta(RagStore *s, i64 doc_id, i64 meta)
     store_idmap_locked_(s);
     r = store_live_row_(s, doc_id);
     if (r >= 0) STORE_META(s, r) = meta;
-    if (r >= 0 && s->jf) { u8 op = 'M'; fwrite(&op, 1, 1, s->jf); fwrite(&doc_id, 8, 1, s->jf); fwrite(&meta, 8, 1, s->jf); }
+    if (r >= 0) store_jrec_(s, 'M', doc_id, meta, (const f32 *)0);
     pthread_rwlock_unlock(&s->lock);
     return r >= 0 ? 0 : -1;
 }
@@ -955,6 +1041,8 @@ static void store_engine_build_(RagStore *s, i32 w)
 void store_build(RagStore *s)
 {
     i32 w;
+    pthread_mutex_lock(&s->snap_mu);                             /* a snapshot child may still read rows that the */
+    store_snap_reap_(s, 1);                                      /* compaction below moves: it finishes first */
     pthread_mutex_lock(&s->rb_mu);                               /* not in the middle of a live rebuild */
     pthread_mutex_lock(&s->mt_mu);
     pthread_rwlock_wrlock(&s->lock);
@@ -973,6 +1061,7 @@ void store_build(RagStore *s)
     store_tune_run_(s, store_ncpu_());                           /* keep the recall asked for, if one is (searches go on) */
     pthread_mutex_unlock(&s->mt_mu);
     pthread_mutex_unlock(&s->rb_mu);
+    pthread_mutex_unlock(&s->snap_mu);
 }
 
 #include "store_tune.c"

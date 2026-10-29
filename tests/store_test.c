@@ -453,7 +453,7 @@ int main(void)
          * indexed by the store's own thread, rebuilt as it grows, tuned to the recall asked for; deletes + save keep
          * the index (nothing rebuilt at load); rows from new topics are noticed as a drift and trigger a rebuild. */
         i32 n4 = 24000, n40 = 16000, d4 = 32, nd = 3000, nq4 = 100, j, q, bits, same = 0, tot = 0, inbest = 0, sameb = 0;
-        i32 miss = 0, looks = 0, sameld = 0, mc[32], did = 0, reasons = 0;
+        i32 miss = 0, looks = 0, sameld = 0, mc[32], did = 0, reasons = 0, nsnap = 0, snap_at = 0;
         i32 *mr = (i32 *)malloc((size_t)32 * 100 * sizeof(i32));
         f32 *x4 = (f32 *)malloc((size_t)(n4 + nd) * d4 * sizeof(f32)), *q4 = (f32 *)malloc((size_t)(2 * nq4) * d4 * sizeof(f32));
         f32 *qd = q4 + (size_t)nq4 * d4, sc4[64], r_live, r_saved, r_d0, r_d1, rt;
@@ -523,8 +523,24 @@ int main(void)
             row = (i32)(sd_rng_(&s5) % (u32)j);
             if (store_search(lv, x4 + (size_t)row * d4, 1, r1, c1) < 1 || r1[0] != 600000 + row) ++miss;
             ++looks;
+            if (j >= snap_at) { if (store_snapshot(lv, "/tmp/store_demo_live_snap.vxi") == 0) ++nsnap; snap_at += n4 / 6; }   /* forks beside the
+                                                                  * live thread and the adder */
         }
         pthread_join(th, (void **)0);
+        if (store_snapshot_poll(lv, 1) != 0) ok = 0;
+        {   RagStore *ls = store_load(a, "/tmp/store_demo_live_snap.vxi");
+            i32 have = ls ? store_count(ls) : 0, fnd = 0, tr = 0;
+            for (j = 0; ls && j < have; j += 97) {
+                i64 r1[1]; f32 c1[1];
+                ++tr;
+                if (store_search(ls, x4 + (size_t)j * d4, 1, r1, c1) == 1 && r1[0] == 600000 + j) ++fnd;
+            }
+            print_cstr("  live store: "); print_i64(nsnap); print_cstr(" snapshots taken while rows streamed in, the last one loads with ");
+            print_i64(have); print_cstr(" rows, found "); print_i64(fnd); print_cstr("/"); print_i64(tr); print_cstr("\n");
+            if (!ls || nsnap < 1 || have < 1 || have > n4 || fnd * 100 < tr * 98) ok = 0;
+            if (ls) store_destroy(ls);
+            remove("/tmp/store_demo_live_snap.vxi"); remove("/tmp/store_demo_live_snap.vxi.j"); remove("/tmp/store_demo_live_snap.vxi.jn");
+        }
         for (j = 0; j < 20000 && store_pending(lv) > 0; ++j) { struct timespec ts; ts.tv_sec = 0; ts.tv_nsec = 1000000L; nanosleep(&ts, (struct timespec *)0); }
         store_set_live(lv, 0, 1.0f);                             /* stop the thread; settle by hand */
         for (j = 0; j < 20 && store_maintain(lv); ++j) {}
@@ -604,6 +620,57 @@ int main(void)
             store_destroy(jl);
         }
         store_destroy(j);
+    }
+
+    /* background snapshots: a child writes a copy-on-write image of this moment while rows keep coming. A copy to
+     * another file holds that moment only; a snapshot of the store's own file takes the journal over, so the file and
+     * its journal hold everything, including what came in while the child wrote. */
+    {
+        RagStore *b = store_new(a, dim), *lc, *lo;
+        const char *P = "/tmp/store_demo_snap.vxi", *C = "/tmp/store_demo_snap_copy.vxi";
+        i32 nb = 3000, at_fork, r1, r2, r3, w1, w2, in_copy = 0, late_in_copy = 0, found = 0, gone = 0, self = 0;
+        i64 us = 0;
+        for (i = 0; i < nb; ++i) store_add(b, vv + (size_t)i * dim, 20000 + i);
+        store_build(b);
+        if (store_save(b, P) != 0) ok = 0;
+        for (i = 0; i < 100; ++i) store_delete(b, 20000 + i * 3);    /* tombstones the child leaves out */
+        at_fork = store_count(b);
+        r1 = store_snapshot(b, C);
+        for (i = nb; i < nb + 400; ++i) store_add(b, vv + (size_t)i * dim, 20000 + i);
+        w1 = store_snapshot_poll(b, 1);
+        r2 = store_snapshot(b, P);
+        for (i = nb + 400; i < nb + 600; ++i) store_add(b, vv + (size_t)i * dim, 20000 + i);
+        store_delete(b, 20000 + 1);
+        w2 = store_snapshot_poll(b, 1);
+        store_snapshot_info(b, (i32 *)0, &r3, &us);
+        for (i = nb + 600; i < nb + 700; ++i) store_add(b, vv + (size_t)i * dim, 20000 + i);
+        if (store_sync(b, P) != 0) ok = 0;
+        lc = store_load(a, C);
+        lo = store_load(a, P);
+        if (!lc || !lo) ok = 0;
+        else {
+            for (i = 0; i < nb + 700; i += 7) {
+                i64 r1h[3]; f32 c1[3];
+                i32 h = store_search(lc, vv + (size_t)i * dim, 3, r1h, c1), q, hit = 0;
+                for (q = 0; q < h; ++q) if (r1h[q] == 20000 + i) hit = 1;
+                if (i < nb && hit) ++in_copy;
+                if (i >= nb && hit) ++late_in_copy;
+                h = store_search(lo, vv + (size_t)i * dim, 3, r1h, c1);
+                for (q = 0, hit = 0; q < h; ++q) if (r1h[q] == 20000 + i) hit = 1;
+                if ((i < 300 && i % 3 == 0) || i == 1) { if (hit) ++gone; }
+                else { if (hit) ++found; ++self; }
+            }
+            print_cstr("  snapshot: a copy of "); print_i64(store_count(lc)); print_cstr(" rows (the moment of the fork: ");
+            print_i64(at_fork); print_cstr(", none of the 700 added later); its own file + journal "); print_i64(store_count(lo));
+            print_cstr(" of "); print_i64(store_count(b)); print_cstr(", rows found "); print_i64(found); print_cstr("/"); print_i64(self);
+            print_cstr(", deleted still visible "); print_i64(gone); print_cstr(", last one took "); print_i64(us / 1000); print_cstr(" ms\n");
+            if (r1 != 0 || r2 != 0 || w1 != 0 || w2 != 0 || r3 != 0 || store_count(lc) != at_fork || late_in_copy != 0
+                || in_copy * 100 < ((nb + 6) / 7 - 15) * 95 || store_count(lo) != store_count(b) || found != self || gone != 0 || lo->jf2) ok = 0;
+            store_destroy(lc); store_destroy(lo);
+        }
+        store_destroy(b);
+        remove(P); remove("/tmp/store_demo_snap.vxi.j"); remove("/tmp/store_demo_snap.vxi.jn");
+        remove(C); remove("/tmp/store_demo_snap_copy.vxi.j");
     }
     print_cstr(ok ? "  OK\n" : "  FAIL\n");
     print_flush();

@@ -4,7 +4,8 @@
 # the store, vecdb and mem.c. Then the vecdb command line, the fuzzers, the thread and crash-safety tests and the
 # server end to end. Each binary goes to .build/ and is rebuilt only when its source or a dependency changed; it
 # is compiled with -Werror and a non-zero exit fails the run.
-#   ./run            every test (needs bash and gcc; python3 for the server's end-to-end tests)
+#   ./run            every test, and .build/libvecindex.so / .a (needs bash and gcc; python3 for the server's
+#                    end-to-end tests)
 #   ./run bench      also bench/bench.c (timings vs the Rust port) and bench/mbench.c (mem.c timings, including the
 #                    mem_consolidate cost-vs-N sweep - takes a couple of minutes)
 #   ./run stress     also tests/stress.c (churn + oracle + edge cases) and tests/mstress.c (mem.c churn + real
@@ -60,6 +61,20 @@ for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf engine store vecdb mem $
     if ! "./$bin" "${runargs[@]}"; then echo "  ^ $name FAILED"; fail=1; fi
     echo
 done
+
+# ---- the C API: libvecindex.so / .a with nothing but vi_* exported, and a program that uses only the header ----
+echo "C API: libvecindex.so, libvecindex.a"
+"$CC" "${CFLAGS[@]}" -fPIC -shared -fvisibility=hidden -Iinclude src/vecindex.c -lm -lpthread -o "$OUT/libvecindex.so" || fail=1
+"$CC" "${CFLAGS[@]}" -fPIC -fvisibility=hidden -Iinclude -c src/vecindex.c -o "$OUT/vecindex.o" && ar rcs "$OUT/libvecindex.a" "$OUT/vecindex.o" || fail=1
+if command -v nm >/dev/null; then
+    extra=$(nm -D --defined-only "$OUT/libvecindex.so" | awk '{print $3}' | grep -v -E '^(vi_[a-z_]+|_init|_fini|_edata|_end|__bss_start)$' || true)
+    if [[ -z $extra ]]; then echo "  ok   only vi_* exported"; else echo "  FAIL exported beyond vi_*: $extra"; fail=1; fi
+fi
+"$CC" "${CFLAGS[@]}" -Iinclude tests/api_test.c -L"$OUT" -lvecindex -lm -lpthread -o "$OUT/api_test_so" \
+    && LD_LIBRARY_PATH="$OUT" "./$OUT/api_test_so" || { echo "  ^ C API (shared) FAILED"; fail=1; }
+"$CC" "${CFLAGS[@]}" -Iinclude tests/api_test.c "$OUT/libvecindex.a" -lm -lpthread -o "$OUT/api_test_a" \
+    && "./$OUT/api_test_a" > /dev/null || { echo "  ^ C API (static) FAILED"; fail=1; }
+echo
 
 # ---- vecdb command line, end to end (built-in embedder, no model server) ----
 echo "vecdb cli end-to-end"
@@ -120,6 +135,11 @@ echo "vecdb crash test"
 # ---- full file replacement happens, so it needs its own generation-suffixed-filename atomicity (VecDB.bodygen) ----
 echo "vecdb crash test 2 (re-index over an existing database)"
 "$CC" -std=gnu99 -O2 -march=native -Isrc tests/vcrash2.c -lm -lpthread -o "$OUT/vcrash2" && "./$OUT/vcrash2" 20 || { echo "  ^ crash test 2 FAILED"; fail=1; }
+
+# ---- crash safety for the store itself, with background snapshots running: kill -9 the writer (and in every other
+# ---- round its snapshot child too) at random moments; every synced row must be there exactly once ----
+echo "store crash test (journal + background snapshots)"
+"$CC" -std=gnu99 -O2 -march=native -Isrc tests/scrash.c -lm -lpthread -o "$OUT/scrash" && "./$OUT/scrash" 20 || { echo "  ^ store crash test FAILED"; fail=1; }
 
 # ---- readers + a writer on one Mem (mem.c's own rwlock, one layer above vecdb's), under the thread sanitizer ----
 echo "mem threads"
