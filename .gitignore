@@ -4,8 +4,11 @@ __pycache__/
 emb/real_data.bin
 emb/real_texts.json
 bench/libvi.so
-bench/.venv/
 bench/data/
 bench/scale
 bench/live
 bench/tune
+bench/vbench1m
+bench/results-*/
+bench/.venv/
+py/.venv/

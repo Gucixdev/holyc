@@ -1,7 +1,7 @@
 /* scale.c - how far does one machine go? Streams N synthetic vectors into a store, builds, searches, saves and
  * reloads, printing time and memory (RSS split into anonymous memory and file-backed pages) at every stage.
  *
- *   gcc -std=gnu99 -O2 -march=native -I.. scale.c -lm -lpthread -o scale
+ *   gcc -std=gnu99 -O2 -march=native -I../src scale.c -lm -lpthread -o scale
  *   ./scale N [dim=128] [--nq 200] [--max-rss-mb 6000] [--save DIR] [--probe a,b,c] [--rerank r1,r2] [--spill DIR]
  *           [--bits 2] [--int8]       (2-bit codes, int8 rows: the compact modes for 100M-row stores)
  *

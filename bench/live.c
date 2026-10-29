@@ -1,6 +1,6 @@
 /* live.c - rows streamed into a built index, on GloVe-100: what live mode costs and what it buys.
  *
- *   gcc -std=gnu99 -O2 -march=native -I.. live.c -lm -lpthread -o live && ./live DATA_DIR MODE
+ *   gcc -std=gnu99 -O2 -march=native -I../src live.c -lm -lpthread -o live && ./live DATA_DIR MODE
  *
  * MODE (each a separate run, same probe sweep: a batch of the 10k held-out queries on 2 threads, recall@10 against
  * the exact top 10 of all 1,183,514 rows):
@@ -14,7 +14,7 @@
  *           the sweep with them appended, then (if live mode finds the data moved) after the rebuild it decides on
  *   drift   the same, the streamed rows being whole regions the build never saw: every row of 8 of the Voronoi cells
  *           of 40 random rows (about a fifth of the data)
- * DATA_DIR comes from prepare_glove.py. Doc ids are the row numbers of train.f32, so answers check against gt.i32. */
+ * DATA_DIR comes from py/prepare_glove.py. Doc ids are the row numbers of train.f32, so answers check against gt.i32. */
 #include "store.c"
 
 static Arena pa;

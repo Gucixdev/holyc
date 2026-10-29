@@ -1,10 +1,10 @@
 /* tune.c - ask the store for a recall@10 and check that it keeps it, on GloVe-100's held-out queries.
  *
- *   gcc -std=gnu99 -O2 -march=native -I.. tune.c -lm -lpthread -o tune && ./tune DATA_DIR 0.95
+ *   gcc -std=gnu99 -O2 -march=native -I../src tune.c -lm -lpthread -o tune && ./tune DATA_DIR 0.95
  *
  * The build tunes on the store's own rows (no traffic yet); then 2000 held-out queries are answered and timed, the
  * store re-tunes on the queries it just answered, and the other 8000 are answered with that. DATA_DIR comes from
- * prepare_glove.py. */
+ * py/prepare_glove.py. */
 #include "store.c"
 static Arena pa;
 static double now_(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+1e-9*t.tv_nsec;}

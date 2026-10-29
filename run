@@ -1,60 +1,60 @@
 #!/usr/bin/env bash
-# vecindex - the bit-packed quantizers (q1-q5 + qmix), the IVF coarse
-# router + HNSW graph router, the 4-bit fast-scan, and the adaptive
-# engine. Builds each *.c self-test (only if its source or a dependency
-# changed) with -Werror and runs it; a non-zero exit fails.
-#   (self-contained: base headers vendored, builds with -I.)
-#   ./run          quantizers + ivf + hnsw + engine self-tests
-#   ./run bench    also build+run bench.c (timings vs the Rust port) and mbench.c (mem.c timings,
-#                  including the mem_consolidate cost-vs-N sweep - takes a couple of minutes)
-#   ./run stress   also build+run stress.c (churn + oracle + edge cases) and mstress.c (mem.c
-#                  churn + real invariant checks, one layer up)
+# run - build and test vecindex. Every module in src/ has its self-test in tests/NAME_test.c: the bit-packed
+# quantizers (q1-q5 + qmix), the IVF coarse router + HNSW graph router, the 4-bit fast-scan, the adaptive engine,
+# the store, vecdb and mem.c. Then the vecdb command line, the fuzzers, the thread and crash-safety tests and the
+# server end to end. Each binary goes to .build/ and is rebuilt only when its source or a dependency changed; it
+# is compiled with -Werror and a non-zero exit fails the run.
+#   ./run            every test (needs bash and gcc; python3 for the server's end-to-end tests)
+#   ./run bench      also bench/bench.c (timings vs the Rust port) and bench/mbench.c (mem.c timings, including the
+#                    mem_consolidate cost-vs-N sweep - takes a couple of minutes)
+#   ./run stress     also tests/stress.c (churn + oracle + edge cases) and tests/mstress.c (mem.c churn + real
+#                    invariant checks, one layer up)
+#   ./run real_val   also bench/real_val.c, the SQuAD + AG-News retrieval benchmark (needs emb/real_data.bin)
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 CC="${CC:-gcc}"
 CFLAGS=(-std=c89 -pedantic -Wall -Wextra -Werror
-        -D_POSIX_C_SOURCE=200112L -O2 -march=native -I.)
+        -D_POSIX_C_SOURCE=200112L -O2 -march=native -Isrc)
 OUT=.build
 mkdir -p "$OUT"
 
-# q2/q4/q5 are sed-derived from q1.c - fail loudly if they have drifted.
-./gen --check
+# q2/q4/q5 and their tests are sed-derived from q1 - fail loudly if they have drifted.
+tools/gen --check
 
-declare -A MACRO=(
-    [q1]=Q1_DEMO [q2]=Q2_DEMO [q3]=Q3_DEMO [q4]=Q4_DEMO [q5]=Q5_DEMO
-    [qmix]=QMIX_DEMO [q4fs]=Q4FS_DEMO [hnsw]=HNSW_DEMO
-    [ivf]=IVF_DEMO [engine]=ENGINE_DEMO [bench]=BENCH [store]=STORE_DEMO [stress]=STRESS
-    [real_val]=REAL_VAL [hdict]=HDICT_DEMO [lex]=LEX_DEMO [vecdb]=VECDB_DEMO [mem]=MEM_DEMO
-)
-QDEPS=(q1.c q2.c q3.c q4.c q5.c qmix.c q4fs.c vsimd.h)
+QDEPS=(src/q1.c src/q2.c src/q3.c src/q4.c src/q5.c src/qmix.c src/q4fs.c src/vsimd.h)
+ENG=("${QDEPS[@]}" src/ivf.c src/hnsw.c src/engine.c)
+STORE=("${ENG[@]}" src/store.c src/hdict.c src/tq.c)
+VECDB=("${STORE[@]}" src/lex.c src/vecdb.c)
 
 fail=0
 for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf engine store vecdb mem ${1:+$1}; do
     bin="$OUT/$name"
-    src="$name.c"
-    deps=("$src")
-    libs=(-lm -lpthread)
+    src="tests/${name}_test.c"
+    def=()
     case $name in
-        qmix)   deps+=(q1.c q2.c q4.c vsimd.h) ;;
-        q4fs)   deps+=(q4.c vsimd.h) ;;
-        hnsw)   deps+=(vsimd.h) ;;
-        engine) deps+=("${QDEPS[@]}" ivf.c hnsw.c vsimd.h) ;;
-        store)  deps+=("${QDEPS[@]}" ivf.c hnsw.c vsimd.h engine.c hdict.c tq.c); libs+=(-lpthread) ;;
-        vecdb)  deps+=("${QDEPS[@]}" ivf.c hnsw.c vsimd.h engine.c store.c hdict.c lex.c tq.c); libs+=(-lpthread) ;;
-        mem)    deps+=("${QDEPS[@]}" ivf.c hnsw.c vsimd.h engine.c store.c hdict.c lex.c tq.c vecdb.c); libs+=(-lpthread) ;;
-        bench)  deps+=("${QDEPS[@]}" ivf.c hnsw.c engine.c) ;;
-        stress) deps+=("${QDEPS[@]}" ivf.c hnsw.c vsimd.h engine.c store.c hdict.c tq.c); libs+=(-lpthread) ;;
-        real_val) deps+=("${QDEPS[@]}" ivf.c hnsw.c engine.c store.c); libs+=(-lpthread)
+        hdict)  deps=(src/hdict.c) ;;
+        lex)    deps=(src/hdict.c src/lex.c) ;;
+        q1|q2|q3|q4|q5) deps=("src/$name.c" src/vsimd.h) ;;
+        qmix)   deps=(src/q1.c src/q2.c src/q4.c src/qmix.c src/vsimd.h) ;;
+        q4fs)   deps=(src/q4.c src/q4fs.c src/vsimd.h) ;;
+        hnsw)   deps=(src/hnsw.c src/vsimd.h) ;;
+        ivf)    deps=(src/ivf.c) ;;
+        engine) deps=("${ENG[@]}"); def=(-DENGINE_SERIALIZE) ;;   # exercise the .vxi round-trip in the test
+        store)  deps=("${STORE[@]}") ;;
+        vecdb)  deps=("${VECDB[@]}") ;;
+        mem)    deps=("${VECDB[@]}" src/mem.c) ;;
+        bench)  src=bench/bench.c; def=(-DBENCH); deps=("${ENG[@]}") ;;
+        stress) src=tests/stress.c; def=(-DSTRESS); deps=("${STORE[@]}") ;;
+        real_val) src=bench/real_val.c; def=(-DREAL_VAL); deps=("${STORE[@]}")
                   # needs the real corpus - skip cleanly if it is absent
-                  [[ -f emb/real_data.bin ]] || { echo "real_val: emb/real_data.bin absent (run emb/real_gen.py) - skipped"; continue; } ;;
+                  [[ -f emb/real_data.bin ]] || { echo "real_val: emb/real_data.bin absent (run py/real_gen.py emb) - skipped"; continue; } ;;
+        *)      echo "run: unknown target '$name'" >&2; exit 2 ;;
     esac
-    extra=()
-    [[ $name == engine ]] && extra=(-DENGINE_SERIALIZE)   # exercise the .vxi round-trip in-demo
     stale=0
     [[ -x $bin ]] || stale=1
-    for d in "${deps[@]}"; do [[ $d -nt $bin ]] && stale=1; done
-    (( stale )) && "$CC" "${CFLAGS[@]}" "$src" "-D${MACRO[$name]}" "${extra[@]}" "${libs[@]}" -o "$bin"
+    for d in "$src" "${deps[@]}"; do [[ $d -nt $bin ]] && stale=1; done
+    (( stale )) && "$CC" "${CFLAGS[@]}" "$src" "${def[@]}" -lm -lpthread -o "$bin"
     runargs=()
     [[ $name == real_val ]] && runargs=(emb)
     if ! "./$bin" "${runargs[@]}"; then echo "  ^ $name FAILED"; fail=1; fi
@@ -64,7 +64,7 @@ done
 # ---- vecdb command line, end to end (built-in embedder, no model server) ----
 echo "vecdb cli end-to-end"
 cli="$OUT/vecdb_cli"
-"$CC" "${CFLAGS[@]}" vecdb.c -DVECDB_CLI -lm -lpthread -o "$cli" || fail=1
+"$CC" "${CFLAGS[@]}" src/vecdb_cli.c -lm -lpthread -o "$cli" || fail=1
 T=$(mktemp -d)
 mkdir "$T/notes"
 printf 'Physics of light. See [[Quantum]] and [[Optics]]. #physics\n' > "$T/notes/light.md"
@@ -89,7 +89,7 @@ rm -rf "$T"
 
 # ---- random input under the address/undefined-behaviour sanitizers ----
 echo "vecdb fuzz"
-if "$CC" -std=gnu99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -I. vfuzz.c -lm -lpthread -o "$OUT/vfuzz" 2>/dev/null; then
+if "$CC" -std=gnu99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Isrc tests/vfuzz.c -lm -lpthread -o "$OUT/vfuzz" 2>/dev/null; then
     "./$OUT/vfuzz" 3000 || { echo "  ^ fuzz FAILED"; fail=1; }
 else
     echo "  (sanitizers unavailable - skipped)"
@@ -97,7 +97,7 @@ fi
 
 # ---- readers + a writer on one database, under the thread sanitizer ----
 echo "vecdb threads"
-if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -I. vthreads.c -lm -lpthread -o "$OUT/vthreads" 2>/dev/null; then
+if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -Isrc tests/vthreads.c -lm -lpthread -o "$OUT/vthreads" 2>/dev/null; then
     "./$OUT/vthreads" || { echo "  ^ thread test FAILED"; fail=1; }
 else
     echo "  (thread sanitizer unavailable - skipped)"
@@ -105,7 +105,7 @@ fi
 
 # ---- the store's live mode (its own indexing / rebuild thread beside adders and searchers), under the thread sanitizer ----
 echo "store threads (live mode)"
-if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -march=native -I. store.c -DSTORE_DEMO -lm -lpthread -o "$OUT/store_tsan" 2>/dev/null; then
+if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -march=native -Isrc tests/store_test.c -lm -lpthread -o "$OUT/store_tsan" 2>/dev/null; then
     if TSAN_OPTIONS="halt_on_error=1" "./$OUT/store_tsan" > /dev/null; then echo "  ok   no data race reported"
     else echo "  ^ store thread test FAILED"; fail=1; fi
 else
@@ -114,16 +114,16 @@ fi
 
 # ---- crash safety: kill -9 a writer at random moments, the database must reload with everything it synced ----
 echo "vecdb crash test"
-"$CC" -std=gnu99 -O2 -march=native -I. vcrash.c -lm -lpthread -o "$OUT/vcrash" && "./$OUT/vcrash" 25 || { echo "  ^ crash test FAILED"; fail=1; }
+"$CC" -std=gnu99 -O2 -march=native -Isrc tests/vcrash.c -lm -lpthread -o "$OUT/vcrash" && "./$OUT/vcrash" 25 || { echo "  ^ crash test FAILED"; fail=1; }
 
 # ---- crash safety: same, but re-indexing an EXISTING path from scratch (vecdb_new, no load) - the one place a
 # ---- full file replacement happens, so it needs its own generation-suffixed-filename atomicity (VecDB.bodygen) ----
 echo "vecdb crash test 2 (re-index over an existing database)"
-"$CC" -std=gnu99 -O2 -march=native -I. vcrash2.c -lm -lpthread -o "$OUT/vcrash2" && "./$OUT/vcrash2" 20 || { echo "  ^ crash test 2 FAILED"; fail=1; }
+"$CC" -std=gnu99 -O2 -march=native -Isrc tests/vcrash2.c -lm -lpthread -o "$OUT/vcrash2" && "./$OUT/vcrash2" 20 || { echo "  ^ crash test 2 FAILED"; fail=1; }
 
 # ---- readers + a writer on one Mem (mem.c's own rwlock, one layer above vecdb's), under the thread sanitizer ----
 echo "mem threads"
-if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -I. mthreads.c -lm -lpthread -o "$OUT/mthreads" 2>/dev/null; then
+if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -Isrc tests/mthreads.c -lm -lpthread -o "$OUT/mthreads" 2>/dev/null; then
     "./$OUT/mthreads" || { echo "  ^ mem thread test FAILED"; fail=1; }
 else
     echo "  (thread sanitizer unavailable - skipped)"
@@ -131,16 +131,16 @@ fi
 
 # ---- crash safety for mem.c's own files (PATH.mem, PATH.mem.cold), same discipline as vcrash.c/vcrash2.c ----
 echo "mem crash test"
-"$CC" -std=gnu99 -O2 -march=native -I. mcrash.c -lm -lpthread -o "$OUT/mcrash" && "./$OUT/mcrash" 20 || { echo "  ^ mem crash test FAILED"; fail=1; }
+"$CC" -std=gnu99 -O2 -march=native -Isrc tests/mcrash.c -lm -lpthread -o "$OUT/mcrash" && "./$OUT/mcrash" 20 || { echo "  ^ mem crash test FAILED"; fail=1; }
 
-# ---- optional cross-encoder rerank pass over vecdb's hybrid search (rerank.c + rerank_srv.py) -
+# ---- optional cross-encoder rerank pass over vecdb's hybrid search (src/rerank.c + py/rerank_srv.py) -
 # ---- needs a torch/transformers-capable python3; skips cleanly if none is found, same as real_val ----
 echo "rerank demo"
-"$CC" "${CFLAGS[@]}" rerank.c -DRERANK_DEMO -lm -lpthread -o "$OUT/rerank_demo" && "./$OUT/rerank_demo" || { echo "  ^ rerank demo FAILED"; fail=1; }
+"$CC" "${CFLAGS[@]}" tests/rerank_test.c -lm -lpthread -o "$OUT/rerank_demo" && "./$OUT/rerank_demo" || { echo "  ^ rerank demo FAILED"; fail=1; }
 
 # ---- random input against the rule parser/evaluator (mirrors vfuzz.c one layer up) ----
 echo "mem rule parser fuzz"
-if "$CC" -std=gnu99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -I. mrfuzz.c -lm -lpthread -o "$OUT/mrfuzz" 2>/dev/null; then
+if "$CC" -std=gnu99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Isrc tests/mrfuzz.c -lm -lpthread -o "$OUT/mrfuzz" 2>/dev/null; then
     "./$OUT/mrfuzz" 5000 || { echo "  ^ mem rule fuzz FAILED"; fail=1; }
 else
     echo "  (sanitizers unavailable - skipped)"
@@ -156,12 +156,12 @@ if [[ ! -f $OUT/libbearssl.a || third_party/bearssl/inc/bearssl.h -nt $OUT/libbe
     done | xargs -P "$(nproc 2>/dev/null || echo 2)" -n 2 sh -c '"$0" -O2 -Ithird_party/bearssl/inc -Ithird_party/bearssl/src -c "$1" -o "${2%.c}.o"' "$CC" \
         && ar rcs "$OUT/libbearssl.a" "$OUT"/bearssl/*.o || fail=1
 fi
-"$CC" "${CFLAGS[@]}" -isystem third_party/bearssl/inc vserv.c "$OUT/libbearssl.a" -lm -lpthread -o "$OUT/vserv" || fail=1
-"$CC" "${CFLAGS[@]}" -DVSERV_NO_TLS vserv.c -lm -lpthread -o "$OUT/vserv_plain" || fail=1
+"$CC" "${CFLAGS[@]}" -isystem third_party/bearssl/inc src/vserv.c "$OUT/libbearssl.a" -lm -lpthread -o "$OUT/vserv" || fail=1
+"$CC" "${CFLAGS[@]}" -DVSERV_NO_TLS src/vserv.c -lm -lpthread -o "$OUT/vserv_plain" || fail=1
 if command -v python3 >/dev/null; then
-    python3 bench/vserv_test.py "$OUT/vserv" || { echo "  ^ vserv FAILED"; fail=1; }
-    python3 bench/vserv_test.py "$OUT/vserv_plain" >/dev/null || { echo "  ^ vserv (no TLS build) FAILED"; fail=1; }
-    python3 bench/vserv_tls_test.py "$OUT/vserv" || { echo "  ^ vserv TLS FAILED"; fail=1; }
+    python3 py/vserv_test.py "$OUT/vserv" || { echo "  ^ vserv FAILED"; fail=1; }
+    python3 py/vserv_test.py "$OUT/vserv_plain" >/dev/null || { echo "  ^ vserv (no TLS build) FAILED"; fail=1; }
+    python3 py/vserv_tls_test.py "$OUT/vserv" || { echo "  ^ vserv TLS FAILED"; fail=1; }
 else
     echo "  (python3 unavailable - built, end-to-end tests skipped)"
 fi
@@ -171,14 +171,14 @@ fi
 if [[ "${1:-}" == bench ]]; then
     echo
     echo "mem bench"
-    "$CC" -std=gnu99 -O2 -march=native -I. mbench.c -lm -lpthread -o "$OUT/mbench" && "./$OUT/mbench" || { echo "  ^ mem bench FAILED"; fail=1; }
+    "$CC" -std=gnu99 -O2 -march=native -Isrc bench/mbench.c -lm -lpthread -o "$OUT/mbench" && "./$OUT/mbench" || { echo "  ^ mem bench FAILED"; fail=1; }
 fi
 
 # ---- mem.c adversarial churn + real invariant checks (mirrors stress.c one layer up) ----
 if [[ "${1:-}" == stress ]]; then
     echo
     echo "mem stress"
-    "$CC" "${CFLAGS[@]}" mstress.c -lm -lpthread -o "$OUT/mstress" && "./$OUT/mstress" || { echo "  ^ mem stress FAILED"; fail=1; }
+    "$CC" "${CFLAGS[@]}" tests/mstress.c -lm -lpthread -o "$OUT/mstress" && "./$OUT/mstress" || { echo "  ^ mem stress FAILED"; fail=1; }
 fi
 
 exit $fail

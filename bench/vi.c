@@ -1,7 +1,7 @@
 /* vi.c - a small C ABI over store.c for the benchmark harness (bench.py loads it with ctypes, the same way
  * every other library in the comparison is driven from Python).
  *
- *   gcc -std=gnu99 -O3 -march=native -fPIC -shared -I.. vi.c -o libvi.so -lm -lpthread
+ *   gcc -std=gnu99 -O3 -march=native -fPIC -shared -I../src vi.c -o libvi.so -lm -lpthread
  *
  * Doc ids are the row numbers 0..n-1, so results compare directly with the ground truth. */
 #include "store.c"
