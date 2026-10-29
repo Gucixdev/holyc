@@ -22,7 +22,21 @@ It used to live in [holyc](https://github.com/Gucixdev/holyc) as `ragdb/`; its h
 | `emb/` | generated retrieval benchmark data, not committed |
 
 Everything is one translation unit: a program includes the `.c` file of the layer it needs (`store.c`, `vecdb.c`,
-`mem.c`) and compiles once with `-Isrc`. `./run` builds each test into `.build/`.
+`mem.c`) and compiles once with `-Isrc`. `./run` builds each test into `.build/`. A file named `LAYER_part.c` is a
+part of `LAYER.c`, which includes it; it is not compiled on its own.
+
+| `src/` files | what they hold |
+|---|---|
+| `base.h`, `arena_alloc.h`, `contracts.h`, `print.h`, `fine_grained.h`, `vsimd.h` | fixed-size types, the arena allocator, contracts, output without stdio, the job system, SIMD helpers |
+| `q1.c` - `q5.c`, `qmix.c`, `q4fs.c` | bit-packed 1-8 bit scalar quantizers, mixed depth per dimension, the 4-bit fast-scan |
+| `ivf.c`, `hnsw.c`, `engine.c`, `engine_disk.c` | the k-means coarse router, the HNSW graph router, the adaptive engine and its file format |
+| `tq.c`, `tq_scan.c`, `tq_add.c` | the rotated 4-bit / 2-bit fast-scan index: build, scan, rows added after the build |
+| `hdict.c`, `lex.c` | hash dictionaries; the term dictionary, postings and BM25 |
+| `store.c`, `store_tune.c`, `store_live.c`, `store_search.c`, `store_disk.c` | the vector store: rows, ids, build; self-tuning; live mode; search; the file and its journal |
+| `vecdb.c`, `vecdb_embed.c`, `vecdb_search.c`, `vecdb_graph.c`, `vecdb_disk.c`, `vecdb_cli.c` | the note database: notes, links, tags; embedding servers; hybrid search; MCTS and the query language; files; the command line |
+| `mem.c`, `mem_rules.c`, `mem_disk.c` | agent memory: lifetime and tiers; the rule engine; its files |
+| `rerank.c` | a cross-encoder second pass over vecdb's hybrid search |
+| `vserv.c`, `vserv_proto.c`, `vserv_pem.c` | the server: sockets, workers, TLS; the binary and HTTP protocols; certificates and keys |
 
 ## Build and test
 

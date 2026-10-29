@@ -23,9 +23,9 @@ mkdir -p "$OUT"
 tools/gen --check
 
 QDEPS=(src/q1.c src/q2.c src/q3.c src/q4.c src/q5.c src/qmix.c src/q4fs.c src/vsimd.h)
-ENG=("${QDEPS[@]}" src/ivf.c src/hnsw.c src/engine.c)
-STORE=("${ENG[@]}" src/store.c src/hdict.c src/tq.c)
-VECDB=("${STORE[@]}" src/lex.c src/vecdb.c)
+ENG=("${QDEPS[@]}" src/ivf.c src/hnsw.c src/engine*.c)
+STORE=("${ENG[@]}" src/store*.c src/hdict.c src/tq*.c)
+VECDB=("${STORE[@]}" src/lex.c src/vecdb*.c)
 
 fail=0
 for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf engine store vecdb mem ${1:+$1}; do
@@ -43,7 +43,7 @@ for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf engine store vecdb mem $
         engine) deps=("${ENG[@]}"); def=(-DENGINE_SERIALIZE) ;;   # exercise the .vxi round-trip in the test
         store)  deps=("${STORE[@]}") ;;
         vecdb)  deps=("${VECDB[@]}") ;;
-        mem)    deps=("${VECDB[@]}" src/mem.c) ;;
+        mem)    deps=("${VECDB[@]}" src/mem*.c) ;;
         bench)  src=bench/bench.c; def=(-DBENCH); deps=("${ENG[@]}") ;;
         stress) src=tests/stress.c; def=(-DSTRESS); deps=("${STORE[@]}") ;;
         real_val) src=bench/real_val.c; def=(-DREAL_VAL); deps=("${STORE[@]}")
