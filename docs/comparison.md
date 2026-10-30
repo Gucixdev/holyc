@@ -130,9 +130,10 @@ Not covered: ScaNN, Annoy, NMSLIB, MongoDB Atlas Vector Search, Azure AI Search,
 - **One reranking model.** `src/rerank.c`/`py/rerank_srv.py` wire up `cross-encoder/ms-marco-MiniLM-L-6-v2`
   (English only), measured at +19.4 points gold@1 on the SQuAD subset where it has room to help ([vecdb.md](vecdb.md)).
   A multilingual one (`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` or similar) is not tested here.
-- **No multi-tenancy/auth/replication/HA** - this is a library, not a hosted service. Out of
-  scope for what it is, not a bug, but a real category difference from a managed vector-DB
-  product.
+- **No users and roles, replication or HA.** Access is the operating system's and TLS's business and accountability is
+  the log; a standby is a copy of the file and its journal. Tenants are a store file each, in the library
+  (`vi_dir_*`) or the server, and a batch of writes goes in all or none - both written and compiled, not yet run. A
+  real category difference from a managed vector-DB product, on purpose.
 - **No independent review, no production traffic.** Every test in this repo was written and run
   by the same person who wrote the code being tested. Real bugs were found this way (the whole
   point of writing real tests instead of just reading the code), but "no known gaps" is not the

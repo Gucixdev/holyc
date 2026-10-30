@@ -107,9 +107,14 @@ left are in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Production readiness
 
-**Embedded, single-node.** Not a hosted, multi-tenant service like Pinecone, Qdrant or Milvus. Every number below is
-measured: the older rows on a GTX 1050 Ti box (7.8 GB RAM, 12 cores), the scale, server and benchmark rows on the
-2-core box of the Results section; `./run`, `./run stress`, `./run bench` and `./run real_val` reproduce them.
+**Embedded first, one machine.** The library runs inside the application, like SQLite; `vserv` puts the same store
+on a socket for other processes and languages. Neither needs a cluster or a cloud: a tenant is a store file, a batch
+of writes goes in whole or not at all, the journal is flushed every second and folded into the file by background
+snapshots, the log records who did what (there are no users and roles), mutual TLS can tie a client to its tenant,
+one setting caps the CPU it takes and another what stays in RAM. A standby is a copy of the file and its journal;
+there is no replication. Every number below is measured, except in the rows marked not yet run: the older rows on a
+GTX 1050 Ti box (7.8 GB RAM, 12 cores), the scale, server and benchmark rows on the 2-core box of the Results
+section; `./run`, `./run stress`, `./run bench` and `./run real_val` reproduce them.
 
 | area | status | evidence |
 |---|---|---|
@@ -133,7 +138,7 @@ measured: the older rows on a GTX 1050 Ti box (7.8 GB RAM, 12 cores), the scale,
 ## Documentation
 
 - [docs/api.md](docs/api.md) - the C API, bindings from Python, Go and Rust, durability (journal and snapshots).
-- [docs/benchmarks.md](docs/benchmarks.md) - GloVe-100 against FAISS, turbovec and Qdrant; scale; the priority table
+- [docs/benchmarks.md](docs/benchmarks.md) - GloVe-100 against FAISS and turbovec (the Qdrant runs never finished); scale; the priority table
   of optimisations; bottlenecks; how to reproduce.
 - [docs/server.md](docs/server.md) - `vserv`: sockets, protocols, TLS, live mode.
 - [docs/vecdb.md](docs/vecdb.md) - the note database on top of the store: hybrid search, wikilinks, MCTS
