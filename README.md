@@ -38,6 +38,7 @@ part of `LAYER.c`, which includes it; it is not compiled on its own.
 | `mem.c`, `mem_rules.c`, `mem_disk.c` | agent memory: lifetime and tiers; the rule engine; its files |
 | `rerank.c` | a cross-encoder second pass over vecdb's hybrid search |
 | `vecindex.c` | the C API of `include/vecindex.h` over the store |
+| `vfind.c` | search a store's texts as you type, like fzf; Enter opens the whole document |
 | `vserv.c`, `vserv_proto.c`, `vserv_text.c`, `vserv_log.c`, `vserv_pem.c` | the server: sockets, workers, TLS; the line, binary and HTTP protocols; texts and JSON; the log; certificates and keys |
 
 ## Build and test
@@ -46,6 +47,7 @@ part of `LAYER.c`, which includes it; it is not compiled on its own.
 git clone https://github.com/Gucixdev/vecindex && cd vecindex
 ./run            # self-tests, fuzzers, thread and crash-safety tests, the server end to end (needs bash and gcc)
 ./run stress     # plus the churn / oracle stress tests
+tools/cross      # the core tests for aarch64, armv7, riscv64 and s390x under qemu (needs their gcc and qemu-user)
 ```
 
 ## Use it
@@ -80,9 +82,10 @@ cc -Iinclude demo.c -L.build -lvecindex -lm -lpthread -o demo && LD_LIBRARY_PATH
 
 For an LLM, each row can carry its text: `vi_add_text`, then `vi_search_hybrid` (the vector and BM25 over the texts,
 fused by rank) and `vi_range` over a document's ids to hand the model the chunks around a hit, or the whole document.
-The same from Python (ctypes), Go (cgo) and Rust (`extern "C"`), every function, texts, and how durability works:
-[docs/api.md](docs/api.md). Inside a C program the library can also be one more file of the build (`src/vecindex.c`,
-or `store.c` itself for the internal API). Over a socket, `vserv` serves one store file to anything that can open a
+`.build/vfind docs.vxi` searches those texts as you type, like fzf: a few lines of each hit, Enter opens the whole
+document, Enter again prints the choice. The same from Python (ctypes), Go (cgo) and Rust (`extern "C"`), every
+function, texts, and how durability works: [docs/api.md](docs/api.md). Inside a C program the library can also be
+one more file of the build (`src/vecindex.c`, or `store.c` itself for the internal API). Over a socket, `vserv` serves one store file to anything that can open a
 socket, in one-line commands (`search 10 0.1 0.2 ...` -> `ok 3 42 -0.01 ...`), binary frames or HTTP
 ([docs/server.md](docs/server.md)).
 
@@ -111,6 +114,7 @@ measured: the older rows on a GTX 1050 Ti box (7.8 GB RAM, 12 cores), the scale,
 | area | status | evidence |
 |---|---|---|
 | Crash safety | atomic per-file + cross-file (generation-suffix) writes; the store's journal and background snapshots | `tests/vcrash.c`/`tests/vcrash2.c`, 25-90 rounds, always consistent; `tests/scrash.c` kills a store writer (and in every other round its snapshot child) at random moments: every synced row there exactly once |
+| CPUs | x86-64 (AVX-512, AVX2 or neither), ARM 64- and 32-bit (NEON), RISC-V 64, s390x (big-endian); 32-bit builds keep 64-bit file offsets | `tests/simd_test.c` checks every SIMD kernel against a plain reference: in `./run` for this CPU and, on x86-64, for an AVX2-only and a no-SIMD build. `tools/cross` builds the core tests for aarch64, armv7, riscv64 and s390x and runs them under qemu; it found a 32-bit bug that broke snapshots, fixed. Speed on real ARM hardware: not measured |
 | C API | `include/vecindex.h`, only `vi_*` exported | `tests/api_test.c` against the shared and the static library; Python, Go and Rust bindings run by hand ([docs/api.md](docs/api.md)) |
 | Concurrency | one rwlock per layer, TSan-clean, the store's live thread too | `tests/vthreads.c`/`tests/mthreads.c` and the store self-test under TSan in `./run` (it found two real races in live mode, fixed) |
 | Fuzzing | 3 fuzzers (parser, rule engine, malformed input) | `tests/vfuzz.c`/`tests/mrfuzz.c` - the rule-parser one found and fixed a real stack-overflow crash on its first run |

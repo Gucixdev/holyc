@@ -219,6 +219,11 @@ file with the columns past 256 MB). Replaced and deleted texts stay until the ne
 live ones and, when at least half the heap is garbage, compacts the copy in memory too. The word index is built by the
 first hybrid search after an open (one pass over the texts) and kept current by every write after it.
 
+To look through a store's texts by hand, `.build/vfind store.vxi` searches them as you type, like fzf: each hit with
+its document, chunk and a few lines around the words, Enter opens the whole document (its chunks by `vi_range`), Enter
+there prints `ID<TAB>DOCUMENT<TAB>CHUNK` on stdout. It opens the store read-only, so a running `vserv` may keep
+writing to it.
+
 ## Durability
 
 A store opened from a file keeps a journal of every add and delete next to it (`PATH.j`). `vi_sync` flushes it to

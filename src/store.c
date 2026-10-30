@@ -183,6 +183,7 @@ typedef struct {
     FILE    *jf2;           /* the snapshot replaces the journal's own file: the new file's journal, fed beside jf */
     char    *jn2;           /* its name (PATH.jn) */
     i32      snap_run;      /* 1 while a child writes (read without snap_mu, atomically) */
+    i32      ro;            /* opened read-only (store_load_ro): never writes its file or journal */
     i32      snap_last;     /* the last finished one: 0 ok, -1 failed, 2 none yet */
     i64      snap_t0_us;    /* when the running one started (CLOCK_MONOTONIC) */
     i64      snap_took_us;  /* how long the last finished one took */

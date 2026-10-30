@@ -177,7 +177,13 @@ static void store_journal_replay_(RagStore *s, const char *path)
 {
     char *jn = store_jname_(path, ".j"), *jn2 = store_jname_(path, ".jn");
     const char *use = jn;
-    i64 good = store_journal_play_(s, path, jn);
+    i64 good;
+    if (s->ro) {                                                 /* read the journals as they are; move, cut, keep nothing */
+        if (store_journal_play_(s, path, jn) < 0 && s->stamp) store_journal_play_(s, path, jn2);
+        free(jn); free(jn2);
+        return;
+    }
+    good = store_journal_play_(s, path, jn);
     if (good < 0 && s->stamp && (good = store_journal_play_(s, path, jn2)) >= 0) {
         if (rename(jn2, jn) == 0) store_fsync_dir_(path);
         else use = jn2;                                          /* append where it is: the next load finds it there too */
@@ -353,7 +359,9 @@ i32 store_save(RagStore *s, const char *path)
 {
     char *tmp;
     i32 live, had_idx, r;
-    u64 stamp = store_stamp_new_();
+    u64 stamp;
+    if (s->ro) return -1;
+    stamp = store_stamp_new_();
 
     pthread_mutex_lock(&s->snap_mu);                             /* never beside a snapshot child: it may be reading rows */
     store_snap_reap_(s, 1);                                      /* the compaction below moves, and writing the same file */
@@ -384,6 +392,7 @@ i32 store_save(RagStore *s, const char *path)
  * while the stdio buffers go to the kernel, not through the fsync. store_load replays the journal. 0 on success. */
 i32 store_sync(RagStore *s, const char *path)
 {
+    if (s->ro) return -1;
     if (s->jf && s->jpath && strcmp(s->jpath, path) == 0) {
         int fd[2], i;
         i32 r = 0;
@@ -492,6 +501,7 @@ i32 store_snapshot(RagStore *s, const char *path)
     u64 stamp = store_stamp_new_();
     i32 home;
     pid_t pid;
+    if (s->ro) return -1;
     if (pthread_mutex_trylock(&s->snap_mu) != 0) return 1;     /* a build or a save holds it: try later */
     if (store_snap_reap_(s, 0) == 1) { pthread_mutex_unlock(&s->snap_mu); return 1; }
     home = !s->jpath || strcmp(s->jpath, path) == 0;
@@ -709,7 +719,7 @@ static i32 store_heap_r_(RagStore *s, u8 *map, size_t flen, FILE *f, size_t off,
 /* v5, v6, v7: map the file privately (copy-on-write: the store may still edit rows in place, the file is never
  * written through the mapping) and point the columns and the scan index into it. Nothing is read up front;
  * pages arrive on first touch, the id lookups are built on first use. */
-static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *hdr)
+static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *hdr, i32 ro)
 {
     RagStore *s;
     i32 live = hdr[3], dim = hdr[2], ext[4], v7 = hdr[1] == STORE_VERSION7 || hdr[1] == STORE_VERSION8,
@@ -725,6 +735,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     if (v7) { i8rows = ext[0] & 1; texts = hdr[1] == STORE_VERSION8 && (ext[0] & 2); stamp = (u64)(u32)ext[2] | ((u64)(u32)ext[3] << 32); }
     else if (i8rows && ext[0] != 1) { fclose(f); return (RagStore *)0; }
     s = store_new(a, dim);
+    s->ro = ro;
     if (i8rows) store_set_vec_bytes(s, 1);
     if (store_goal_r_(f, &s->goal)) { fclose(f); store_destroy(s); return (RagStore *)0; }
     o_vecs = STORE_AL((v7 || i8rows ? 32 : 16) + 32);
@@ -786,7 +797,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     return s;
 }
 
-RagStore *store_load(Arena *a, const char *path)
+static RagStore *store_load_impl_(Arena *a, const char *path, i32 ro)
 {
     FILE *f = fopen(path, "rb");
     i32 hdr[4];
@@ -797,10 +808,11 @@ RagStore *store_load(Arena *a, const char *path)
     if (STORE_R32(f, hdr, 4) || (u32)hdr[0] != STORE_MAGIC
         || (hdr[1] != 4 && hdr[1] != STORE_VERSION && hdr[1] != STORE_VERSION_I8 && hdr[1] != STORE_VERSION7
             && hdr[1] != STORE_VERSION8)) { fclose(f); return (RagStore *)0; }
-    if (hdr[1] != 4) return store_load_v5_(a, path, f, hdr);
+    if (hdr[1] != 4) return store_load_v5_(a, path, f, hdr, ro);
 
     /* v4: packed sections, no saved scan index - read everything, rebuild the scan */
     s = store_new(a, hdr[2]);
+    s->ro = ro;
     live = hdr[3];
     if (live < 0 || store_goal_r_(f, &s->goal) || store_reserve_(s, live > 0 ? live : 1)) { fclose(f); store_destroy(s); return (RagStore *)0; }
     for (i = 0; i < live; ++i) if (STORE_R32(f, STORE_VEC(s, i), (size_t)s->dim)) { fclose(f); store_destroy(s); return (RagStore *)0; }
@@ -823,3 +835,11 @@ RagStore *store_load(Arena *a, const char *path)
     store_journal_replay_(s, path);
     return s;
 }
+
+RagStore *store_load(Arena *a, const char *path) { return store_load_impl_(a, path, 0); }
+
+/* The store in path and its journal as they are at this moment, for reading only: nothing is written, moved or cut
+ * (a torn journal tail is skipped, not dropped), so a server may go on writing to them meanwhile; what it writes
+ * after the open is not seen. Changes to the returned store stay in memory (store_save, store_sync and
+ * store_snapshot refuse it). */
+RagStore *store_load_ro(Arena *a, const char *path) { return store_load_impl_(a, path, 1); }

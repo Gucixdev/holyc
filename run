@@ -202,6 +202,11 @@ if command -v python3 >/dev/null; then
 else
     echo "  (python3 unavailable - built, end-to-end tests skipped)"
 fi
+# ---- vfind: search the texts as you type, Enter to the document (a TUI, driven through tmux; skipped without) ----
+"$CC" "${CFLAGS[@]}" src/vfind.c -lm -lpthread -o "$OUT/vfind" \
+    && "$CC" "${CFLAGS[@]}" tests/vfind_demo.c -lm -lpthread -o "$OUT/vfind_demo" \
+    && tests/vfind_test.sh "$OUT/vfind" "$OUT/vfind_demo" || { echo "  ^ vfind FAILED"; fail=1; }
+
 # ---- the line protocol, the log, the journal under kill -9, timed snapshots, mTLS names in the log ----
 "$CC" -std=gnu99 -O2 -Wall -Wextra tests/vserv_test.c -o "$OUT/vserv_line_test" \
     && "$OUT/vserv_line_test" "$OUT/vserv" 2>/dev/null || { echo "  ^ vserv line protocol FAILED"; fail=1; }
