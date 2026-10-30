@@ -454,6 +454,79 @@ static i32 sd_batches_(Arena *a)
     return ok;
 }
 
+/* ---- the cascade: the 1-bit codes derived from the 4-bit ones are a 1-bit build's codes exactly, rows added later
+ * get theirs, it finds what the 4-bit scan finds (IVF), its hot part is smaller, the file keeps it ---- */
+#define SDC_DIM 32
+#define SDC_N   20000
+static void sdc_unit_(f32 *v, u32 *st)
+{
+    f32 nn = 0.0f;
+    i32 d;
+    for (d = 0; d < SDC_DIM; ++d) { v[d] = sd_f_(st); nn += v[d] * v[d]; }
+    nn = 1.0f / (f32)sqrt((f64)nn);
+    for (d = 0; d < SDC_DIM; ++d) v[d] *= nn;
+}
+static i32 sd_cascade_(Arena *a)
+{
+    const char *path = "/tmp/store_demo_cascade.vxi";
+    char *jn = store_jname_(path, ".j");
+    f32 *x = (f32 *)malloc((size_t)SDC_N * SDC_DIM * sizeof(f32)), *Q = (f32 *)malloc((size_t)50 * SDC_DIM * sizeof(f32));
+    u8 *hold = (u8 *)0;
+    TqCol col;
+    TqAdd ad;
+    Tq *t4, *t1;
+    RagStore *s, *l;
+    i64 h4, c4, h1, c1;
+    f32 r4, rc, rl, ro;
+    i32 i, b, ok = 1, same = 1, keep = store_ivf_min_;
+    u32 st = 31337u;
+    for (i = 0; i < SDC_N; ++i) sdc_unit_(x + (size_t)i * SDC_DIM, &st);
+    for (i = 0; i < 50; ++i) sdc_unit_(Q + (size_t)i * SDC_DIM, &st);
+
+    /* tq: 2048 rows (64 full blocks) with the cascade, 512 more added; a flat 1-bit build of all 2560 has the same
+     * rotation and slots, so its codes must be the cascade's 1-bit codes, byte for byte */
+    col = tq_col_flat(x, SDC_DIM * sizeof(f32), &hold);
+    t4 = tq_build(&col, 2048, SDC_DIM, 9u, 0, 1, 4);
+    t1 = tq_build(&col, 2560, SDC_DIM, 9u, 0, 1, 1);
+    memset(&ad, 0, sizeof(ad));
+    if (!t4 || !t1 || tq_cascade_on(t4, 1) != 0 || t4->vd1 != t1->vd || tq_cascade_on(t1, 1) != -1) ok = 0;
+    else if (tq_add_prep(t4, &col, 2048, 512, 1, &ad) != 0 || tq_add_put(t4, &ad, 2048) != 0) ok = 0;
+    tq_add_free(&ad);
+    for (b = 0; ok && b < 2560 / 32; ++b) if (memcmp(tq_bptr1_(t4, b), tq_bptr_(t1, b), (size_t)t1->vd * 16) != 0) same = 0;
+    if (!ok || !same) { print_cstr("  cascade: the derived 1-bit codes FAILED\n"); ok = 0; }
+    tq_free(t4); tq_free(t1);
+
+    /* a store with IVF: the cascade's recall against the 4-bit scan's, its hot part, saved and loaded, switched off */
+    store_ivf_min_ = 1000;
+    s = store_new(a, SDC_DIM);
+    for (i = 0; i < SDC_N; ++i) store_add(s, x + (size_t)i * SDC_DIM, 50000 + i);
+    store_build(s);
+    r4 = sd_recall_(s, x, SDC_N, SDC_DIM, Q, 50, 50000, (const u8 *)0);
+    store_tiers(s, &h4, &c4);
+    if (store_set_cascade(s, 1) != 0 || !s->tq || !s->tq->codes1 || s->tq->nc < 2) { print_cstr("  cascade: switching it on FAILED\n"); ok = 0; }
+    rc = sd_recall_(s, x, SDC_N, SDC_DIM, Q, 50, 50000, (const u8 *)0);
+    store_tiers(s, &h1, &c1);
+    print_cstr("  cascade: recall@10 "); print_i64((i64)(r4 * 1000.0f)); print_cstr("/1000 with 4-bit codes, ");
+    print_i64((i64)(rc * 1000.0f)); print_cstr("/1000 through the cascade; hot "); print_i64(h4); print_cstr(" B -> ");
+    print_i64(h1); print_cstr(" B\n");
+    if (rc < r4 - 0.05f || h1 >= h4 || c1 <= c4) { print_cstr("  cascade: recall or the hot part FAILED\n"); ok = 0; }
+    remove(path); remove(jn);
+    if (store_save(s, path) != 0 || !(l = store_load(a, path))) { print_cstr("  cascade: save/load FAILED\n"); ok = 0; l = (RagStore *)0; }
+    if (l) {
+        rl = sd_recall_(l, x, SDC_N, SDC_DIM, Q, 50, 50000, (const u8 *)0);
+        if (!l->cascade || !l->tq || !l->tq->codes1 || rl < rc - 0.01f || rl > rc + 0.01f) { print_cstr("  cascade: the file did not keep it\n"); ok = 0; }
+        if (store_set_cascade(l, 0) != 0 || l->tq->codes1) ok = 0;
+        ro = sd_recall_(l, x, SDC_N, SDC_DIM, Q, 50, 50000, (const u8 *)0);
+        if (ro < r4 - 0.01f || ro > r4 + 0.01f) { print_cstr("  cascade: switched off, the 4-bit scan came back different\n"); ok = 0; }
+        store_destroy(l);
+    }
+    store_destroy(s);
+    store_ivf_min_ = keep;
+    remove(path); remove(jn); free(jn);
+    free(x); free(Q);
+    return ok;
+}
+
 int main(void)
 {
     static Arena arena;
@@ -1133,6 +1206,7 @@ int main(void)
     if (!sd_aggression_(a)) ok = 0;
     if (!sd_tiers_(a)) ok = 0;
     if (!sd_batches_(a)) ok = 0;
+    if (!sd_cascade_(a)) ok = 0;
     print_cstr(ok ? "  OK\n" : "  FAIL\n");
     print_flush();
     arena_free(a);

@@ -10,10 +10,11 @@ the C ABI and the protocols, i64 ids, one CPU knob, texts with chunk ranges, vfi
 
 Done, not run: memory tiers (hot codes in RAM, cold rows on disk, mlock), tenants (`vserv DIR`, `vi_dir_*`), write
 batches (all or none, CRC-32C journal records, fsync on commit), the cascade (1-bit scan, 4-bit shortlist, exact
-re-rank: `vi_set_cascade`, `vserv -C`, bench methods `vecindex-cascade` and `-i8`; no test of its own yet).
+re-rank: `vi_set_cascade`, `vserv -C`, bench methods `vecindex-cascade` and `-i8`; `tests/store_test.c` checks the
+derived 1-bit codes against a 1-bit build byte for byte, added rows, recall against the 4-bit scan, the file).
 
 Open:
-- the cascade's tests, its benchmark, the shortlist size tuned rather than fixed at 8 x R
+- the cascade's benchmark, and its shortlist tuned rather than fixed at 8 x R
 - competitors for docs/comparison.md: MongoDB Atlas Vector Search, VAST Data, KIOXIA AiSAQ (SSD-resident ANN),
   "ubase" (not identified yet) - none checked yet
 - streaming chunking; lazy loading beyond what mmap and tenants opened on first use already do
