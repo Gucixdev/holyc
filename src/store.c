@@ -91,6 +91,7 @@
 #include <sys/wait.h>
 #include <sys/syscall.h>
 #include <errno.h>
+#include <sched.h>
 #include "hdict.c"
 #include "lex.c"
 #include "tq.c"
@@ -187,6 +188,7 @@ typedef struct {
     i64      snap_done;     /* snapshots finished so far, ok or not (read atomically) */
     i32      tq_probe;      /* IVF: clusters scanned per query (0 = the index default) */
     i32      tq_threads;    /* threads one query's scan may use (0 = auto: up to 4 on big stores) */
+    f32      aggr;          /* how much of the machine to use, 0..1 (store_set_aggression) */
     i32      tq_rerank;     /* candidates re-scored exactly per query (0 = auto: max(20 k, 256)) */
     f32      tune_target;   /* recall@10 every build keeps by choosing the probes (0 = off) */
     f32      tune_recall;   /* what the last tuning measured (-1: never tuned) */
@@ -687,6 +689,9 @@ RagStore *store_new(Arena *a, i32 dim)
     s->vec.esz = (size_t)dim * sizeof(f32); s->vec.elem = sizeof(f32);
     s->vsc.esz = sizeof(f32); s->vsc.elem = sizeof(f32);
     s->vbytes = 4; s->codebits = 4;
+    {   const char *ag = getenv("VECINDEX_AGGRESSION");             /* the default for every store of the process */
+        f64 v = ag && *ag ? strtod(ag, (char **)0) : 1.0;
+        s->aggr = v < 0.0 ? 0.0f : (v > 1.0 ? 1.0f : (f32)v); }
     s->addbuf = (f32 *)malloc((size_t)dim * sizeof(f32));
     s->idc.esz = sizeof(i64); s->idc.elem = sizeof(i64);
     s->metac.esz = sizeof(i64); s->metac.elem = sizeof(i64);
@@ -813,21 +818,89 @@ void store_set_threads(RagStore *s, i32 nthreads) { s->tq_threads = nthreads > 0
  * lifts recall when the scan's ranking is coarse. */
 void store_set_rerank(RagStore *s, i32 r) { s->tq_rerank = r > 0 ? r : 0; }
 
-static i32 store_ncpu_(void)
+/* CPUs this process may run on: its affinity mask (taskset, cpusets) cut to its cgroup's CPU quota (cpu.max of cgroup
+ * v2, cpu.cfs_quota_us of v1: containers, systemd CPUQuota=). Measured once. */
+static i32 store_cpu_quota_(void)
 {
-    long c = sysconf(_SC_NPROCESSORS_ONLN);
-    return c < 1 ? 1 : (c > 16 ? 16 : (i32)c);
+    char line[512], path[600];
+    FILE *f;
+    f64 q = 0.0, per = 0.0;
+    path[0] = 0;
+    if ((f = fopen("/proc/self/cgroup", "r"))) {                 /* v2: "0::/the/group" */
+        while (fgets(line, sizeof(line), f))
+            if (!strncmp(line, "0::", 3)) { line[strcspn(line, "\n")] = 0; sprintf(path, "/sys/fs/cgroup%s/cpu.max", line + 3); break; }
+        fclose(f);
+    }
+    if ((path[0] && (f = fopen(path, "r"))) || (f = fopen("/sys/fs/cgroup/cpu.max", "r"))) {
+        if (fgets(line, sizeof(line), f) && strncmp(line, "max", 3)) sscanf(line, "%lf %lf", &q, &per);
+        fclose(f);
+    } else if ((f = fopen("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", "r"))) {   /* v1 */
+        if (fscanf(f, "%lf", &q) != 1) q = 0.0;
+        fclose(f);
+        if ((f = fopen("/sys/fs/cgroup/cpu/cpu.cfs_period_us", "r"))) { if (fscanf(f, "%lf", &per) != 1) per = 0.0; fclose(f); }
+    }
+    return q > 0.0 && per > 0.0 ? (i32)(q / per + 0.999) : 0;
 }
 
-/* threads for work in the background (live indexing, rebuilds, tuning): half the cores, so searches keep the rest */
-static i32 store_bg_threads_(void) { i32 c = store_ncpu_() / 2; return c < 1 ? 1 : c; }
+static i32 store_cpus_avail_(void)
+{
+    static i32 cached;
+    i32 n = 0, q;
+    if (cached) return cached;
+#if defined(__linux__) && defined(CPU_COUNT)
+    {   cpu_set_t set;
+        CPU_ZERO(&set);
+        if (sched_getaffinity(0, sizeof(set), &set) == 0) n = CPU_COUNT(&set); }
+#endif
+    if (n <= 0) { long c = sysconf(_SC_NPROCESSORS_ONLN); n = c > 0 ? (i32)c : 1; }
+    q = store_cpu_quota_();
+    if (q > 0 && q < n) n = q;
+    cached = n < 1 ? 1 : n;
+    return cached;
+}
+
+/* threads for a job the caller waits on (a build, a save's indexing, a batch of queries): the CPUs available,
+ * times the aggression */
+static i32 store_ncpu_(const RagStore *s)
+{
+    i32 n = (i32)(s->aggr * (f32)store_cpus_avail_() + 0.5f);
+    return n < 1 ? 1 : n;
+}
+
+/* threads for work in the background (live indexing, rebuilds, tuning): half of that, so searches keep the rest */
+static i32 store_bg_threads_(const RagStore *s) { i32 c = store_ncpu_(s) / 2; return c < 1 ? 1 : c; }
+
+/* The calling thread (and the threads it starts) yields to everything else: nice 10 at aggression 1 up to 19 at 0,
+ * and the disk at the lowest best-effort priority, or only when it is idle below aggression 0.5. For the live
+ * thread, rebuilds and the snapshot child. */
+static void store_bg_prio_(const RagStore *s)
+{
+#if defined(__linux__) && defined(SYS_gettid)
+    i32 tid = (i32)syscall(SYS_gettid);
+    setpriority(PRIO_PROCESS, (id_t)tid, 19 - (i32)(9.0f * s->aggr + 0.5f));   /* Linux keeps a nice value per thread */
+#if defined(SYS_ioprio_set)
+    syscall(SYS_ioprio_set, 1, tid, s->aggr > 0.5f ? (2 << 13) | 7 : 3 << 13);   /* IOPRIO_WHO_PROCESS; BE 7, or IDLE */
+#endif
+#else
+    (void)s;
+#endif
+}
+
+/* How much of the machine the store may take, 0..1 (default 1, or $VECINDEX_AGGRESSION): the threads of builds,
+ * batches and a big store's single-query scan scale with it, and its background work runs at a lower priority the
+ * lower it is. 1: every CPU the process may use (its affinity and cgroup quota); 0: one thread, background at nice
+ * 19 and idle I/O. */
+void store_set_aggression(RagStore *s, f32 a)
+{
+    s->aggr = a < 0.0f ? 0.0f : (a > 1.0f ? 1.0f : a);
+}
 
 static Tq *store_tq_build_(RagStore *s, i32 n)
 {
     TqCol sc, col = store_vcol_(s, &sc);
     Tq *t;
     store_advise_(s, MADV_SEQUENTIAL);                           /* the build reads every row in order, twice */
-    t = tq_build(&col, n, s->dim, s->goal.seed, store_nclusters_(n), store_ncpu_(), s->codebits);
+    t = tq_build(&col, n, s->dim, s->goal.seed, store_nclusters_(n), store_ncpu_(s), s->codebits);
     store_advise_(s, MADV_RANDOM);                               /* searching re-scores rows at random */
     return t;
 }
@@ -1180,7 +1253,7 @@ void store_build(RagStore *s)
     else if (w > 0) store_engine_build_(s, w);
     s->built_upto = w;
     pthread_rwlock_unlock(&s->lock);
-    store_tune_run_(s, store_ncpu_());                           /* keep the recall asked for, if one is (searches go on) */
+    store_tune_run_(s, store_ncpu_(s));                           /* keep the recall asked for, if one is (searches go on) */
     pthread_mutex_unlock(&s->mt_mu);
     pthread_mutex_unlock(&s->rb_mu);
     pthread_mutex_unlock(&s->snap_mu);

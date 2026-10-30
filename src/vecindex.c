@@ -80,6 +80,8 @@ VI_API int vi_get(vi_db *db, vi_i64 id, float *out) { return store_get_vec(db->s
 
 static i32 vi_len_(const char *text, int len) { return len < 0 ? (text ? (i32)strlen(text) : 0) : (i32)len; }
 
+VI_API void vi_set_aggression(vi_db *db, float a) { store_set_aggression(db->s, a); }
+
 VI_API int vi_add_text(vi_db *db, vi_i64 id, const float *vec, const char *text, int len)
 { return store_put_text(db->s, vec, (i64)id, 0, text, vi_len_(text, len)); }
 

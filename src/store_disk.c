@@ -359,7 +359,7 @@ i32 store_save(RagStore *s, const char *path)
     store_snap_reap_(s, 1);                                      /* the compaction below moves, and writing the same file */
     pthread_mutex_lock(&s->rb_mu);                               /* a compaction must not run under a live rebuild */
     pthread_mutex_lock(&s->mt_mu);
-    store_index_pending_(s, store_ncpu_());                      /* the pending tail into the index, searches going on */
+    store_index_pending_(s, store_ncpu_(s));                      /* the pending tail into the index, searches going on */
     pthread_rwlock_wrlock(&s->lock);
     store_index_locked_(s);                                      /* and what came in meanwhile: the file gets the index */
     had_idx = s->idx != (EngIndex *)0;
@@ -506,12 +506,13 @@ i32 store_snapshot(RagStore *s, const char *path)
     }
     tmp = store_jname_(path, ".snap");
     pthread_mutex_lock(&s->mt_mu);                               /* not beside a maintenance step */
-    store_index_pending_(s, store_ncpu_());                      /* the pending tail into the index, searches going on */
+    store_index_pending_(s, store_ncpu_(s));                      /* the pending tail into the index, searches going on */
     pthread_rwlock_wrlock(&s->lock);                             /* nobody is in the middle of a change: a clean image */
     store_index_locked_(s);
     pid = fork();
     if (pid == 0) {
         store_child_fds_();
+        store_bg_prio_(s);                                       /* the copy yields to the serving process */
         _exit(store_write_file_(s, path, tmp, stamp, 1) == 0 ? 0 : 1);
     }
     if (pid > 0) {

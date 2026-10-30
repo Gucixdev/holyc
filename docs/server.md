@@ -1,13 +1,15 @@
 # vserv: the store over a socket
 
-`src/vserv.c` serves one store file: Linux epoll, one worker thread per core, a fixed request buffer per connection
-(allocated on its first byte, reused after), replies built in a per-thread buffer - a request allocates nothing.
+`src/vserv.c` serves one store file: Linux epoll, one worker thread per CPU the process may use (its affinity mask and
+cgroup quota, times `-g`), a request buffer per connection (allocated on its first byte, reused after; it grows for a
+request that carries a big text and shrinks back), replies built in a per-thread buffer - a search allocates nothing.
 The store is opened with `store_load` (mmap), so a 100M-row file is ready in milliseconds.
 
 ```sh
 ./run                                    # builds .build/vserv (BearSSL into .build/libbearssl.a first)
 .build/vserv -s /run/vx.sock -p 8077 -t 2 -d 384 docs.vxi        # Unix socket (0600) + TCP on 127.0.0.1; a new store
 .build/vserv -p 8077 -L -r 0.95 -l syslog docs.vxi               # live: adds indexed as they come; log to syslog
+.build/vserv -p 8077 -g 0.5 docs.vxi                             # half the CPUs; background work at nice 14, disk when idle
 .build/vserv -p 8443 -c cert.pem -k key.pem [-a clients-ca.pem] [-T] docs.vxi   # TLS, optional mutual TLS
 curl -s localhost:8077/stats
 curl -s -X POST 'localhost:8077/search?k=5' -d '[0.1, 0.2, ...]'

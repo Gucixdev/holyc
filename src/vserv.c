@@ -1,11 +1,14 @@
 /* vserv.c - vecindex over a socket: libc + pthreads + Linux epoll, and TLS through the vendored BearSSL
  * (third_party/bearssl, MIT, no malloc inside). Nothing else.
  *
- *   vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-d DIM] [-x] [-L] [-r RECALL] [-f SECONDS] [-S SECONDS]
- *         [-l syslog|-|FILE] [-A] [-c CERT.pem -k KEY.pem [-a CA.pem] [-P] [-T]] STORE.vxi
+ *   vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g AGGRESSION] [-d DIM] [-x] [-L] [-r RECALL] [-f SECONDS]
+ *         [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT.pem -k KEY.pem [-a CA.pem] [-P] [-T]] STORE.vxi
  *     -s PATH   Unix socket, created mode 0600 (default ./vecindex.sock when -p is not given)
  *     -p PORT   TCP port, bound to 127.0.0.1 unless -b gives another address
- *     -t N      worker threads (default: online CPUs)
+ *     -t N      worker threads (default: the CPUs the process may use - its affinity and cgroup quota - times -g)
+ *     -g A      how much of the machine to take, 0..1 (default 1, or $VECINDEX_AGGRESSION): worker threads and the
+ *               store's build and scan threads scale with it; background work (live indexing, rebuilds, snapshots)
+ *               runs at nice 10 (1) to 19 (0) and on the disk's lowest priority (store_set_aggression)
  *     -d DIM    dimension of a new, empty store when STORE.vxi does not exist yet (it is created at once, with its
  *               journal, so every write is journaled from the start)
  *     -x        save the store to STORE.vxi on SIGINT / SIGTERM
@@ -31,12 +34,13 @@
  * protocols, told apart by the first byte of a request (vserv_proto.c has the details):
  *
  *   binary (first byte 0xB5): fixed little-endian frames, nothing to parse - search, add, delete, delete a range
- *     of ids, get, build, save, snapshot, stats
+ *     of ids, get, build, save, snapshot, stats; texts: add with a text, get a text, the ids in a range, hybrid
  *   lines (a lowercase letter): "search 10 0.1 0.2 ..." -> "ok 3 42 -0.01 17 -0.12 9 -0.31", one line each way,
- *     for nc, socat and a readline in any language
+ *     for nc, socat and a readline in any language; texts: addt, text, range, hybrid, words
  *   HTTP/1.1 (anything else), for curl and friends; keep-alive, Content-Length bodies:
- *     GET /health | GET /stats | GET /get?id=N | POST /search?k=10 | POST /add?id=N | POST /delete?id=N (or
- *     ?lo=A&hi=B) | POST /build | POST /save | POST /snapshot; vectors as a JSON array ([0.1, -0.2, ...]) or raw
+ *     GET /health | GET /stats | GET /get?id=N | GET /text?id=N | GET /range?lo=A&hi=B | POST /search?k=10 |
+ *     POST /hybrid?k=10 | POST /add?id=N | POST /delete?id=N (or ?lo=A&hi=B) | POST /build | POST /save |
+ *     POST /snapshot; vectors as a JSON array ([0.1, -0.2, ...]), {"vector": [...], "text": "..."}, or raw
  *     little-endian f32 with Content-Type: application/octet-stream; replies are JSON.
  * An add replaces the row with the same id in every protocol: one row per id.
  *
@@ -731,7 +735,7 @@ int main(int argc, char **argv)
     const char *sock = (const char *)0, *bind_addr = "127.0.0.1", *cert = (const char *)0, *key = (const char *)0, *ca = (const char *)0;
     const char *logdest = (const char *)0;
     i32 port = 0, nth = 0, dim = 0, save_on_exit = 0, live = 0, created = 0, i, j;
-    f32 recall = 0.0f;
+    f32 recall = 0.0f, aggr = -1.0f;
     f64 sync_s = 1.0, snap_s = 0.0;
     size_t outcap;
     VsWorker *ws;
@@ -743,6 +747,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-p") && i + 1 < argc) port = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-b") && i + 1 < argc) bind_addr = argv[++i];
         else if (!strcmp(argv[i], "-t") && i + 1 < argc) nth = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-g") && i + 1 < argc) aggr = (f32)atof(argv[++i]);
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) dim = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-x")) save_on_exit = 1;
         else if (!strcmp(argv[i], "-L")) live = 1;
@@ -780,7 +785,10 @@ int main(int argc, char **argv)
 #endif
     if (!vs_tls_on) vs_plain_ok = 1;
     if (!sock && !port) sock = "vecindex.sock";
-    if (nth <= 0) { long c = sysconf(_SC_NPROCESSORS_ONLN); nth = c > 0 ? (i32)c : 1; }
+    if (aggr < 0.0f) { const char *ag = getenv("VECINDEX_AGGRESSION"); aggr = ag && *ag ? (f32)atof(ag) : 1.0f; }
+    if (aggr < 0.0f) aggr = 0.0f;
+    if (aggr > 1.0f) aggr = 1.0f;
+    if (nth <= 0) { nth = (i32)(aggr * (f32)store_cpus_avail_() + 0.5f); if (nth < 1) nth = 1; }
 
     t0 = vs_now_();
     vs_store = store_load(&arena, vs_path);
@@ -794,6 +802,7 @@ int main(int argc, char **argv)
     }
     vs_dim = vs_store->dim;
     store_set_threads(vs_store, 1);              /* one query per thread: the workers are the parallelism */
+    store_set_aggression(vs_store, aggr);
     if (recall > 0.0f) store_set_target_recall(vs_store, recall);
     if (live) store_set_live(vs_store, 1, 1.0f);
     /* one request: headers + a JSON vector (~24 bytes a number) or the binary frame */

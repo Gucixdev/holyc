@@ -317,7 +317,7 @@ f32 store_tune(RagStore *s)
 {
     f32 r;
     pthread_mutex_lock(&s->mt_mu);
-    r = store_tune_run_(s, store_ncpu_());
+    r = store_tune_run_(s, store_ncpu_(s));
     pthread_mutex_unlock(&s->mt_mu);
     return r;
 }

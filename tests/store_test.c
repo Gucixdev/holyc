@@ -166,6 +166,39 @@ static i32 sd_texts_(Arena *a)
     return ok;
 }
 
+/* ---- aggression: the threads follow it, background work yields ---- */
+typedef struct { RagStore *s; i32 nice; } SdPrio;
+static void *sd_prio_(void *p)
+{
+    SdPrio *x = (SdPrio *)p;
+    store_bg_prio_(x->s);
+    errno = 0;
+    x->nice = getpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid));
+    return (void *)0;
+}
+static i32 sd_aggression_(Arena *a)
+{
+    RagStore *g = store_new(a, 8);
+    i32 avail = store_cpus_avail_(), ok = 1, n1, nh, n0, b0;
+    SdPrio p1, p0;
+    pthread_t th;
+    store_set_aggression(g, 1.0f); n1 = store_ncpu_(g);
+    p1.s = g; pthread_create(&th, (const pthread_attr_t *)0, sd_prio_, &p1); pthread_join(th, (void **)0);
+    store_set_aggression(g, 0.5f); nh = store_ncpu_(g);
+    store_set_aggression(g, 0.0f); n0 = store_ncpu_(g); b0 = store_bg_threads_(g);
+    p0.s = g; pthread_create(&th, (const pthread_attr_t *)0, sd_prio_, &p0); pthread_join(th, (void **)0);
+    store_set_aggression(g, 7.0f);
+    if (n1 != avail || nh != (avail + 1) / 2 || n0 != 1 || b0 != 1 || g->aggr != 1.0f) ok = 0;
+#if defined(__linux__)
+    if (p1.nice != 10 || p0.nice != 19) ok = 0;
+#endif
+    print_cstr("  aggression: "); print_i64(avail); print_cstr(" CPUs this process may use (affinity, cgroup quota); threads at 1: ");
+    print_i64(n1); print_cstr(", at 0.5: "); print_i64(nh); print_cstr(", at 0: "); print_i64(n0); print_cstr("; background work at nice ");
+    print_i64(p1.nice); print_cstr(" (1) and "); print_i64(p0.nice); print_cstr(" (0)\n");
+    store_destroy(g);
+    return ok;
+}
+
 int main(void)
 {
     static Arena arena;
@@ -810,6 +843,7 @@ int main(void)
         remove(C); remove("/tmp/store_demo_snap_copy.vxi.j");
     }
     if (!sd_texts_(a)) ok = 0;
+    if (!sd_aggression_(a)) ok = 0;
     print_cstr(ok ? "  OK\n" : "  FAIL\n");
     print_flush();
     arena_free(a);

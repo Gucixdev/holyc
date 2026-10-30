@@ -25,7 +25,7 @@ static i32 store_search_impl_(RagStore *s, const f32 *query, i32 k,
         i32 R = filtered ? k * 40 + 256 : (s->tq_rerank > 0 ? s->tq_rerank : (k * 20 > 256 ? k * 20 : 256)), m, nth = 1;
         i32 *rows = (i32 *)malloc((size_t)R * sizeof(i32));
         if (s->tq_threads > 0) nth = s->tq_threads;
-        else if (s->tq->n >= 150000) { i32 c = store_ncpu_(); nth = c > 4 ? 4 : c; }   /* the scan is memory-bound: 4 threads already saturate the bus */
+        else if (s->tq->n >= 150000) { i32 c = store_ncpu_(s); nth = c > 4 ? 4 : c; }   /* the scan is memory-bound: 4 threads already saturate the bus */
         m = tq_search(s->tq, qn, R, rows, s->dead, &mcol, all_bits, any_bits, filtered, nth, s->tq_probe);
         store_rescore_(s, qn, rows, m, k, out_doc_ids, out_scores, &have);
         /* a selective filter can leave the probed clusters short of k matches: then scan every cluster's codes

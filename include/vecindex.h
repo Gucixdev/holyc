@@ -128,6 +128,12 @@ VI_API void vi_set_recall(vi_db *db, float target);
  * the store already has rows or a value is not one of these. */
 VI_API int vi_set_layout(vi_db *db, int code_bits, int row_bytes);
 
+/* How much of the machine the store may use, 0..1 (default 1, or the environment variable VECINDEX_AGGRESSION):
+ * the threads of builds, batches and a big store's single-query scan scale with it, out of the CPUs the process may
+ * run on (its affinity mask and cgroup quota); background work (live indexing, rebuilds, snapshots) runs at nice 10
+ * (aggression 1) to 19 (0), on the disk's lowest best-effort priority, or only when the disk is idle below 0.5. */
+VI_API void vi_set_aggression(vi_db *db, float a);
+
 /* Writes the whole store to path (NULL: the file it was opened from) and starts a fresh journal: 0 or -1. */
 VI_API int vi_save(vi_db *db, const char *path);
 

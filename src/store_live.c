@@ -77,7 +77,7 @@ static void store_index_locked_(RagStore *s)
     if (!s->tq || s->idx || m <= 0 || s->tq->n != r0) return;
     col = store_vcol_(s, &sc);
     if (s->tq->nc > 1 && !(s->tq->fit0 > 0.0f)) tq_fit0(s->tq, &col);
-    if (tq_add_prep(s->tq, &col, r0, m, store_ncpu_(), &ad) != 0) return;
+    if (tq_add_prep(s->tq, &col, r0, m, store_ncpu_(s), &ad) != 0) return;
     tq_add_put(s->tq, &ad, r0);
     store_fit_(s, s->tq, &ad, s->tq->n - r0);
     store_stat_add_(&s->n_indexed, s->tq->n - r0);
@@ -189,11 +189,17 @@ static i32 store_tune_due_(RagStore *s)
 /* One maintenance step: index the pending rows, rebuild if the index has aged (store_due_) - async: on a thread of
  * its own, so this one goes on indexing meanwhile; else right here - and re-tune if a target recall is set and the
  * index changed. Returns what it did: 1 indexed, 2 rebuilt (or started to), 4 tuned. */
-static void *store_rb_main_(void *p) { store_rebuild_((RagStore *)p, store_bg_threads_()); return (void *)0; }
+static void *store_rb_main_(void *p)
+{
+    RagStore *s = (RagStore *)p;
+    store_bg_prio_(s);
+    store_rebuild_(s, store_bg_threads_(s));
+    return (void *)0;
+}
 
 static i32 store_step_(RagStore *s, i32 async)
 {
-    i32 did = 0, tune = 0, go = 0, nth = store_bg_threads_();
+    i32 did = 0, tune = 0, go = 0, nth = store_bg_threads_(s);
     pthread_mutex_lock(&s->mt_mu);
     if (store_index_pending_(s, nth) > 0) did |= 1;
     pthread_rwlock_rdlock(&s->lock);
@@ -222,6 +228,7 @@ i32 store_maintain(RagStore *s) { return store_step_(s, 0); }
 static void *store_live_main_(void *p)
 {
     RagStore *s = (RagStore *)p;
+    store_bg_prio_(s);                                           /* searches and adds come first */
     for (;;) {
         i32 did, stop;
         pthread_mutex_lock(&s->mt_cmu); stop = s->mt_stop; pthread_mutex_unlock(&s->mt_cmu);
