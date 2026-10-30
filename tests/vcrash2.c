@@ -19,8 +19,8 @@
 static void cleanup_(void)
 {
     /* bare names, generation-suffixed leftovers from an interrupted round, and their .tmp/.j siblings */
-    system("rm -f " DB " " DB ".vdt " DB ".vdt.tmp " DB ".vxi " DB ".vxi.tmp " DB ".vxi.j " DB ".tmp "
-           DB ".vdt.g* " DB ".vxi.g* " DB ".img.vxi* " DB ".tmp.* 2>/dev/null");
+    if (system("rm -f " DB " " DB ".vdt " DB ".vdt.tmp " DB ".vxi " DB ".vxi.tmp " DB ".vxi.j " DB ".tmp "
+               DB ".vdt.g* " DB ".vxi.g* " DB ".img.vxi* " DB ".tmp.* 2>/dev/null") != 0) {}   /* nothing there is fine too */
 }
 
 static void write_old_(void)
