@@ -42,7 +42,9 @@
  *   - for the largest stores two knobs trade a little recall for a lot of room (store_set_codes,
  *     store_set_vec_bytes): 2-bit or 1-bit codes (d/4 or d/8 bytes a row in RAM instead of d/2) and int8 rows on
  *     disk (d + 4 bytes instead of 4d). 100M rows of 96 dimensions with 2-bit codes need 2.8 GB of RAM and 11.6 GB
- *     of disk.
+ *     of disk;
+ *   - store_tiers counts the two parts (hot: scanned by every query; cold: read for candidates and hits) and
+ *     store_set_memory locks the hot part, or the rows too, in RAM with mlock so memory pressure cannot evict them.
  *
  * Self-tuning: store_set_target_recall(s, 0.95) and the store keeps that recall@10 on its own - every build
  * measures recall against exact search and picks the fewest IVF probes that reach it, on the queries it has
@@ -184,6 +186,7 @@ typedef struct {
     char    *jn2;           /* its name (PATH.jn) */
     i32      snap_run;      /* 1 while a child writes (read without snap_mu, atomically) */
     i32      ro;            /* opened read-only (store_load_ro): never writes its file or journal */
+    i32      mem_tier;      /* store_set_memory: 0 the kernel decides, 1 the scanned index locked in RAM, 2 the rows too */
     i32      snap_last;     /* the last finished one: 0 ok, -1 failed, 2 none yet */
     i64      snap_t0_us;    /* when the running one started (CLOCK_MONOTONIC) */
     i64      snap_took_us;  /* how long the last finished one took */
@@ -310,6 +313,8 @@ static void store_spill_open_(RagStore *s)
     free(tmpl);
 }
 
+static i32 store_pin_(const RagStore *s, const void *p, size_t len, i32 on);
+
 static u8 *store_chunk_alloc_(RagStore *s, size_t bytes, u8 *how, i64 *foff)
 {
     void *p;
@@ -320,6 +325,7 @@ static u8 *store_chunk_alloc_(RagStore *s, size_t bytes, u8 *how, i64 *foff)
             if (p != MAP_FAILED) {
                 *how = STORE_SPILL; *foff = s->spill_off;
                 s->spill_off += (i64)bytes; s->col_bytes += (i64)bytes;
+                if (s->mem_tier >= 2) store_pin_(s, p, bytes, 1);   /* rows are to stay in RAM: these too */
                 return (u8 *)p;
             }
         }
@@ -511,13 +517,66 @@ static void store_chunk_done_(RagStore *s, i32 ci)
 #endif
 }
 
+/* [*a, *a + the result) = [p, p + len) widened to whole pages and kept inside the loaded file's mapping */
+static size_t store_pages_(const RagStore *s, const void *p, size_t len, size_t *a)
+{
+    size_t pg = (size_t)sysconf(_SC_PAGESIZE), e = (size_t)p + len;
+    *a = (size_t)p & ~(pg - 1);
+    if (s->map && (const u8 *)p >= (const u8 *)s->map && (const u8 *)p < (const u8 *)s->map + s->map_len
+        && e > (size_t)s->map + s->map_len) e = (size_t)s->map + s->map_len;
+    return e > *a ? e - *a : 0;
+}
+
 /* madvise on [p, p + len), widened to whole pages and kept inside the loaded file's mapping */
 static void store_madv_(const RagStore *s, const void *p, size_t len, int adv)
 {
-    size_t pg = (size_t)sysconf(_SC_PAGESIZE), a = (size_t)p & ~(pg - 1), e = (size_t)p + len;
-    if (s->map && (const u8 *)p >= (const u8 *)s->map && (const u8 *)p < (const u8 *)s->map + s->map_len
-        && e > (size_t)s->map + s->map_len) e = (size_t)s->map + s->map_len;
-    if (e > a) madvise((void *)a, e - a, adv);
+    size_t a, n = store_pages_(s, p, len, &a);
+    if (n) madvise((void *)a, n, adv);
+}
+
+/* Keep [p, p + len) in RAM (on: mlock) or let the kernel drop it again (munlock), widened to whole pages. A refused
+ * lock (the memlock limit: ulimit -l, systemd's LimitMEMLOCK=) falls back to reading the pages ahead and gives -1. */
+static i32 store_pin_(const RagStore *s, const void *p, size_t len, i32 on)
+{
+    size_t a, n = p ? store_pages_(s, p, len, &a) : 0;
+    if (!n) return 0;
+    if (!on) { munlock((void *)a, n); return 0; }
+    if (mlock((void *)a, n) == 0) return 0;
+    madvise((void *)a, n, MADV_WILLNEED);
+    return -1;
+}
+
+/* (un)pin what every search scans of an index that lives in the file mapping (anonymous memory is in RAM anyway) */
+static i32 store_tq_pin_(const RagStore *s, const Tq *t, i32 on)
+{
+    i32 rc = 0;
+    if (!t || !t->mapped) return 0;
+    rc |= store_pin_(s, t->codes, (size_t)t->nblk * (size_t)t->vd * 16, on);
+    if (t->slot_row && !t->slot_own) rc |= store_pin_(s, t->slot_row, (size_t)t->nblk * 32 * 4, on);
+    if (t->nc > 1) {
+        rc |= store_pin_(s, t->cent, (size_t)t->nc * (size_t)t->dim * 4, on);
+        rc |= store_pin_(s, t->cstart, ((size_t)t->nc + 1) * 4, on);
+    }
+    rc |= store_pin_(s, t->s1, (size_t)t->dpad * 4, on);
+    rc |= store_pin_(s, t->s2, (size_t)t->dpad * 4, on);
+    rc |= store_pin_(s, t->perm, (size_t)t->dpad * 4, on);
+    return rc ? -1 : 0;
+}
+
+/* (un)pin the rows, their int8 scales, ids and tags that live in a file (the loaded .vxi, the spill file) */
+static i32 store_rows_pin_(const RagStore *s, i32 on)
+{
+    const SCol *cols[4];
+    i32 c, i, rc = 0;
+    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac;
+    for (c = 0; c < 4; ++c)
+        for (i = 0; i < cols[c]->nchunk; ++i) {
+            i64 rows = (i64)s->count - ((i64)i << STORE_CSHIFT);
+            if (rows > STORE_CROWS) rows = STORE_CROWS;
+            if (rows > 0 && cols[c]->how[i] != STORE_ANON
+                && store_pin_(s, cols[c]->chunk[i], (size_t)rows * cols[c]->esz, on) != 0) rc = -1;
+        }
+    return rc;
 }
 
 /* access pattern hint for the file-backed vector chunks: sequential for a build pass, random for searching */
@@ -806,6 +865,55 @@ void store_mem(RagStore *s, i64 *ram, i64 *file)
     pthread_rwlock_unlock(&s->lock);
     if (ram) *ram = r;
     if (file) *file = f;
+}
+
+/* Bytes by how searches read them. hot: scanned by every query - the index's codes (built and added), its slot table
+ * and centroids, the dead-row bits; this is what has to stay in RAM for searches not to wait on the disk. cold: read
+ * only for the few hundred candidates a query re-scores and the hits it returns - the rows, their int8 scales, ids,
+ * tags and texts; this may stay on the disk. An index from the q1-q5 / HNSW tuner (ENG_MIN_SIZE) is not counted. */
+void store_tiers(RagStore *s, i64 *hot, i64 *cold)
+{
+    i64 h = 0, c = 0;
+    const SCol *cols[5];
+    const Tq *t;
+    i32 i;
+    pthread_rwlock_rdlock(&s->lock);
+    t = s->tq;
+    if (t) {
+        h += ((i64)t->nblk + t->xcap) * t->vd * 16 + (i64)t->xcap * 128;
+        if (t->slot_row) h += (i64)t->nblk * 128;
+        if (t->nc > 1) h += (i64)t->nc * t->dim * 8 + ((i64)t->nc + 1) * 4;  /* the centroids, and transposed */
+    }
+    h += (((i64)s->count + 63) >> 6) * 8;                         /* the dead-row bits of the rows there are */
+    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac; cols[4] = &s->txo;
+    for (i = 0; i < 5; ++i) if (cols[i]->nchunk) c += (i64)s->count * (i64)cols[i]->esz;
+    c += s->tx.used;
+    pthread_rwlock_unlock(&s->lock);
+    if (hot) *hot = h;
+    if (cold) *cold = c;
+}
+
+/* What stays in RAM whatever the memory pressure (mlock), so a search never waits on the disk for it:
+ *   0  nothing is locked, the kernel decides (the default): a loaded index's codes are read ahead at load, pages that
+ *      every search touches stay cached, and the rarely read rows are what the kernel drops first;
+ *   1  the hot part (store_tiers): the codes, slot table and centroids of a loaded index - low-bit codes in RAM,
+ *      full-precision rows on the disk, read only for the candidates a query re-scores;
+ *   2  the rows, scales, ids and tags kept in a file as well (the loaded .vxi, the spill file, and rows spilled later
+ *      as they come): nothing a search reads waits on the disk except texts.
+ * Anonymous memory (a freshly built index, rows added since the load) is in RAM anyway. A rebuild hands the old
+ * index's pages back. Returns 0, or -1 when the kernel refused part of the lock (the memlock limit: ulimit -l,
+ * systemd's LimitMEMLOCK=); that part is then only read ahead and may still be dropped. */
+i32 store_set_memory(RagStore *s, i32 tier)
+{
+    i32 rc;
+    tier = tier < 0 ? 0 : (tier > 2 ? 2 : tier);
+    pthread_rwlock_wrlock(&s->lock);
+    s->mem_tier = tier;
+    pthread_rwlock_unlock(&s->lock);
+    pthread_rwlock_rdlock(&s->lock);                             /* reading gigabytes in may take a while: */
+    rc = store_tq_pin_(s, s->tq, tier >= 1) | store_rows_pin_(s, tier >= 2);   /* searches go on meanwhile */
+    pthread_rwlock_unlock(&s->lock);
+    return rc ? -1 : 0;
 }
 
 /* IVF (large stores): how many clusters a query scans; 0 = the default (min(16%, 4 sqrt(clusters))). More =
@@ -1244,6 +1352,7 @@ void store_build(RagStore *s)
     pthread_mutex_lock(&s->rb_mu);                               /* not in the middle of a live rebuild */
     pthread_mutex_lock(&s->mt_mu);
     pthread_rwlock_wrlock(&s->lock);
+    if (s->mem_tier >= 1) store_tq_pin_(s, s->tq, 0);            /* its pages in the file go back to the kernel */
     tq_free(s->tq); s->tq = (Tq *)0;                             /* rebuilt below: no use remapping it */
     w = store_compact_(s);
     arena_reset(&s->idx_arena);

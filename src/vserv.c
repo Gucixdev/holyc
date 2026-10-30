@@ -1,14 +1,18 @@
 /* vserv.c - vecindex over a socket: libc + pthreads + Linux epoll, and TLS through the vendored BearSSL
  * (third_party/bearssl, MIT, no malloc inside). Nothing else.
  *
- *   vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g AGGRESSION] [-d DIM] [-x] [-L] [-r RECALL] [-f SECONDS]
- *         [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT.pem -k KEY.pem [-a CA.pem] [-P] [-T]] STORE.vxi
+ *   vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g AGGRESSION] [-m TIER] [-d DIM] [-x] [-L] [-r RECALL]
+ *         [-f SECONDS] [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT.pem -k KEY.pem [-a CA.pem] [-P] [-T]] STORE.vxi
  *     -s PATH   Unix socket, created mode 0600 (default ./vecindex.sock when -p is not given)
  *     -p PORT   TCP port, bound to 127.0.0.1 unless -b gives another address
  *     -t N      worker threads (default: the CPUs the process may use - its affinity and cgroup quota - times -g)
  *     -g A      how much of the machine to take, 0..1 (default 1, or $VECINDEX_AGGRESSION): worker threads and the
  *               store's build and scan threads scale with it; background work (live indexing, rebuilds, snapshots)
  *               runs at nice 10 (1) to 19 (0) and on the disk's lowest priority (store_set_aggression)
+ *     -m TIER   what stays in RAM whatever the memory pressure (store_set_memory): 0 the kernel decides (default),
+ *               1 what every search scans (the index's codes, slot table, centroids) - rows stay on the disk and are
+ *               read only for the candidates a query re-scores; 2 the rows, ids and tags too. Needs a memlock limit
+ *               that large (ulimit -l, systemd's LimitMEMLOCK=); what it refuses is only read ahead
  *     -d DIM    dimension of a new, empty store when STORE.vxi does not exist yet (it is created at once, with its
  *               journal, so every write is journaled from the start)
  *     -x        save the store to STORE.vxi on SIGINT / SIGTERM
@@ -734,7 +738,8 @@ int main(int argc, char **argv)
     static Arena arena;
     const char *sock = (const char *)0, *bind_addr = "127.0.0.1", *cert = (const char *)0, *key = (const char *)0, *ca = (const char *)0;
     const char *logdest = (const char *)0;
-    i32 port = 0, nth = 0, dim = 0, save_on_exit = 0, live = 0, created = 0, i, j;
+    i32 port = 0, nth = 0, dim = 0, save_on_exit = 0, live = 0, created = 0, mem = 0, memrc = 0, i, j;
+    i64 hot = 0, cold = 0;
     f32 recall = 0.0f, aggr = -1.0f;
     f64 sync_s = 1.0, snap_s = 0.0;
     size_t outcap;
@@ -748,6 +753,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-b") && i + 1 < argc) bind_addr = argv[++i];
         else if (!strcmp(argv[i], "-t") && i + 1 < argc) nth = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-g") && i + 1 < argc) aggr = (f32)atof(argv[++i]);
+        else if (!strcmp(argv[i], "-m") && i + 1 < argc) mem = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) dim = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-x")) save_on_exit = 1;
         else if (!strcmp(argv[i], "-L")) live = 1;
@@ -763,8 +769,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-A")) vs_log_all = 1;
         else if (argv[i][0] != '-' && !vs_path) vs_path = argv[i];
         else {
-            fprintf(stderr, "usage: vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-d DIM] [-x] [-L] [-r RECALL] [-f SECONDS] [-S SECONDS]\n"
-                            "             [-l syslog|-|FILE] [-A] [-c CERT -k KEY [-a CA] [-P] [-T]] STORE.vxi\n");
+            fprintf(stderr, "usage: vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g A] [-m TIER] [-d DIM] [-x] [-L] [-r RECALL]\n"
+                            "             [-f SECONDS] [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT -k KEY [-a CA] [-P] [-T]] STORE.vxi\n");
             return 2;
         }
     }
@@ -805,6 +811,8 @@ int main(int argc, char **argv)
     store_set_aggression(vs_store, aggr);
     if (recall > 0.0f) store_set_target_recall(vs_store, recall);
     if (live) store_set_live(vs_store, 1, 1.0f);
+    if (mem > 0) memrc = store_set_memory(vs_store, mem);        /* reads the locked part in before serving */
+    store_tiers(vs_store, &hot, &cold);
     /* one request: headers + a JSON vector (~24 bytes a number) or the binary frame */
     vs_reqcap = 2048 + vs_dim * 24;
     if (vs_reqcap < 4096) vs_reqcap = 4096;
@@ -840,8 +848,12 @@ int main(int argc, char **argv)
             (vs_now_() - t0) * 1e3, nth, live ? " live;" : "", sock ? " unix " : "", sock ? sock : "", port ? " tcp " : "", port ? bind_addr : "",
             vs_tls_on ? (vs_ntas_() ? " (TLS, client certificates required)" : " (TLS)") : "",
             vs_tls_on ? (vs_plain_ok ? " + plaintext on tcp" : (vs_unix_tls_only ? "" : "; plaintext on unix only")) : "");
-    vs_log_((const VsConn *)0, 0, "start file=%s rows=%d dim=%d threads=%d%s%s%s journal=%s", vs_path, store_count(vs_store), vs_dim, nth,
-            created ? " created" : "", live ? " live" : "", vs_tls_on ? " tls" : "", store_journal_bytes(vs_store, vs_path) >= 0 ? "on" : "off");
+    vs_log_((const VsConn *)0, 0, "start file=%s rows=%d dim=%d threads=%d%s%s%s journal=%s memory=%d hot=%.0f cold=%.0f", vs_path,
+            store_count(vs_store), vs_dim, nth, created ? " created" : "", live ? " live" : "", vs_tls_on ? " tls" : "",
+            store_journal_bytes(vs_store, vs_path) >= 0 ? "on" : "off", (int)mem, (double)hot, (double)cold);
+    if (memrc != 0)
+        fprintf(stderr, "vserv: the memlock limit refused part of -m %d; that part is only read ahead (raise it: ulimit -l, "
+                        "or LimitMEMLOCK=infinity in the systemd unit)\n", (int)mem);
     if (store_journal_bytes(vs_store, vs_path) < 0)
         fprintf(stderr, "vserv: no journal for %s: writes are durable only once saved or snapshotted\n", vs_path);
     for (i = 0; i < nth; ++i) pthread_create(&ws[i].th, (const pthread_attr_t *)0, vs_worker_, &ws[i]);

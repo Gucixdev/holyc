@@ -220,6 +220,7 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
  * "err ...", so any language - or nc, socat, a shell - can speak it with a readline:
  *   ping                      ok pong
  *   stats                     ok count=N dim=D pending=P built=0|1 snapshot=idle|running last=ok|failed|none
+ *                                hot=BYTES cold=BYTES memory=0|1|2   (store_tiers; -m sets the memory tier)
  *   search K X1 .. XD         ok N ID SCORE ID SCORE ...   (N <= K hits, best first; SCORE = -|q - v|^2)
  *   add ID X1 .. XD           ok                           (replaces the row with the same id)
  *   get ID                    ok X1 .. XD                  (the stored unit vector)
@@ -343,6 +344,10 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         p = vs_str_(p, " pending="); p = vs_i64_(p, v[2]); p = vs_str_(p, " built="); p = vs_i64_(p, v[3]);
         p = vs_str_(p, run ? " snapshot=running" : " snapshot=idle");
         p = vs_str_(p, last == 0 ? " last=ok" : (last == -1 ? " last=failed" : " last=none"));
+        {   i64 hot, cold;
+            store_tiers(vs_store, &hot, &cold);
+            p = vs_str_(p, " hot="); p = vs_i64_(p, hot); p = vs_str_(p, " cold="); p = vs_i64_(p, cold);
+            p = vs_str_(p, " memory="); p = vs_i64_(p, (i64)vs_store->mem_tier); }
         vs_line_reply_(w, c, o, p);
     } else if (VS_CMD("build")) { vs_build_(c); vs_line_reply_(w, c, o, vs_str_(o, "ok")); }
     else if (VS_CMD("save")) { if (vs_save_(c) == 0) vs_line_reply_(w, c, o, vs_str_(o, "ok")); else VS_LINE_ERR("save failed"); }
@@ -550,14 +555,17 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
     if (VS_IS("GET", "/health")) {
         VS_HTTP_LIT(w, c, "200 OK", "{\"ok\":true}", keep);
     } else if (VS_IS("GET", "/stats")) {
-        i64 v[4], us; i32 run, last; char *p = o;
+        i64 v[4], us, hot, cold; i32 run, last; char *p = o;
         vs_stats_(v);
         store_snapshot_info(vs_store, &run, &last, &us);
+        store_tiers(vs_store, &hot, &cold);
         p = vs_str_(p, "{\"count\":"); p = vs_i64_(p, v[0]); p = vs_str_(p, ",\"dim\":"); p = vs_i64_(p, v[1]);
         p = vs_str_(p, ",\"pending\":"); p = vs_i64_(p, v[2]); p = vs_str_(p, ",\"built\":"); p = vs_str_(p, v[3] ? "true" : "false");
         p = vs_str_(p, ",\"snapshot\":"); p = vs_str_(p, run ? "\"running\"" : "\"idle\"");
         p = vs_str_(p, ",\"last_snapshot\":"); p = vs_str_(p, last == 0 ? "\"ok\"" : (last == -1 ? "\"failed\"" : "\"none\""));
-        p = vs_str_(p, ",\"last_snapshot_ms\":"); p = vs_i64_(p, us / 1000); *p++ = '}';
+        p = vs_str_(p, ",\"last_snapshot_ms\":"); p = vs_i64_(p, us / 1000);
+        p = vs_str_(p, ",\"hot\":"); p = vs_i64_(p, hot); p = vs_str_(p, ",\"cold\":"); p = vs_i64_(p, cold);
+        p = vs_str_(p, ",\"memory\":"); p = vs_i64_(p, (i64)vs_store->mem_tier); *p++ = '}';
         vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
     } else if (VS_IS("POST", "/search")) {
         char *p = o;

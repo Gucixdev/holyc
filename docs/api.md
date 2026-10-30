@@ -36,6 +36,8 @@ from any thread on the same handle at once.
 | `vi_set_recall(db, target)` | keeps recall@10 at `target`: every build picks the fewest probes that reach it |
 | `vi_set_layout(db, code_bits, row_bytes)` | 4-, 2- or 1-bit scan codes (dim/2, dim/4 or dim/8 bytes a row), f32 or int8 rows, before the first row |
 | `vi_set_aggression(db, a)` | how much of the machine to take, 0..1 (default 1, or `VECINDEX_AGGRESSION`): threads out of the CPUs the process may use (affinity, cgroup quota); background work at nice 10 to 19 |
+| `vi_set_memory(db, tier)` | what stays in RAM whatever the memory pressure (mlock): 0 nothing, the kernel decides (default); 1 what every search scans (codes, slot table, centroids), rows stay on the disk; 2 rows, ids and tags too. -1 when the memlock limit refused part of it |
+| `vi_memory(db, &hot, &cold)` | bytes scanned by every search (hot) and bytes read only for candidates and hits (cold) |
 | `vi_save(db, path)` | rewrites the file and starts a fresh journal |
 | `vi_sync(db)` | flushes the journal to the disk |
 | `vi_snapshot(db, path)`, `vi_snapshot_wait(db, block)` | writes the file from a child process while this one keeps serving |

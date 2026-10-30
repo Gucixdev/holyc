@@ -135,6 +135,16 @@ VI_API int vi_set_layout(vi_db *db, int code_bits, int row_bytes);
  * (aggression 1) to 19 (0), on the disk's lowest best-effort priority, or only when the disk is idle below 0.5. */
 VI_API void vi_set_aggression(vi_db *db, float a);
 
+/* What stays in RAM whatever the memory pressure (mlock). A search scans the hot part every time - the index's codes
+ * (code_bits per dimension), its slot table and centroids - and reads the cold part only for the candidates it
+ * re-scores and the hits it returns: the rows (f32 or int8), ids, tags and texts. tier 0 (default): nothing locked,
+ * the kernel keeps what searches touch; 1: the hot part locked - low-bit codes in RAM, full-precision rows on the
+ * disk; 2: the rows, ids and tags locked too. Returns 0, or -1 when the memlock limit refused part of it (ulimit -l,
+ * systemd's LimitMEMLOCK=); that part is then only read ahead. hot and cold (either may be NULL) get the bytes of
+ * each part. */
+VI_API int vi_set_memory(vi_db *db, int tier);
+VI_API void vi_memory(vi_db *db, vi_i64 *hot, vi_i64 *cold);
+
 /* Writes the whole store to path (NULL: the file it was opened from) and starts a fresh journal: 0 or -1. */
 VI_API int vi_save(vi_db *db, const char *path);
 

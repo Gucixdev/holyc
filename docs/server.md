@@ -10,6 +10,7 @@ The store is opened with `store_load` (mmap), so a 100M-row file is ready in mil
 .build/vserv -s /run/vx.sock -p 8077 -t 2 -d 384 docs.vxi        # Unix socket (0600) + TCP on 127.0.0.1; a new store
 .build/vserv -p 8077 -L -r 0.95 -l syslog docs.vxi               # live: adds indexed as they come; log to syslog
 .build/vserv -p 8077 -g 0.5 docs.vxi                             # half the CPUs; background work at nice 14, disk when idle
+.build/vserv -p 8077 -m 1 docs.vxi                               # the scanned codes locked in RAM, rows read from the disk
 .build/vserv -p 8443 -c cert.pem -k key.pem [-a clients-ca.pem] [-T] docs.vxi   # TLS, optional mutual TLS
 curl -s localhost:8077/stats
 curl -s -X POST 'localhost:8077/search?k=5' -d '[0.1, 0.2, ...]'
@@ -26,7 +27,7 @@ A session over TCP, word for word:
 add 1 1 0 0 0                 ok
 add 2 0 1 0 0                 ok
 search 2 0.9 0.1 0 0          ok 2 1 -0.012233 2 -1.779137
-stats                         ok count=2 dim=4 pending=2 built=0 snapshot=idle last=none
+stats                         ok count=2 dim=4 pending=2 built=0 snapshot=idle last=none hot=8 cold=64 memory=0
 del 1 2                       ok 2
 quit                          ok bye
 ```
@@ -77,6 +78,25 @@ There is no replication inside the server. A copy of the store is the file plus 
 (`rename`), so `rsync` or `cp` of the two at any moment is a consistent backup; a standby machine that replays them
 starts in milliseconds (mmap). A snapshot to another path (`store_snapshot` / `vi_snapshot` with a path) writes a
 point-in-time copy without touching the live journal.
+
+## Memory: hot codes in RAM, cold rows on the disk
+
+A search scans the hot part of a store every time: the index's codes (1, 2 or 4 bits a dimension), its slot table and
+centroids. It reads the cold part only for the few hundred candidates it re-scores and the hits it returns: the rows
+(f32 or int8), ids, tags and texts. The file is mapped, so by default the kernel keeps what searches touch and drops
+the rarely read rows first under pressure. `-m` takes that decision away from it:
+
+| `-m` | locked in RAM | on the disk, read when needed |
+|---|---|---|
+| 0 (default) | nothing; the codes are read ahead at start | everything, cached as the kernel sees fit |
+| 1 | the hot part | rows, ids, tags, texts |
+| 2 | the hot part, rows, ids and tags | texts |
+
+`stats` reports both sizes (`hot=` and `cold=` in bytes) and the tier. For 100M rows of 768 dimensions with 1-bit
+codes and f32 rows that is about 10 GB hot (96 bytes of codes and 4 of slot table a row) and 307 GB cold: `-m 1`
+keeps the 10 GB in RAM and the exact f32 rows on an SSD, read only for the candidates. The lock needs a memlock limit
+that large (`ulimit -l`, or `LimitMEMLOCK=infinity` in a systemd unit); what it refuses is only read ahead, and the
+server says so at start. In C: `vi_set_memory` and `vi_memory` ([api.md](api.md)).
 
 ## Access and accountability: the operating system and the log, no users and roles
 

@@ -95,7 +95,7 @@ static i32 store_rebuild_(RagStore *s, i32 nth)
 {
     StoreSnap sn;
     Tq *nt, *old;
-    i32 n, nc, live, dead, bits, round, stuck = 0;
+    i32 n, nc, live, dead, bits, round, stuck = 0, unpin;
     u32 seed;
     f64 t0 = tq_now_();
     pthread_mutex_lock(&s->rb_mu);
@@ -145,8 +145,10 @@ static i32 store_rebuild_(RagStore *s, i32 nth)
     s->tuned_n = 0;
     s->dead_built = nt->nc > 1 ? dead : 0;                       /* a flat index keeps its tombstones' slots */
     s->win_sum = 0.0; s->win_n = 0; s->drifted = 0;
+    unpin = s->mem_tier >= 1;
     pthread_rwlock_unlock(&s->lock);
     pthread_mutex_unlock(&s->mt_mu);
+    if (unpin) store_tq_pin_(s, old, 0);                         /* a loaded index's locked pages go back */
     tq_free(old);
     pthread_mutex_unlock(&s->rb_mu);
     store_stat_add_(&s->n_rebuilds, 1);
