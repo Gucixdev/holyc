@@ -3,7 +3,10 @@
  * Starts its own server on a fresh store in a temporary directory, talks to it over the Unix socket and TCP, and
  * checks: every line command and its errors; the binary ops for snapshot, get and range deletes; HTTP /snapshot,
  * /get and range deletes; that an add replaces the row with the same id; the log names the peer of every write; a
- * kill -9 loses nothing older than the journal flush (-f); timed snapshots (-S) fold the journal into the file. The
+ * kill -9 loses nothing older than the journal flush (-f); timed snapshots (-S) fold the journal into the file;
+ * batches (begin, commit [sync], abort, a dropped connection, a kill -9 right after a synced commit); the stats fields
+ * of the memory tiers and -m; a tenant server (use NAME, HTTP /t/NAME/, binary op 14, isolation, the log, a restart,
+ * -U with a tenant's certificate). The
  * protocol and TLS checks that predate these live in py/vserv_test.py and py/vserv_tls_test.py. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +26,7 @@
 
 static int fails;
 static char dir[64], sock_path[128], store_path[128], log_path[128];
+static const char *serve_path = store_path;    /* what start() serves: the store, or a tenant directory */
 static int port;
 
 static void check(int cond, const char *what)
@@ -67,7 +71,7 @@ static pid_t start(const char *extra1, const char *extra2, const char *extra3)
         if (extra1) argv[n++] = extra1;
         if (extra2) argv[n++] = extra2;
         if (extra3) argv[n++] = extra3;
-        argv[n++] = store_path; argv[n] = NULL;
+        argv[n++] = serve_path; argv[n] = NULL;
         execv(argv[0], (char *const *)argv);
         _exit(127);
     }
@@ -336,6 +340,105 @@ int main(int argc, char **argv)
         free(big); free(bl); free(rr);
     }
 
+    /* batches: begin, writes that wait, commit as one change; abort; a closed connection drops its batch; a synced
+     * commit survives a kill -9 that comes right after it. And stats reports the memory tiers. */
+    {
+        int fd2, n0;
+        p = start(NULL, NULL, NULL);
+        fd = connect_unix(); fd2 = connect_unix();
+        check(ask(fd, "stats\n", r, sizeof(r)) > 0 && strstr(r, " hot=") && strstr(r, " cold=") && strstr(r, " memory=0"),
+              "stats: hot=, cold= and memory=0");
+        check(ask(fd, "use acme\n", r, sizeof(r)) > 0 && !strncmp(r, "err this server has one store", 29), "use on a server of one store -> err");
+        for (i = 7001; i <= 7003; ++i) { vline(line, "add", i, i); ask(fd, line, r, sizeof(r)); }
+        n0 = count_of(fd);
+        check(ask(fd, "commit\n", r, sizeof(r)) > 0 && !strcmp(r, "err no batch: begin first"), "commit without begin -> err");
+        check(ask(fd, "begin\n", r, sizeof(r)) > 0 && !strcmp(r, "ok"), "begin -> ok");
+        check(ask(fd, "begin\n", r, sizeof(r)) > 0 && !strncmp(r, "err a batch is open", 19), "begin twice -> err");
+        check(ask(fd, "del 7001\n", r, sizeof(r)) > 0 && !strcmp(r, "ok queued"), "del in a batch -> ok queued");
+        vline(line, "add", 7004, 7004);
+        check(ask(fd, line, r, sizeof(r)) > 0 && !strcmp(r, "ok queued"), "add in a batch -> ok queued");
+        vline(line, "add", 7005, 7005); ask(fd, line, r, sizeof(r));
+        check(ask(fd, "del 7002 7003\n", r, sizeof(r)) > 0 && !strcmp(r, "ok queued"), "a range delete in a batch -> ok queued");
+        check(count_of(fd2) == n0 && ask(fd2, "get 7004\n", r, sizeof(r)) > 0 && !strncmp(r, "err", 3), "another connection sees none of it yet");
+        check(ask(fd, "commit sync\n", r, sizeof(r)) > 0 && !strcmp(r, "ok 4"), "commit sync -> ok 4");
+        check(count_of(fd2) == n0 - 1 && ask(fd2, "get 7004\n", r, sizeof(r)) > 0 && !strncmp(r, "ok ", 3)
+              && ask(fd2, "get 7002\n", r, sizeof(r)) > 0 && !strncmp(r, "err", 3), "after the commit: all four changes");
+        check(ask(fd, "begin\n", r, sizeof(r)) > 0 && !strcmp(r, "ok"), "begin again");
+        vline(line, "add", 7006, 7006); ask(fd, line, r, sizeof(r));
+        check(ask(fd, "abort\n", r, sizeof(r)) > 0 && !strcmp(r, "ok 0") && ask(fd, "get 7006\n", r, sizeof(r)) > 0 && !strncmp(r, "err", 3),
+              "abort -> ok 0, the row never came");
+        check(ask(fd2, "begin\n", r, sizeof(r)) > 0 && !strcmp(r, "ok"), "a batch on a second connection");
+        vline(line, "add", 7007, 7007); ask(fd2, line, r, sizeof(r));
+        close(fd2);
+        msleep(200);
+        check(ask(fd, "get 7007\n", r, sizeof(r)) > 0 && !strncmp(r, "err", 3), "closing the connection drops its batch");
+        stop(p, SIGKILL);                                         /* right after the synced commit: no flush timer */
+        p = start(NULL, NULL, NULL);
+        close(fd);
+        fd = connect_unix();
+        check(ask(fd, "get 7005\n", r, sizeof(r)) > 0 && !strncmp(r, "ok ", 3) && ask(fd, "get 7001\n", r, sizeof(r)) > 0
+              && !strncmp(r, "err", 3), "kill -9, restart: the synced batch is all there");
+        close(fd);
+        stop(p, SIGTERM);
+        check(log_has("commit changes=4 sync ok"), "log: the commit, its size and sync");
+        check(log_has("batch of 1 changes dropped"), "log: the batch a closed connection dropped");
+        p = start("-m", "1", NULL);
+        fd = connect_unix();
+        check(fd >= 0 && ask(fd, "stats\n", r, sizeof(r)) > 0 && strstr(r, " memory=1"), "-m 1: stats says memory=1");
+        if (fd >= 0) close(fd);
+        stop(p, SIGTERM);
+    }
+
+    /* a tenant server: a directory, a store per tenant; the line protocol, HTTP and binary choose one; the log names it */
+    {
+        char tdir[160], tf[200];
+        int fa, fb, fc;
+        struct stat sb;
+        sprintf(tdir, "%s/tenants", dir);
+        mkdir(tdir, 0700);
+        serve_path = tdir;
+        p = start(NULL, NULL, NULL);
+        fa = connect_unix(); fb = connect_unix();
+        check(fa >= 0 && fb >= 0, "a tenant server: clients connect");
+        check(ask(fa, "ping\n", r, sizeof(r)) > 0 && !strcmp(r, "ok pong"), "ping before choosing a tenant");
+        check(ask(fa, "stats\n", r, sizeof(r)) > 0 && !strcmp(r, "err no tenant: use NAME first"), "stats before use -> err no tenant");
+        check(ask(fa, "use ../evil\n", r, sizeof(r)) > 0 && !strncmp(r, "err a tenant's name", 19), "use ../evil -> err: a name never leaves the directory");
+        check(ask(fa, "use acme extra\n", r, sizeof(r)) > 0 && !strcmp(r, "err usage: use NAME"), "use with two words -> err usage");
+        check(ask(fa, "use acme\n", r, sizeof(r)) > 0 && !strcmp(r, "ok"), "use acme -> ok, created");
+        sprintf(tf, "%s/acme.vxi", tdir);
+        check(stat(tf, &sb) == 0, "the tenant's store is DIR/acme.vxi");
+        vline(line, "add", 1, 1);
+        check(ask(fa, line, r, sizeof(r)) > 0 && !strcmp(r, "ok") && count_of(fa) == 1, "acme: add, count 1");
+        check(ask(fb, "use beta\n", r, sizeof(r)) > 0 && !strcmp(r, "ok") && count_of(fb) == 0, "beta: count 0 - tenants are apart");
+        vline(line, "add", 2, 2); ask(fb, line, r, sizeof(r));
+        vline(line, "add", 3, 3); ask(fb, line, r, sizeof(r));
+        check(count_of(fb) == 2 && count_of(fa) == 1, "beta has 2 rows, acme still 1");
+        check(http("GET /t/acme/stats HTTP/1.1\r\nConnection: close\r\n\r\n", r, sizeof(r)) > 0 && strstr(r, "\"count\":1"), "HTTP GET /t/acme/stats: count 1");
+        check(http("GET /stats HTTP/1.1\r\nConnection: close\r\n\r\n", r, sizeof(r)) > 0 && strstr(r, "400 Bad Request") && strstr(r, "no tenant"),
+              "HTTP without /t/NAME/ -> 400 no tenant");
+        check(http("GET /health HTTP/1.1\r\nConnection: close\r\n\r\n", r, sizeof(r)) > 0 && strstr(r, "\"ok\":true"), "HTTP /health needs no tenant");
+        check(http("GET /t/bad!name/stats HTTP/1.1\r\nConnection: close\r\n\r\n", r, sizeof(r)) > 0 && strstr(r, "403 Forbidden"), "HTTP /t/bad!name/ -> 403");
+        fc = connect_unix();
+        check(bin_call(fc, 6, NULL, 0, &st, &rnb, rb) == 0 && st == 5, "binary stats before choosing a tenant: status 5");
+        check(bin_call(fc, 14, "beta", 4, &st, &rnb, rb) == 0 && st == 0, "binary use (op 14) of beta");
+        check(bin_call(fc, 6, NULL, 0, &st, &rnb, rb) == 0 && st == 0 && rnb == 32 && rb[0] == 2, "binary stats on beta: 2 rows");
+        check(bin_call(fc, 14, "x/y", 3, &st, &rnb, rb) == 0 && st == 1 && rnb > 0, "binary use of a bad name: status 1 and the reason");
+        close(fc);
+        check(ask(fa, "begin\n", r, sizeof(r)) > 0 && ask(fa, "use beta\n", r, sizeof(r)) > 0 && !strncmp(r, "err a batch is open", 19),
+              "use while a batch is open -> err");
+        ask(fa, "abort\n", r, sizeof(r));
+        close(fa); close(fb);
+        stop(p, SIGTERM);
+        p = start(NULL, NULL, NULL);
+        fa = connect_unix();
+        check(ask(fa, "use acme\n", r, sizeof(r)) > 0 && count_of(fa) == 1, "restart: acme's row is back");
+        close(fa);
+        stop(p, SIGTERM);
+        check(log_has("tenant created name=acme"), "log: a tenant created");
+        check(log_has("tenant=acme add id=1 ok"), "log: a connection's lines name its tenant");
+        serve_path = store_path;
+    }
+
     /* mutual TLS: the name in the client's certificate goes into the log (needs openssl and curl; skipped without) */
     if (system("command -v openssl >/dev/null && command -v curl >/dev/null") == 0) {
         char cmd[2048], ports[16];
@@ -346,7 +449,9 @@ int main(int argc, char **argv)
                      "openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout srv.key -out srv.csr -subj /CN=localhost >/dev/null 2>&1 && "
                      "openssl x509 -req -in srv.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out srv.pem -days 2 -extfile san.ext >/dev/null 2>&1 && "
                      "openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout cli.key -out cli.csr -subj '/CN=ingest worker 7' >/dev/null 2>&1 && "
-                     "openssl x509 -req -in cli.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out cli.pem -days 2 >/dev/null 2>&1", dir, ext);
+                     "openssl x509 -req -in cli.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out cli.pem -days 2 >/dev/null 2>&1 && "
+                     "openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -keyout ten.key -out ten.csr -subj /CN=acme >/dev/null 2>&1 && "
+                     "openssl x509 -req -in ten.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out ten.pem -days 2 >/dev/null 2>&1", dir, ext);
         if (system(cmd) == 0) {
             char crt[160], key[160], ca[160];
             sprintf(crt, "%s/srv.pem", dir); sprintf(key, "%s/srv.key", dir); sprintf(ca, "%s/ca.pem", dir);
@@ -370,6 +475,36 @@ int main(int argc, char **argv)
             stop(p, SIGTERM);
             check(log_has("cn=\"ingest worker 7\""), "log: the client certificate's name (cn=\"ingest worker 7\")");
             check(log_has("tls handshake failed"), "log: the refused handshake");
+
+            /* -U: a tenant server where a client certificate names the one tenant its holder may use */
+            {
+                char tdir[160];
+                sprintf(tdir, "%s/tenants-u", dir);
+                mkdir(tdir, 0700);
+                port += 1;
+                sprintf(ports, "%d", port);
+                p = fork();
+                if (p == 0) {
+                    execl(getenv("VSERV"), getenv("VSERV"), "-p", ports, "-s", sock_path, "-t", "2", "-d", "8", "-l", log_path,
+                          "-c", crt, "-k", key, "-a", ca, "-U", tdir, (char *)0);
+                    _exit(127);
+                }
+                for (i = 0; i < 300 && (fd = connect_tcp()) < 0; ++i) msleep(20);
+                if (fd >= 0) close(fd);
+                sprintf(cmd, "curl -s --cacert %s/ca.pem --cert %s/ten.pem --key %s/ten.key https://localhost:%d/t/acme/stats > %s/curl.out 2>&1",
+                        dir, dir, dir, port, dir);
+                n = system(cmd);
+                sprintf(cmd, "grep -q '\\\"count\\\":0' %s/curl.out", dir);
+                check(n == 0 && system(cmd) == 0, "-U: the certificate for acme reaches /t/acme/");
+                sprintf(cmd, "curl -s --cacert %s/ca.pem --cert %s/ten.pem --key %s/ten.key https://localhost:%d/t/beta/stats > %s/curl.out 2>&1",
+                        dir, dir, dir, port, dir);
+                n = system(cmd);
+                sprintf(cmd, "grep -q 'another tenant' %s/curl.out", dir);
+                check(n == 0 && system(cmd) == 0, "-U: the same certificate is refused at /t/beta/");
+                msleep(200);
+                stop(p, SIGTERM);
+                check(log_has("use beta refused: the certificate names another tenant"), "log: the refused tenant");
+            }
         } else
             printf("  (openssl could not make test certificates - mTLS log check skipped)\n");
     } else

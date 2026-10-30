@@ -199,6 +199,261 @@ static i32 sd_aggression_(Arena *a)
     return ok;
 }
 
+/* ---- memory tiers: the bytes a search scans (hot) and reads only for candidates (cold); locking either in RAM ---- */
+static i64 sd_vmlck_(void)                                /* kB of locked memory (VmLck in /proc/self/status), -1: unknown */
+{
+    FILE *f = fopen("/proc/self/status", "r");
+    char line[256];
+    i64 kb = -1;
+    if (!f) return -1;
+    while (fgets(line, (int)sizeof(line), f)) if (!strncmp(line, "VmLck:", 6)) { kb = (i64)atol(line + 6); break; }
+    fclose(f);
+    return kb;
+}
+#define SDM_N   3000
+#define SDM_DIM 32
+static i32 sdm_finds_(RagStore *s, const f32 *x)          /* rows 17, 1700 and 2999 find themselves first */
+{
+    static const i32 rows[3] = { 17, 1700, 2999 };
+    i64 ids[4]; f32 sc[4];
+    i32 i;
+    for (i = 0; i < 3; ++i)
+        if (store_search(s, x + (size_t)rows[i] * SDM_DIM, 4, ids, sc) < 1 || ids[0] != 7000 + rows[i]) return 0;
+    return 1;
+}
+static i32 sd_tiers_(Arena *a)
+{
+    const char *path = "/tmp/store_demo_tiers.vxi";
+    char *jn = store_jname_(path, ".j");
+    static f32 x[SDM_N * SDM_DIM];
+    RagStore *s = store_new(a, SDM_DIM), *l;
+    i64 hot, cold, k0, k1, k2, k3, k4;
+    i32 i, ok = 1, r1, r2, r0, r3;
+    u32 st = 4242u;
+    remove(path); remove(jn);
+    for (i = 0; i < SDM_N * SDM_DIM; ++i) x[i] = sd_f_(&st);
+    for (i = 0; i < SDM_N; ++i) store_add(s, x + (size_t)i * SDM_DIM, 7000 + i);
+    store_build(s);
+    store_tiers(s, &hot, &cold);
+    /* cold: every row's f32 vector, id and tag, exactly; hot: the 4-bit codes at least (dim / 2 bytes a row) */
+    if (!s->tq || cold != (i64)SDM_N * (SDM_DIM * 4 + 8 + 8) || hot < (i64)SDM_N * (SDM_DIM / 2) || hot >= cold) ok = 0;
+    print_cstr("  tiers: hot "); print_i64(hot); print_cstr(" B, cold "); print_i64(cold); print_cstr(" B for ");
+    print_i64(SDM_N); print_cstr(" rows of "); print_i64(SDM_DIM); print_cstr(" dims\n");
+    if (!ok) print_cstr("  tiers: sizes FAILED\n");
+    if (store_save(s, path) != 0 || !(l = store_load(a, path))) {
+        print_cstr("  tiers: save/load FAILED\n"); store_destroy(s); free(jn); return 0;
+    }
+    store_destroy(s);
+    k0 = sd_vmlck_();
+    r1 = store_set_memory(l, 1); k1 = sd_vmlck_();                /* the mapped codes, slot table, centroids */
+    if (l->mem_tier != 1 || !sdm_finds_(l, x)) { print_cstr("  tiers: tier 1 FAILED\n"); ok = 0; }
+    r2 = store_set_memory(l, 2); k2 = sd_vmlck_();                /* the rows, ids and tags too */
+    if (l->mem_tier != 2 || !sdm_finds_(l, x)) { print_cstr("  tiers: tier 2 FAILED\n"); ok = 0; }
+    r0 = store_set_memory(l, 0); k3 = sd_vmlck_();                /* everything back to the kernel */
+    if (l->mem_tier != 0 || !sdm_finds_(l, x)) { print_cstr("  tiers: tier 0 FAILED\n"); ok = 0; }
+    r3 = store_set_memory(l, 1);
+    store_build(l);                                               /* the mapped index is replaced: its lock goes */
+    k4 = sd_vmlck_();
+    if (!sdm_finds_(l, x)) { print_cstr("  tiers: search after the rebuild FAILED\n"); ok = 0; }
+    print_cstr("  tiers: locked kB "); print_i64(k0); print_cstr(" -> tier 1: "); print_i64(k1); print_cstr(" -> tier 2: ");
+    print_i64(k2); print_cstr(" -> tier 0: "); print_i64(k3); print_cstr(" -> tier 1 and a rebuild: "); print_i64(k4); print_cstr("\n");
+    if (k0 < 0) print_cstr("  tiers: no VmLck here - what got locked is not checked\n");
+    else if (!l->map) print_cstr("  tiers: the store is not mapped here (a big-endian CPU) - nothing to lock, not checked\n");
+    else if (r1 != 0 || r2 != 0 || r0 != 0 || r3 != 0)
+        print_cstr("  tiers: the memlock limit refused the lock (ulimit -l) - what got locked is not checked\n");
+    else if (k1 < k0 + (i64)SDM_N * (SDM_DIM / 2) / 1024 || k2 < k1 + (i64)SDM_N * SDM_DIM * 4 / 1024 || k3 > k0 + 8 || k4 > k0 + 8) {
+        print_cstr("  tiers: locking FAILED\n"); ok = 0;
+    }
+    store_destroy(l);
+    remove(path); remove(jn); free(jn);
+    return ok;
+}
+
+/* ---- write batches: all or none for searches and after a crash; a torn or damaged batch in the journal; a reader
+ * that must never see half of one; durable commits from several threads ---- */
+#define SDB_DIM 8
+static void sdb_vec_(i64 id, f32 *v)
+{
+    u32 s = (u32)((u64)id * 2654435761u) | 1u;
+    i32 d;
+    for (d = 0; d < SDB_DIM; ++d) v[d] = sd_f_(&s);
+}
+static i32 sdb_doc_(RagStore *s, i64 doc)                 /* rows of document doc (ids doc << 20 | chunk) */
+{
+    static i64 ids[64];
+    return store_range(s, doc << 20, (doc << 20) | 0xfffff, ids, 64);
+}
+static i32 sdb_text_is_(RagStore *s, i64 id, const char *want)
+{
+    char got[64];
+    i32 n = store_get_text(s, id, got, (i32)sizeof(got));
+    return n == (i32)strlen(want) && memcmp(got, want, (size_t)n) == 0;
+}
+static i64 sdb_fsize_(const char *p)
+{
+    FILE *f = fopen(p, "rb");
+    long n;
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END); n = ftell(f); fclose(f);
+    return (i64)n;
+}
+static i32 sdb_write_(const char *p, const u8 *b, i64 n)  /* replace the file's bytes */
+{
+    FILE *f = fopen(p, "wb");
+    i32 r;
+    if (!f) return -1;
+    r = fwrite(b, 1, (size_t)n, f) == (size_t)n ? 0 : -1;
+    return fclose(f) == 0 ? r : -1;
+}
+typedef struct { RagStore *s; i32 stop, bad, reads; } SdbReader;
+static void *sdb_reader_(void *p)                          /* document 7 has 5 chunks or 3, never anything else */
+{
+    SdbReader *x = (SdbReader *)p;
+    while (!__atomic_load_n(&x->stop, __ATOMIC_ACQUIRE)) {
+        i32 n = sdb_doc_(x->s, 7);
+        if (n != 5 && n != 3) x->bad = n + 1000;
+        ++x->reads;
+    }
+    return (void *)0;
+}
+typedef struct { RagStore *s; i32 t, bad; } SdbCommitter;
+static void *sdb_committer_(void *p)                       /* 50 durable batches of 2 rows each */
+{
+    SdbCommitter *c = (SdbCommitter *)p;
+    StoreWb b;
+    f32 v[SDB_DIM];
+    i32 i, j;
+    for (i = 0; i < 50; ++i) {
+        store_batch_init(&b, c->s);
+        for (j = 0; j < 2; ++j) { i64 id = ((i64)(c->t + 1) << 32) | (i * 2 + j); sdb_vec_(id, v); store_batch_put(&b, v, id, 0); }
+        if (store_batch_commit(&b, 1) != 2) c->bad = 1;
+        store_batch_free(&b);
+    }
+    return (void *)0;
+}
+static i32 sd_batches_(Arena *a)
+{
+    const char *path = "/tmp/store_demo_batch.vxi", *path2 = "/tmp/store_demo_batch2.vxi";
+    char *jn = store_jname_(path, ".j"), *jn2 = store_jname_(path2, ".j");
+    RagStore *s = store_new(a, SDB_DIM), *l, *g;
+    StoreWb b;
+    SdbReader rd;
+    SdbCommitter cm[4];
+    pthread_t th[4];
+    static f32 v[SDB_DIM];
+    static char buf[64];
+    union { f32 f; u32 u; } nan_;
+    u8 *jb = (u8 *)0;
+    i64 jlen;
+    i32 ok = 1, d, c, r, n, i, flips;
+    remove(path); remove(jn); remove(path2); remove(jn2);
+    for (d = 0; d < 3; ++d)                                   /* 3 documents of 5 chunks, each with a text */
+        for (c = 0; c < 5; ++c) {
+            i64 id = ((i64)d << 20) | c;
+            sdb_vec_(id, v); n = sprintf(buf, "doc %d chunk %d", d, c);
+            store_put_text(s, v, id, 0, buf, n);
+        }
+    if (store_save(s, path) != 0) { print_cstr("  batches: save FAILED\n"); store_destroy(s); free(jn); free(jn2); return 0; }
+
+    /* one batch: document 1 replaced (5 chunks out, 3 new ones in, with texts), one chunk of document 2 out, a row in */
+    store_batch_init(&b, s);
+    store_batch_delete_range(&b, (i64)1 << 20, ((i64)1 << 20) | 0xfffff);
+    for (c = 0; c < 3; ++c) {
+        i64 id = ((i64)1 << 20) | (100 + c);
+        sdb_vec_(id, v); n = sprintf(buf, "new doc 1 chunk %d", c);
+        store_batch_put_text(&b, v, id, 0, buf, n);
+    }
+    store_batch_delete(&b, (i64)2 << 20);
+    sdb_vec_((i64)9 << 20, v); store_batch_put(&b, v, (i64)9 << 20, 0);
+    if (sdb_doc_(s, 1) != 5 || store_count(s) != 15) { print_cstr("  batches: a change showed before the commit\n"); ok = 0; }
+    r = store_batch_commit(&b, 1);
+    store_batch_free(&b);
+    if (r != 6 || sdb_doc_(s, 1) != 3 || sdb_doc_(s, 2) != 4 || sdb_doc_(s, 9) != 1 || store_count(s) != 13
+        || !sdb_text_is_(s, ((i64)1 << 20) | 101, "new doc 1 chunk 1") || !sdb_text_is_(s, ((i64)2 << 20) | 1, "doc 2 chunk 1")) {
+        print_cstr("  batches: commit FAILED\n"); ok = 0;
+    }
+    /* refused: a NaN in it, so the range delete in it does not happen either */
+    store_batch_init(&b, s);
+    store_batch_delete_range(&b, 0, 0xfffff);
+    nan_.u = 0x7fc00000u;
+    sdb_vec_(77, v); v[3] = nan_.f;
+    if (store_batch_put(&b, v, 77, 0) != -1) ok = 0;
+    r = store_batch_commit(&b, 0);
+    store_batch_free(&b);
+    if (r != -1 || sdb_doc_(s, 0) != 5 || store_count(s) != 13) { print_cstr("  batches: a refused batch changed something\n"); ok = 0; }
+    /* dropped without a commit, and an empty one */
+    store_batch_init(&b, s); store_batch_delete_range(&b, 0, 0xfffff); store_batch_free(&b);
+    store_batch_init(&b, s); r = store_batch_commit(&b, 1); store_batch_free(&b);
+    if (r != 0 || sdb_doc_(s, 0) != 5 || store_count(s) != 13) { print_cstr("  batches: an aborted or empty batch changed something\n"); ok = 0; }
+    /* the journal replays the batch (read-only load: the journal is left as it is) */
+    if (!(l = store_load_ro(a, path))) { print_cstr("  batches: reload FAILED\n"); ok = 0; }
+    else {
+        if (sdb_doc_(l, 1) != 3 || sdb_doc_(l, 2) != 4 || sdb_doc_(l, 9) != 1 || store_count(l) != 13
+            || !sdb_text_is_(l, ((i64)1 << 20) | 102, "new doc 1 chunk 2")) { print_cstr("  batches: replay FAILED\n"); ok = 0; }
+        store_destroy(l);
+    }
+    /* another batch, then its journal record cut short, then one byte of it changed: a load gets none of it */
+    store_batch_init(&b, s);
+    store_batch_delete_range(&b, 0, 0xfffff);
+    for (c = 0; c < 2; ++c) { i64 id = ((i64)5 << 20) | c; sdb_vec_(id, v); store_batch_put(&b, v, id, 0); }
+    r = store_batch_commit(&b, 1);
+    store_batch_free(&b);
+    if (r != 3 || sdb_doc_(s, 0) != 0 || sdb_doc_(s, 5) != 2 || store_count(s) != 10) { print_cstr("  batches: the second commit FAILED\n"); ok = 0; }
+    jlen = sdb_fsize_(jn);
+    if (jlen > 40 && (jb = (u8 *)malloc((size_t)jlen)) != (u8 *)0) {
+        FILE *f = fopen(jn, "rb");
+        i32 got = f && fread(jb, 1, (size_t)jlen, f) == (size_t)jlen;
+        if (f) fclose(f);
+        flips = 0;
+        for (i = 0; i < 3 && got; ++i) {                          /* cut short, one byte changed, as it was */
+            i32 dropped = i < 2;
+            if (i == 0) sdb_write_(jn, jb, jlen - 5);
+            else if (i == 1) { jb[jlen - 20] ^= 0x5a; sdb_write_(jn, jb, jlen); jb[jlen - 20] ^= 0x5a; }
+            else sdb_write_(jn, jb, jlen);
+            if (!(l = store_load_ro(a, path))) { ok = 0; continue; }
+            if (dropped ? (sdb_doc_(l, 0) == 5 && sdb_doc_(l, 5) == 0 && store_count(l) == 13)
+                        : (sdb_doc_(l, 0) == 0 && sdb_doc_(l, 5) == 2 && store_count(l) == 10)) ++flips;
+            store_destroy(l);
+        }
+        if (!got || flips != 3) { print_cstr("  batches: a torn or damaged batch in the journal FAILED\n"); ok = 0; }
+        free(jb);
+    } else { print_cstr("  batches: no journal to damage\n"); ok = 0; }
+    store_destroy(s);
+
+    /* a reader never sees half a batch: document 7 swaps between 5 chunks and 3, 300 times */
+    g = store_new(a, SDB_DIM);
+    for (c = 0; c < 5; ++c) { i64 id = ((i64)7 << 20) | c; sdb_vec_(id, v); store_put(g, v, id, 0); }
+    memset(&rd, 0, sizeof(rd)); rd.s = g;
+    pthread_create(&th[0], (const pthread_attr_t *)0, sdb_reader_, &rd);
+    for (i = 0; i < 300; ++i) {
+        store_batch_init(&b, g);
+        store_batch_delete_range(&b, (i64)7 << 20, ((i64)7 << 20) | 0xfffff);
+        for (c = 0; c < (i % 2 ? 5 : 3); ++c) { i64 id = ((i64)7 << 20) | (i * 8 + c); sdb_vec_(id, v); store_batch_put(&b, v, id, 0); }
+        if (store_batch_commit(&b, 0) < 0) ok = 0;
+        store_batch_free(&b);
+    }
+    __atomic_store_n(&rd.stop, 1, __ATOMIC_RELEASE);
+    pthread_join(th[0], (void **)0);
+    print_cstr("  batches: a reader looked "); print_i64(rd.reads); print_cstr(" times while 300 batches swapped a document");
+    print_cstr(rd.bad ? ": saw half of one\n" : ", never saw half of one\n");
+    if (rd.bad || rd.reads == 0) ok = 0;
+    store_destroy(g);
+
+    /* durable commits from 4 threads at once share fsyncs; every row is on the disk after */
+    g = store_new(a, SDB_DIM);
+    if (store_save(g, path2) != 0) { ok = 0; print_cstr("  batches: save FAILED\n"); }
+    for (i = 0; i < 4; ++i) { cm[i].s = g; cm[i].t = i; cm[i].bad = 0; pthread_create(&th[i], (const pthread_attr_t *)0, sdb_committer_, &cm[i]); }
+    for (i = 0; i < 4; ++i) { pthread_join(th[i], (void **)0); if (cm[i].bad) ok = 0; }
+    if (store_count(g) != 400) { print_cstr("  batches: durable commits from 4 threads FAILED\n"); ok = 0; }
+    if (!(l = store_load_ro(a, path2)) || store_count(l) != 400) { print_cstr("  batches: the synced batches are not all on the disk\n"); ok = 0; }
+    if (l) store_destroy(l);
+    print_cstr("  batches: 4 threads x 50 durable commits -> "); print_i64(store_count(g)); print_cstr(" rows, on the disk too\n");
+    store_destroy(g);
+    remove(path); remove(jn); remove(path2); remove(jn2);
+    free(jn); free(jn2);
+    return ok;
+}
+
 int main(void)
 {
     static Arena arena;
@@ -876,6 +1131,8 @@ int main(void)
     }
     if (!sd_texts_(a)) ok = 0;
     if (!sd_aggression_(a)) ok = 0;
+    if (!sd_tiers_(a)) ok = 0;
+    if (!sd_batches_(a)) ok = 0;
     print_cstr(ok ? "  OK\n" : "  FAIL\n");
     print_flush();
     arena_free(a);

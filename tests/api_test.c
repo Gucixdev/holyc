@@ -6,6 +6,7 @@
 #include <string.h>
 #include <math.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #define DIM 32
 #define N 3000
@@ -210,6 +211,95 @@ int main(void)
     check(vi_save(db, (const char *)0) == -1 && vi_sync(db) == -1, "vi_save / vi_sync without a file: -1");
     vi_close(db);
     check(vi_open((const char *)0, 0, 0) == (vi_db *)0, "vi_open of nothing with dim 0: NULL");
+
+    /* write batches: a document replaced as one change, a batch refused whole, one aborted, the journal replays it */
+    sprintf(path, "/tmp/vecindex_api_b_%d.vxi", (int)getpid());
+    remove(path);
+    db = vi_open(path, DIM, 0);
+    check(db != (vi_db *)0, "vi_open for batches");
+    for (i = 0; i < 6; ++i) { vec_(i, v); vi_add_text(db, ((vi_i64)1 << 20) | i, v, "old chunk", -1); }
+    if (db) {
+        vi_batch *b = vi_batch_begin(db);
+        vi_i64 bids[16];
+        char buf[32];
+        union { float f; unsigned u; } nan_;
+        int r;
+        const vi_i64 lo = (vi_i64)1 << 20, hi = ((vi_i64)1 << 20) | 0xfffff;
+        check(b != (vi_batch *)0, "vi_batch_begin");
+        vi_batch_delete_range(b, lo, hi);
+        for (i = 0; i < 2; ++i) { vec_(100 + i, v); vi_batch_add_text(b, lo | (10 + i), v, "new chunk", -1); }
+        check(vi_range(db, lo, hi, bids, 16) == 6, "vi_batch: nothing shows before the commit");
+        r = vi_batch_commit(b, 1);
+        check(r == 3 && vi_range(db, lo, hi, bids, 16) == 2 && bids[0] == (lo | 10) && bids[1] == (lo | 11),
+              "vi_batch_commit: the document's 6 chunks out, 2 new ones in, at once (3 changes)");
+        b = vi_batch_begin(db);
+        vi_batch_delete(b, lo | 10);
+        nan_.u = 0x7fc00000u;
+        vec_(7, v); v[2] = nan_.f;
+        check(vi_batch_add(b, 99, v) == -1, "vi_batch_add of a vector with a NaN: -1");
+        check(vi_batch_commit(b, 0) == -1 && vi_range(db, lo, hi, bids, 16) == 2, "vi_batch_commit of that batch: -1, its delete not done either");
+        b = vi_batch_begin(db);
+        vi_batch_delete_range(b, lo, hi);
+        vi_batch_abort(b);
+        check(vi_range(db, lo, hi, bids, 16) == 2, "vi_batch_abort: nothing changed");
+        vi_close(db);
+        db = vi_open(path, 0, 0);
+        check(db != (vi_db *)0 && vi_range(db, lo, hi, bids, 16) == 2 && vi_get_text(db, lo | 11, buf, (int)sizeof(buf)) == 9
+              && memcmp(buf, "new chunk", 9) == 0 && vi_count(db) == 2, "the batch comes back from the journal, whole");
+        if (db) vi_close(db);
+    }
+    remove(path);
+    sprintf(line, "%s.j", path); remove(line);
+
+    /* memory tiers: the two sizes, and tier changes that searches do not notice */
+    db = vi_open((const char *)0, DIM, 0);
+    for (i = 0; i < 2000; ++i) { vec_(i, v); vi_add(db, 1000 + i, v); }
+    vi_build(db);
+    {
+        vi_i64 hot = 0, cold = 0;
+        vi_memory(db, &hot, &cold);
+        check(hot > 0 && hot < cold && cold == (vi_i64)2000 * (DIM * 4 + 16), "vi_memory: hot (the codes) and cold (the rows, ids and tags)");
+        check(vi_set_memory(db, 1) >= -1 && vi_set_memory(db, 2) >= -1 && vi_set_memory(db, 0) == 0 && self_found_(db, 0, 2000, 97, 0) >= 20,
+              "vi_set_memory 1, 2, 0: searches still find their rows");
+    }
+    vi_close(db);
+
+    /* tenants without a server: a directory, a store per name */
+    {
+        char dpath[64], fn[160], longname[80];
+        vi_dir *dir;
+        vi_db *t1, *t2;
+        sprintf(dpath, "/tmp/vecindex_api_dir_%d", (int)getpid());
+        mkdir(dpath, 0700);
+        memset(longname, 'a', 65); longname[65] = 0;
+        check(vi_dir_open("/nonexistent/vecindex-dir", DIM, 0) == (vi_dir *)0, "vi_dir_open of no directory: NULL");
+        dir = vi_dir_open(dpath, DIM, 0);
+        check(dir != (vi_dir *)0, "vi_dir_open of a directory");
+        if (dir) {
+            t1 = vi_dir_get(dir, "acme");
+            t2 = vi_dir_get(dir, "beta-2");
+            check(t1 != (vi_db *)0 && t2 != (vi_db *)0 && t1 != t2, "vi_dir_get: a store per tenant");
+            if (t1 && t2) {
+                vec_(5, v); vi_add(t1, 1, v);
+                check(vi_count(t1) == 1 && vi_count(t2) == 0, "tenants are apart: a row in one is not in the other");
+            }
+            check(vi_dir_get(dir, "acme") == t1, "vi_dir_get again: the same handle");
+            check(!vi_dir_get(dir, "../x") && !vi_dir_get(dir, "") && !vi_dir_get(dir, "a b") && !vi_dir_get(dir, longname),
+                  "vi_dir_get of a bad name (../x, empty, a space, 65 letters): NULL");
+            sprintf(fn, "%s/acme.vxi", dpath);
+            check(access(fn, F_OK) == 0, "a tenant's store is DIR/NAME.vxi");
+            vi_dir_close(dir);
+            dir = vi_dir_open(dpath, DIM, 0);
+            t1 = dir ? vi_dir_get(dir, "acme") : (vi_db *)0;
+            check(t1 != (vi_db *)0 && vi_count(t1) == 1, "a tenant's rows come back after vi_dir_close and vi_dir_open");
+            vi_dir_close(dir);
+        }
+        sprintf(fn, "%s/acme.vxi", dpath); remove(fn);
+        sprintf(fn, "%s/acme.vxi.j", dpath); remove(fn);
+        sprintf(fn, "%s/beta-2.vxi", dpath); remove(fn);
+        sprintf(fn, "%s/beta-2.vxi.j", dpath); remove(fn);
+        rmdir(dpath);
+    }
 
     free(qs); free(bi); free(bs);
     printf("C API: %s\n", fails ? "FAILED" : "OK");
