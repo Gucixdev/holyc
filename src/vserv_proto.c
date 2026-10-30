@@ -167,12 +167,12 @@ static const char *vs_word_(const char *p) { while (*p == ' ' || *p == '\t') ++p
 static const char *vs_wint_(const char *p, i64 *v)
 {
     char *e;
-    long x;
+    i64 x;
     p = vs_word_(p);
     errno = 0;
-    x = strtol(p, &e, 10);
+    x = (i64)strtoll(p, &e, 10);                                 /* 64-bit ids on 32-bit CPUs too (long is 32 bits there) */
     if (e == p || errno || (*e && *e != ' ' && *e != '\t')) return (const char *)0;
-    *v = (i64)x;
+    *v = x;
     return e;
 }
 
@@ -344,6 +344,9 @@ static i32 vs_json_vec_(VsWorker *w, const char *p, i32 n)
     return d == vs_dim ? 0 : -1;
 }
 
+static void vs_http_reply_(VsWorker *w, VsConn *c, const char *status, const char *body, i32 blen, i32 keep);
+#define VS_HTTP_LIT(w, c, status, lit, keep) vs_http_reply_(w, c, status, lit, (i32)sizeof(lit) - 1, keep)   /* a literal body */
+
 static void vs_http_reply_(VsWorker *w, VsConn *c, const char *status, const char *body, i32 blen, i32 keep)
 {
     char head[256], *p = head;
@@ -370,14 +373,14 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
     i32 he = vs_head_end_(b, c->len), i, mlen, tn, clen = 0, keep = 1, raw = 0, got, k;
     char *o;
     if (he < 0) {
-        if (c->len >= vs_reqcap) { vs_http_reply_(w, c, "431 Request Header Fields Too Large", "{\"error\":\"headers too large\"}", 29, 0); return -1; }
+        if (c->len >= vs_reqcap) { VS_HTTP_LIT(w, c, "431 Request Header Fields Too Large", "{\"error\":\"headers too large\"}", 0); return -1; }
         return 0;
     }
     /* request line: METHOD SP TARGET SP HTTP/1.x */
     for (mlen = 0; mlen < he && b[mlen] != ' '; ++mlen) {}
     t = b + mlen + 1;
     for (tn = 0; mlen + 1 + tn < he && t[tn] != ' ' && t[tn] != '\r'; ++tn) {}
-    if (mlen >= he || tn == 0) { vs_http_reply_(w, c, "400 Bad Request", "{\"error\":\"bad request line\"}", 28, 0); return -1; }
+    if (mlen >= he || tn == 0) { VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"bad request line\"}", 0); return -1; }
     if (mlen + 1 + tn + 9 <= he && !memcmp(t + tn, " HTTP/1.0", 9)) keep = 0;
     /* headers */
     for (line = b; ; ) {
@@ -401,7 +404,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         }
     }
     if (clen > vs_reqcap - he) {
-        vs_http_reply_(w, c, "413 Content Too Large", "{\"error\":\"body too large\"}", 26, 0);
+        VS_HTTP_LIT(w, c, "413 Content Too Large", "{\"error\":\"body too large\"}", 0);
         vs_log_(c, 1, "http body of %d bytes refused", clen);
         return -1;
     }
@@ -412,7 +415,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
 #define VS_IS(m, path) (mlen == (i32)strlen(m) && !memcmp(b, m, (size_t)mlen) && tn >= (i32)strlen(path) \
                         && !memcmp(t, path, strlen(path)) && (tn == (i32)strlen(path) || t[strlen(path)] == '?'))
     if (VS_IS("GET", "/health")) {
-        vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
+        VS_HTTP_LIT(w, c, "200 OK", "{\"ok\":true}", keep);
     } else if (VS_IS("GET", "/stats")) {
         i64 v[4], us; i32 run, last; char *p = o;
         vs_stats_(v);
@@ -427,7 +430,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         char *p = o;
         double t0 = vs_now_();
         if (raw ? clen != vs_dim * 4 : vs_json_vec_(w, body, clen) != 0) {
-            vs_http_reply_(w, c, "400 Bad Request", "{\"error\":\"expected a vector of the store's dimension\"}", 54, keep);
+            VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"expected a vector of the store's dimension\"}", keep);
         } else {
             if (raw) vs_getf_(w->vec, (const u8 *)body, vs_dim);
             k = (i32)vs_qparam_(t, tn, "k", 10);
@@ -445,16 +448,16 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
     } else if (VS_IS("POST", "/add")) {
         i64 id = vs_qparam_(t, tn, "id", -1);
         if (id < 0 || (raw ? clen != vs_dim * 4 : vs_json_vec_(w, body, clen) != 0))
-            vs_http_reply_(w, c, "400 Bad Request", "{\"error\":\"need ?id=N and a vector of the store's dimension\"}", 60, keep);
+            VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"need ?id=N and a vector of the store's dimension\"}", keep);
         else {
             if (raw) vs_getf_(w->vec, (const u8 *)body, vs_dim);
-            if (vs_put_(c, w->vec, id) == 0) vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
-            else vs_http_reply_(w, c, "400 Bad Request", "{\"error\":\"vector has NaN or Inf\"}", 33, keep);
+            if (vs_put_(c, w->vec, id) == 0) VS_HTTP_LIT(w, c, "200 OK", "{\"ok\":true}", keep);
+            else VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"vector has NaN or Inf\"}", keep);
         }
     } else if (VS_IS("GET", "/get")) {
         char *p = o;
         if (store_get_vec(vs_store, vs_qparam_(t, tn, "id", -1), w->vec) != 0)
-            vs_http_reply_(w, c, "404 Not Found", "{\"error\":\"no such id\"}", 22, keep);
+            VS_HTTP_LIT(w, c, "404 Not Found", "{\"error\":\"no such id\"}", keep);
         else {
             p = vs_str_(p, "{\"vector\":[");
             for (i = 0; i < vs_dim; ++i) { if (i) *p++ = ','; p = vs_f32_(p, w->vec[i]); }
@@ -470,17 +473,17 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
     } else if (VS_IS("POST", "/build")) {
         vs_build_(c);
-        vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
+        VS_HTTP_LIT(w, c, "200 OK", "{\"ok\":true}", keep);
     } else if (VS_IS("POST", "/save")) {
-        if (vs_save_(c) == 0) vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
-        else vs_http_reply_(w, c, "500 Internal Server Error", "{\"error\":\"save failed\"}", 23, keep);
+        if (vs_save_(c) == 0) VS_HTTP_LIT(w, c, "200 OK", "{\"ok\":true}", keep);
+        else VS_HTTP_LIT(w, c, "500 Internal Server Error", "{\"error\":\"save failed\"}", keep);
     } else if (VS_IS("POST", "/snapshot")) {
         i32 r = vs_snapshot_(c);
-        if (r == 0) vs_http_reply_(w, c, "202 Accepted", "{\"ok\":true,\"snapshot\":\"started\"}", 33, keep);
-        else if (r == 1) vs_http_reply_(w, c, "409 Conflict", "{\"error\":\"busy\"}", 16, keep);
-        else vs_http_reply_(w, c, "500 Internal Server Error", "{\"error\":\"snapshot failed\"}", 27, keep);
+        if (r == 0) VS_HTTP_LIT(w, c, "202 Accepted", "{\"ok\":true,\"snapshot\":\"started\"}", keep);
+        else if (r == 1) VS_HTTP_LIT(w, c, "409 Conflict", "{\"error\":\"busy\"}", keep);
+        else VS_HTTP_LIT(w, c, "500 Internal Server Error", "{\"error\":\"snapshot failed\"}", keep);
     } else {
-        vs_http_reply_(w, c, "404 Not Found", "{\"error\":\"not found\"}", 21, keep);
+        VS_HTTP_LIT(w, c, "404 Not Found", "{\"error\":\"not found\"}", keep);
     }
 #undef VS_IS
     return he + clen;
