@@ -3,7 +3,7 @@
 
 usage: bench.py DATA_DIR METHOD [--threads T] [--lat N]
 methods: vecindex, vecindex-i8, vecindex-2bit, vecindex-2bit-i8, turbovec4, turbovec2, faiss-hnsw, faiss-ivfflat,
-         faiss-ivfpqfs, qdrant, vecgrid
+         faiss-ivfpqfs, qdrant, vecgrid, leann
 
 Per method: build (timed, T threads), index size, save and load (timed, warm page cache), then for every
 search setting, on the LOADED index: recall@10 over all queries, single-thread QPS (one query per call,
@@ -337,6 +337,76 @@ class VecGrid:
             self.grid.stop()
 
 
+class Leann:
+    """LEANN (leann-core and leann-backend-hnsw on PyPI) in its stored-vector mode: is_recompute=False, its FAISS-derived
+    HNSW graph (M=32, efConstruction=200, cosine) over float32 vectors, built with build_index_from_arrays. LEANN's
+    headline mode (is_recompute=True) keeps only a pruned graph and re-embeds the texts of the visited nodes with the
+    embedding model during every search; GloVe has no texts and no model, so that mode is not measured here. The size
+    counts the .index file and the id map, not the placeholder passages LEANN writes for rows without text. Needs its
+    own venv (it bundles a FAISS fork): pip install --no-deps leann-core leann-backend-hnsw, then numpy pyzmq msgpack
+    tqdm psutil requests python-dotenv."""
+    pins_threads = True
+
+    def __init__(self, dim, threads):
+        import importlib.metadata
+        import logging
+        import leann_backend_hnsw  # noqa: F401  (registers the backend)
+        for name in ("leann", "leann_backend_hnsw"):                # it logs every search at INFO to stderr
+            logging.getLogger(name).setLevel(logging.WARNING)
+        from leann.api import LeannBuilder, LeannSearcher
+        from leann_backend_hnsw import faiss
+        self.Builder, self.Searcher, self.faiss = LeannBuilder, LeannSearcher, faiss
+        self.dim, self.threads, self.ef = dim, threads, 64
+        self.version = "leann " + importlib.metadata.version("leann-core")
+        self.dir = tempfile.mkdtemp(prefix="leann-", dir=os.environ.get("BENCH_TMP"))
+
+    def build(self, X):
+        self.faiss.omp_set_num_threads(self.threads)
+        b = self.Builder(backend_name="hnsw", dimensions=self.dim, is_recompute=False, is_compact=False,
+                         M=32, efConstruction=200, distance_metric="cosine")
+        b.build_index_from_arrays(os.path.join(self.dir, "x.leann"), list(range(len(X))), X)
+
+    def _files(self, base):
+        d, name = os.path.dirname(base), os.path.basename(base)
+        return [os.path.join(d, f) for f in os.listdir(d) if f.startswith(name.split(".")[0] + ".")]
+
+    def size(self):
+        files = self._files(self.path)
+        return sum(os.path.getsize(f) for f in files if f.endswith((".index", ".ids.txt")))
+
+    def save(self, path):
+        os.makedirs(path)
+        for f in self._files(os.path.join(self.dir, "x.leann")):
+            shutil.move(f, path)
+        self.path = os.path.join(path, "x.leann")
+
+    def load(self, path):
+        self.s = self.Searcher(self.path, enable_warmup=False, recompute_embeddings=False)
+
+    def sweep(self):
+        return [{"ef": e} for e in (16, 32, 64, 96, 128, 192, 256, 384, 512, 768, 1024)]
+
+    def set(self, prm):
+        self.ef = prm["ef"]
+
+    def single_thread(self, on):
+        self.faiss.omp_set_num_threads(1 if on else self.threads)
+
+    def _ids(self, Q, k):
+        r = self.s.backend_impl.search(np.ascontiguousarray(Q, np.float32), k, complexity=max(self.ef, k),
+                                       recompute_embeddings=False)
+        return np.array([[int(x) for x in row] for row in r["labels"]], np.int64)
+
+    def search_one(self, q, k):
+        return self._ids(q[None, :], k)[0]
+
+    def search_batch(self, Q, k, threads):
+        return self._ids(Q, k)
+
+    def cleanup(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
 def make(method, dim, threads):
     if method == "vecindex":
         return VecIndex(dim, threads)
@@ -363,6 +433,8 @@ def make(method, dim, threads):
         return Qdrant(dim, threads)
     if method == "vecgrid":
         return VecGrid(dim, threads)
+    if method == "leann":
+        return Leann(dim, threads)
     raise SystemExit(f"unknown method {method}")
 
 
