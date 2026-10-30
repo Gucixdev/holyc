@@ -236,6 +236,7 @@ typedef struct {
     SCol     vsc;           /* int8 rows only: the f32 scale of each row */
     i32      vbytes;        /* 4: f32 rows; 1: int8 rows (each row times its scale) */
     i32      codebits;      /* 4, 2 or 1: the scan index's code width (store_set_codes) */
+    i32      cascade;       /* 4-bit index with 1-bit codes beside: scan those, re-score a shortlist (store_set_cascade) */
     f32     *addbuf;        /* [dim] the row being added, normalised (under the write lock) */
     u64     *dead;          /* tombstones, one bit a row */
     i64      dead_words;
@@ -550,20 +551,25 @@ static i32 store_pin_(const RagStore *s, const void *p, size_t len, i32 on)
     return -1;
 }
 
-/* (un)pin what every search scans of an index that lives in the file mapping (anonymous memory is in RAM anyway) */
-static i32 store_tq_pin_(const RagStore *s, const Tq *t, i32 on)
+/* (un)pin the parts of an index that live in the file mapping (anonymous memory is in RAM anyway): hot, what every
+ * search scans - the codes, or the 1-bit codes of a cascade - with the slot table and centroids; warm, a cascade's
+ * 4-bit codes, read only for its shortlist */
+static i32 store_tq_pin_(const RagStore *s, const Tq *t, i32 hot, i32 warm)
 {
     i32 rc = 0;
     if (!t || !t->mapped) return 0;
-    rc |= store_pin_(s, t->codes, (size_t)t->nblk * (size_t)t->vd * 16, on);
-    if (t->slot_row && !t->slot_own) rc |= store_pin_(s, t->slot_row, (size_t)t->nblk * 32 * 4, on);
+    if (t->codes1) {
+        if (!t->c1_own) rc |= store_pin_(s, t->codes1, (size_t)t->nblk * (size_t)t->vd1 * 16, hot);
+        rc |= store_pin_(s, t->codes, (size_t)t->nblk * (size_t)t->vd * 16, warm);
+    } else rc |= store_pin_(s, t->codes, (size_t)t->nblk * (size_t)t->vd * 16, hot);
+    if (t->slot_row && !t->slot_own) rc |= store_pin_(s, t->slot_row, (size_t)t->nblk * 32 * 4, hot);
     if (t->nc > 1) {
-        rc |= store_pin_(s, t->cent, (size_t)t->nc * (size_t)t->dim * 4, on);
-        rc |= store_pin_(s, t->cstart, ((size_t)t->nc + 1) * 4, on);
+        rc |= store_pin_(s, t->cent, (size_t)t->nc * (size_t)t->dim * 4, hot);
+        rc |= store_pin_(s, t->cstart, ((size_t)t->nc + 1) * 4, hot);
     }
-    rc |= store_pin_(s, t->s1, (size_t)t->dpad * 4, on);
-    rc |= store_pin_(s, t->s2, (size_t)t->dpad * 4, on);
-    rc |= store_pin_(s, t->perm, (size_t)t->dpad * 4, on);
+    rc |= store_pin_(s, t->s1, (size_t)t->dpad * 4, hot);
+    rc |= store_pin_(s, t->s2, (size_t)t->dpad * 4, hot);
+    rc |= store_pin_(s, t->perm, (size_t)t->dpad * 4, hot);
     return rc ? -1 : 0;
 }
 
@@ -885,8 +891,9 @@ void store_tiers(RagStore *s, i64 *hot, i64 *cold)
     i32 i;
     pthread_rwlock_rdlock(&s->lock);
     t = s->tq;
-    if (t) {
-        h += ((i64)t->nblk + t->xcap) * t->vd * 16 + (i64)t->xcap * 128;
+    if (t) {                                       /* a cascade scans its 1-bit codes; its 4-bit ones are read like rows */
+        h += ((i64)t->nblk + t->xcap) * (t->codes1 ? t->vd1 : t->vd) * 16 + (i64)t->xcap * 128;
+        if (t->codes1) c += ((i64)t->nblk + t->xcap) * t->vd * 16;
         if (t->slot_row) h += (i64)t->nblk * 128;
         if (t->nc > 1) h += (i64)t->nc * t->dim * 8 + ((i64)t->nc + 1) * 4;  /* the centroids, and transposed */
     }
@@ -917,7 +924,7 @@ i32 store_set_memory(RagStore *s, i32 tier)
     s->mem_tier = tier;
     pthread_rwlock_unlock(&s->lock);
     pthread_rwlock_rdlock(&s->lock);                             /* reading gigabytes in may take a while: */
-    rc = store_tq_pin_(s, s->tq, tier >= 1) | store_rows_pin_(s, tier >= 2);   /* searches go on meanwhile */
+    rc = store_tq_pin_(s, s->tq, tier >= 1, tier >= 2) | store_rows_pin_(s, tier >= 2);   /* searches go on meanwhile */
     pthread_rwlock_unlock(&s->lock);
     return rc ? -1 : 0;
 }
@@ -1018,7 +1025,30 @@ static Tq *store_tq_build_(RagStore *s, i32 n)
     store_advise_(s, MADV_SEQUENTIAL);                           /* the build reads every row in order, twice */
     t = tq_build(&col, n, s->dim, s->goal.seed, store_nclusters_(n), store_ncpu_(s), s->codebits);
     store_advise_(s, MADV_RANDOM);                               /* searching re-scores rows at random */
+    if (t && s->cascade && tq_cascade_on(t, store_ncpu_(s)) != 0) s->cascade = 0;   /* no memory for it: plain 4-bit */
     return t;
+}
+
+/* The cascade (4-bit codes only): 1-bit codes - the signs, derived from the 4-bit codes, a quarter of their bytes -
+ * beside them in the index. A search scans the 1-bit codes, re-scores the best 8 x R of them with their 4-bit codes
+ * and the best R of those exactly from the rows, so the part every query reads shrinks four times while the rows the
+ * exact re-score reads stay as few as with 4-bit codes alone. On from now: an index that exists gets its 1-bit codes
+ * at once, later builds and rebuilds make them too; a store saved with them loads with the cascade on. 0, or -1 (not
+ * 4-bit codes, or no memory). */
+i32 store_set_cascade(RagStore *s, i32 on)
+{
+    i32 r = 0;
+    pthread_mutex_lock(&s->mt_mu);                               /* not in the middle of a live step */
+    pthread_rwlock_wrlock(&s->lock);
+    if (on && s->codebits != 4) r = -1;
+    else {
+        s->cascade = on != 0;
+        if (s->tq && on && tq_cascade_on(s->tq, store_ncpu_(s)) != 0) { s->cascade = 0; r = -1; }
+        if (s->tq && !on) tq_cascade_off(s->tq);
+    }
+    pthread_rwlock_unlock(&s->lock);
+    pthread_mutex_unlock(&s->mt_mu);
+    return r;
 }
 
 /* Code width of the scan index from the next build on: 4 (default), 2 or 1. 2-bit codes take d/4 bytes a row in RAM
@@ -1359,7 +1389,7 @@ void store_build(RagStore *s)
     pthread_mutex_lock(&s->rb_mu);                               /* not in the middle of a live rebuild */
     pthread_mutex_lock(&s->mt_mu);
     pthread_rwlock_wrlock(&s->lock);
-    if (s->mem_tier >= 1) store_tq_pin_(s, s->tq, 0);            /* its pages in the file go back to the kernel */
+    if (s->mem_tier >= 1) store_tq_pin_(s, s->tq, 0, 0);         /* its pages in the file go back to the kernel */
     tq_free(s->tq); s->tq = (Tq *)0;                             /* rebuilt below: no use remapping it */
     w = store_compact_(s);
     arena_reset(&s->idx_arena);

@@ -20,6 +20,7 @@ void *vi_new2(int dim, int codebits, int vecbytes)
     return s;
 }
 void vi_set_rerank(void *s, int r) { store_set_rerank((RagStore *)s, r); }
+int vi_set_cascade(void *s, int on) { return store_set_cascade((RagStore *)s, on); }
 /* self-tuning: the build (and vi_tune) pick the fewest probes that keep recall@10 at r; vi_tune returns what it measured */
 void vi_set_target_recall(void *s, float r) { store_set_target_recall((RagStore *)s, r); }
 float vi_tune(void *s) { return store_tune((RagStore *)s); }

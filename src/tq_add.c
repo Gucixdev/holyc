@@ -87,10 +87,16 @@ static i32 tq_xblock_(Tq *t, i32 c)
         t->xslot = xs;
         if (!(xx = (i32 *)realloc(t->xnext, (size_t)cap * sizeof(i32)))) return -1;
         t->xnext = xx;
+        if (t->codes1) {                                         /* the cascade's 1-bit codes grow beside them */
+            u8 *x1 = (u8 *)realloc(t->xcodes1, (size_t)cap * (size_t)t->vd1 * 16);
+            if (!x1) return -1;
+            t->xcodes1 = x1;
+        }
         t->xcap = cap;
     }
     b = t->xn++;
     memset(t->xcodes + (size_t)b * (size_t)t->vd * 16, 0, (size_t)t->vd * 16);
+    if (t->codes1) memset(t->xcodes1 + (size_t)b * (size_t)t->vd1 * 16, 0, (size_t)t->vd1 * 16);
     for (k = 0; k < 32; ++k) t->xslot[(size_t)b * 32 + (size_t)k] = -1;
     t->xnext[b] = -1;
     if (t->xtail[c] >= 0) t->xnext[t->xtail[c]] = b; else t->xhead[c] = b;
@@ -104,7 +110,9 @@ static i32 tq_xblock_(Tq *t, i32 c)
 i32 tq_add_put(Tq *t, const TqAdd *a, i64 r0)
 {
     i32 i, d, vd = t->vd;
+    u8 *c1 = (u8 *)0;
     if (r0 != (i64)t->n) return -1;
+    if (t->codes1 && !(c1 = (u8 *)malloc((size_t)t->vd1 + 16))) return -1;   /* a row's 1-bit columns, for the cascade */
     for (i = 0; i < a->m; ++i) {
         i32 row = (i32)(r0 + i), c = t->nc > 1 ? a->cl[i] : 0, b = -1, k = 32;
         const u8 *cd = a->cd + (size_t)i * (size_t)vd;
@@ -122,12 +130,13 @@ i32 tq_add_put(Tq *t, const TqAdd *a, i64 r0)
             }
         }
         if (b < 0 || k < 0 || k >= 32) {                         /* full, or no block yet: open an extra one */
-            if (tq_xblock_(t, c) != 0) return -1;
+            if (tq_xblock_(t, c) != 0) { free(c1); return -1; }
             b = t->nblk + t->xtail[c]; k = 0;
         }
         blk = (u8 *)tq_bptr_(t, b);
         if (k < 16) for (d = 0; d < vd; ++d) { u8 *q = blk + (size_t)d * 16 + (size_t)k; *q = (u8)((*q & 0xf0) | cd[d]); }
         else for (d = 0; d < vd; ++d) { u8 *q = blk + (size_t)d * 16 + (size_t)(k - 16); *q = (u8)((*q & 0x0f) | (cd[d] << 4)); }
+        if (c1) { tq_c1_row_(cd, t->dpad, t->vd1, c1); tq_put_lane_(tq_bptr1_(t, b), t->vd1, k, c1); }
         if (b >= t->nblk) t->xslot[(size_t)(b - t->nblk) * 32 + (size_t)k] = row;
         else if (t->slot_row) t->slot_row[(size_t)b * 32 + (size_t)k] = row;
         t->n = row + 1;
@@ -135,6 +144,7 @@ i32 tq_add_put(Tq *t, const TqAdd *a, i64 r0)
         ++t->nadd;
         if (t->csize && t->nc > 1) { t->csq += 2.0 * t->csize[c] + 1.0; ++t->csize[c]; t->csum += 1.0; }
     }
+    free(c1);
     return 0;
 }
 

@@ -1,6 +1,16 @@
 /* store_search.c - search: one query, a filtered one, a batch.
  * Part of store.c, which includes it at this point; not compiled on its own. */
 
+#define STORE_CAS_SHORT 8   /* the cascade's shortlist: this many times the rows the exact re-score reads */
+
+/* the scan's R best rows: through the cascade when the index has one (1-bit codes first, a shortlist of
+ * STORE_CAS_SHORT x R re-scored with the 4-bit codes) */
+static i32 store_scan_(const RagStore *s, const f32 *qn, i32 R, i32 *rows, const TqCol *mcol, i64 all, i64 any, i32 filtered, i32 nth, i32 probe)
+{
+    if (s->tq->codes1) return tq_search_cascade(s->tq, qn, STORE_CAS_SHORT * R, R, rows, s->dead, mcol, all, any, filtered, nth, probe);
+    return tq_search(s->tq, qn, R, rows, s->dead, mcol, all, any, filtered, nth, probe);
+}
+
 static i32 store_search_impl_(RagStore *s, const f32 *query, i32 k,
                               i64 *out_doc_ids, f32 *out_scores,
                               i64 all_bits, i64 any_bits, int filtered)
@@ -28,12 +38,12 @@ static i32 store_search_impl_(RagStore *s, const f32 *query, i32 k,
         i32 *rows = (i32 *)malloc((size_t)R * sizeof(i32));
         if (s->tq_threads > 0) nth = s->tq_threads;
         else if (s->tq->n >= 150000) { i32 c = store_ncpu_(s); nth = c > 4 ? 4 : c; }   /* the scan is memory-bound: 4 threads already saturate the bus */
-        m = tq_search(s->tq, qn, R, rows, s->dead, &mcol, all_bits, any_bits, filtered, nth, s->tq_probe);
+        m = store_scan_(s, qn, R, rows, &mcol, all_bits, any_bits, filtered, nth, s->tq_probe);
         store_rescore_(s, qn, rows, m, k, out_doc_ids, out_scores, &have);
         /* a selective filter can leave the probed clusters short of k matches: then scan every cluster's codes
          * (RAM, 4 bits a row) for matches, never every f32 row */
         if (filtered && have < k && s->tq->nc > 1) {
-            i32 j, z, n2 = tq_search(s->tq, qn, R, rows, s->dead, &mcol, all_bits, any_bits, filtered, nth, s->tq->nc);
+            i32 j, z, n2 = store_scan_(s, qn, R, rows, &mcol, all_bits, any_bits, filtered, nth, s->tq->nc);
             for (j = z = 0; j < n2; ++j) {
                 i32 x, dup = 0;
                 for (x = 0; x < have; ++x) if (out_doc_ids[x] == rows[j]) { dup = 1; break; }
@@ -149,12 +159,13 @@ void store_search_batch(RagStore *s, const f32 *Q, i32 nq, i32 k, i64 *out_ids, 
     for (i = 0; i < nq; ++i) store_normalise_(qn + (size_t)i * dim, dim);
     pthread_rwlock_rdlock(&s->lock);
     if (s->tune_target > 0.0f) for (i = 0; i < nq; i += 1 + nq / STORE_QLOG) store_qlog_(s, qn + (size_t)i * dim);
-    R = s->tq_rerank > 0 ? s->tq_rerank : (k * 20 > 256 ? k * 20 : 256);
+    R = s->tq_rerank > 0 ? s->tq_rerank : (k * 20 > 256 ? k * 20 : 256) * (s->tq->bits == 1 ? 4 : 1);   /* as one query */
     for (off = 0; off < nq; off += 1024) {                       /* batches of 1024 bound the per-query candidates */
         i32 m = nq - off < 1024 ? nq - off : 1024;
         i32 *rows = (i32 *)malloc((size_t)m * (size_t)R * sizeof(i32)), *cnt = (i32 *)malloc((size_t)m * sizeof(i32));
         StoreBatch j;
-        tq_search_many(s->tq, qn + (size_t)off * dim, m, R, rows, cnt, s->dead, nthreads, s->tq_probe);
+        if (s->tq->codes1) tq_search_many_cascade(s->tq, qn + (size_t)off * dim, m, STORE_CAS_SHORT * R, R, rows, cnt, s->dead, nthreads, s->tq_probe);
+        else tq_search_many(s->tq, qn + (size_t)off * dim, m, R, rows, cnt, s->dead, nthreads, s->tq_probe);
         j.s = s; j.qn = qn + (size_t)off * dim; j.k = k; j.R = R; j.rows = rows; j.cnt = cnt;
         j.ids = out_ids + (size_t)off * k; j.sc = out_scores + (size_t)off * k;
         tq_par2_(store_batch_fin_, &j, m, nthreads);

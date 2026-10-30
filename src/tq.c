@@ -84,6 +84,12 @@ typedef struct {
     i32   bits;             /* 4: one 4-bit code a coordinate; 2: one 4-bit code a pair of coordinates (2 bits each); 1: one
                              * 4-bit code four coordinates (their signs) */
     i32   vd;               /* code columns a row: dpad (4-bit) or dpad/2 rounded up to even (2-bit) */
+    /* the cascade (tq_cascade_on, 4-bit indexes): the 4-bit codes' top bits - the signs of the coordinates - as 1-bit
+     * codes in the same slots, scanned first; the 4-bit codes then re-score only the shortlist (tq_search_cascade) */
+    u8   *codes1;           /* nblk * vd1 * 16 bytes; NULL: no cascade */
+    u8   *xcodes1;          /* [xcap x vd1 x 16], beside xcodes */
+    i32   vd1;              /* 1-bit code columns a row */
+    i32   c1_own;           /* codes1 was malloc'd (tq_free frees it), not mapped from a file */
     /* the centroids again as int8 for picking the probes with VNNI (derived, malloc'd; NULL without VNNI):
      * c8 is [ngroups][d4][16 centroids][4 dims], c8b the bias of each centroid (128 x its byte sum, since the query
      * bytes carry +128), c8s a per-dimension scale folded into the query before it is quantised */
@@ -1016,6 +1022,8 @@ void tq_free(Tq *t)
     else if (t->slot_own) free(t->slot_row);
     free(t->ct); free(t->c8); free(t->c8b); free(t->c8s);
     free(t->xcodes); free(t->xslot); free(t->xnext); free(t->xhead); free(t->xtail); free(t->csize);
+    if (t->c1_own) free(t->codes1);
+    free(t->xcodes1);
     free(t);
 }
 
@@ -1032,6 +1040,8 @@ static i64 tq_ram_(const Tq *t)
         if (t->nc > 1) b += (i64)t->nc * t->dim * 4 + (i64)(t->nc + 1) * 4;
     } else if (t->slot_own) b += (i64)t->nblk * 32 * 4;
     if (t->xcap) b += (i64)t->xcap * ((i64)t->vd * 16 + 32 * 4 + 4) + (i64)(t->nc > 1 ? t->nc : 1) * 8;
+    if (t->c1_own) b += (i64)t->nblk * t->vd1 * 16;
+    if (t->xcodes1) b += (i64)t->xcap * t->vd1 * 16;
     return b;
 }
 
@@ -1056,6 +1066,91 @@ static i32 tq_cblocks_(const Tq *t, i32 c, i32 *out)
     for (b = b0; b < b1; ++b) { if (out) out[nb] = b; ++nb; }
     for (b = t->xhead ? t->xhead[c] : -1; b >= 0; b = t->xnext[b]) { if (out) out[nb] = t->nblk + b; ++nb; }
     return nb;
+}
+
+/* ---- the cascade: 1-bit codes derived from the 4-bit ones, in the same slots. The top bit of a 4-bit code is its
+ * coordinate's sign (TQ_B[7] = 0), exactly what a 1-bit code keeps, so nothing has to be rotated again. ---- */
+
+/* lane k's codes (vd columns) out of a block, and into one */
+static void tq_get_lane_(const u8 *blk, i32 vd, i32 k, u8 *cd)
+{
+    i32 d;
+    if (k < 16) for (d = 0; d < vd; ++d) cd[d] = (u8)(blk[(size_t)d * 16 + (size_t)k] & 15u);
+    else for (d = 0; d < vd; ++d) cd[d] = (u8)(blk[(size_t)d * 16 + (size_t)(k - 16)] >> 4);
+}
+static void tq_put_lane_(u8 *blk, i32 vd, i32 k, const u8 *cd)
+{
+    i32 d;
+    if (k < 16) for (d = 0; d < vd; ++d) { u8 *q = blk + (size_t)d * 16 + (size_t)k; *q = (u8)((*q & 0xf0) | cd[d]); }
+    else for (d = 0; d < vd; ++d) { u8 *q = blk + (size_t)d * 16 + (size_t)(k - 16); *q = (u8)((*q & 0x0f) | (cd[d] << 4)); }
+}
+
+/* a row's 1-bit columns from its 4-bit codes: bit i of column v is the top bit of coordinate 4v + i's code */
+static void tq_c1_row_(const u8 *cd4, i32 dpad, i32 vd1, u8 *cd1)
+{
+    i32 v, i;
+    for (v = 0; v < vd1; ++v) {
+        i32 c = 0;
+        for (i = 0; i < 4; ++i) if (4 * v + i < dpad && (cd4[4 * v + i] & 8u)) c |= 1 << i;
+        cd1[v] = (u8)c;
+    }
+}
+
+/* block b of the 1-bit codes: built (b < nblk) or added later */
+static u8 *tq_bptr1_(const Tq *t, i32 b)
+{
+    size_t bb = (size_t)t->vd1 * 16;
+    return b < t->nblk ? t->codes1 + (size_t)b * bb : t->xcodes1 + (size_t)(b - t->nblk) * bb;
+}
+
+typedef struct { Tq *t; i32 fail[64]; } TqC1Job;
+static void tq_c1_blocks_(void *p, i64 a, i64 b, i32 tid)
+{
+    TqC1Job *j = (TqC1Job *)p;
+    Tq *t = j->t;
+    u8 *cd4 = (u8 *)malloc((size_t)t->vd + 16), *cd1 = (u8 *)malloc((size_t)t->vd1 + 16);
+    i64 i;
+    i32 k;
+    if (!cd4 || !cd1) j->fail[tid] = 1;
+    else for (i = a; i < b; ++i) {
+        u8 *b1 = tq_bptr1_(t, (i32)i);
+        memset(b1, 0, (size_t)t->vd1 * 16);
+        for (k = 0; k < 32; ++k) {
+            tq_get_lane_(tq_bptr_(t, (i32)i), t->vd, k, cd4);
+            tq_c1_row_(cd4, t->dpad, t->vd1, cd1);
+            tq_put_lane_(b1, t->vd1, k, cd1);
+        }
+    }
+    free(cd4); free(cd1);
+}
+
+/* drops the 1-bit codes: the index scans its 4-bit codes again */
+void tq_cascade_off(Tq *t)
+{
+    if (t->c1_own) free(t->codes1);
+    free(t->xcodes1);
+    t->codes1 = t->xcodes1 = (u8 *)0;
+    t->c1_own = 0;
+}
+
+/* Gives a 4-bit index its 1-bit codes, derived from the 4-bit ones in nth threads; rows added later get theirs as
+ * they come (tq_add_put). 0, or -1: not a 4-bit index, or no memory. Writes t: no search may run meanwhile. */
+i32 tq_cascade_on(Tq *t, i32 nth)
+{
+    TqC1Job j;
+    i32 i;
+    if (t->bits != 4) return -1;
+    if (t->codes1) return 0;
+    t->vd1 = tq_vd_(t->dpad, 1);
+    t->codes1 = (u8 *)malloc((size_t)(t->nblk > 0 ? t->nblk : 1) * (size_t)t->vd1 * 16);
+    if (t->xcap) t->xcodes1 = (u8 *)malloc((size_t)t->xcap * (size_t)t->vd1 * 16);
+    t->c1_own = 1;
+    if (!t->codes1 || (t->xcap && !t->xcodes1)) { tq_cascade_off(t); return -1; }
+    j.t = t;
+    memset(j.fail, 0, sizeof(j.fail));
+    tq_par_(tq_c1_blocks_, &j, (i64)t->nblk + t->xn, nth);
+    for (i = 0; i < 64; ++i) if (j.fail[i]) { tq_cascade_off(t); return -1; }
+    return 0;
 }
 
 #include "tq_scan.c"

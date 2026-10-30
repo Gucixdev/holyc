@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # run_all.sh DATA_DIR [OUT_DIR] - every measurement of docs/benchmarks.md, on this machine, in one go.
 #
-#   needs: gcc; python3 with numpy, faiss-cpu, turbovec, qdrant-edge-py (pip); DATA_DIR from py/prepare_glove.py;
+#   needs: gcc; python3 with numpy, faiss-cpu, turbovec, qdrant-edge-py, vecgrid (pip), and LEANN in a venv of its own
+#          (it bundles a FAISS fork; $PYTHON_LEANN, default python3 - a method that cannot import is logged and
+#          skipped); DATA_DIR from py/prepare_glove.py;
 #          ~30 GB free in /var/tmp for the 100M run ($VECINDEX_SPILL moves it). 2-3 hours on 2 cores.
 #   docs/benchmarks.md's memory limit: run it as  systemd-run --user --scope -p MemoryMax=5.84G bench/run_all.sh ...
 #
 # Results go to OUT_DIR (default results-HOSTNAME): glove.jsonl (bench.py, every library), scale_10m.jsonl,
 # scale_100m.jsonl, vbench_8m.log, cpu.txt. `python3 py/tables.py OUT_DIR/glove.jsonl` prints the tables.
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 DATA=$(realpath "${1:?usage: run_all.sh DATA_DIR [OUT_DIR]}")
 OUT=$(realpath -m "${2:-results-$(hostname)}")
 PY=${PYTHON:-python3}
@@ -20,11 +22,13 @@ gcc -std=gnu99 -O2 -march=native -I../src vbench1m.c -lm -lpthread -o vbench1m 2
 log() { echo "=== $* $(date +%T)" | tee -a "$OUT/run.log"; }
 
 # GloVe-100: every library through the same harness (turbovec on 1 thread too: its one-query-per-call column)
-for job in "vecindex 2" "vecindex-i8 2" "vecindex-2bit 2" "vecindex-2bit-i8 2" "turbovec4 1" "turbovec4 2" \
-           "turbovec2 1" "turbovec2 2" "faiss-ivfpqfs 2" "faiss-hnsw 2" "faiss-ivfflat 2" "qdrant 2"; do
+for job in "vecindex 2" "vecindex-i8 2" "vecindex-2bit 2" "vecindex-2bit-i8 2" "vecindex-1bit 2" "vecindex-1bit-i8 2" \
+           "vecindex-cascade 2" "vecindex-cascade-i8 2" "turbovec4 1" "turbovec4 2" "turbovec2 1" "turbovec2 2" \
+           "faiss-ivfpqfs 2" "faiss-hnsw 2" "faiss-ivfflat 2" "qdrant 2" "vecgrid 2" "leann 2"; do
     set -- $job
+    py=$PY; [[ $1 == leann ]] && py=${PYTHON_LEANN:-$PY}
     log "$1 threads=$2"
-    "$PY" ../py/bench.py "$DATA" "$1" --threads "$2" --lat 1000 >> "$OUT/glove.jsonl" 2>> "$OUT/run.log"
+    "$py" ../py/bench.py "$DATA" "$1" --threads "$2" --lat 1000 >> "$OUT/glove.jsonl" 2>> "$OUT/run.log"
 done
 
 # scale: synthetic rows streamed through the store (time and memory at every stage)

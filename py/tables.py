@@ -11,6 +11,8 @@ NAMES = collections.OrderedDict([
     ("vecindex-2bit-i8", "vecindex 2-bit + int8 rows"),
     ("vecindex-1bit", "vecindex 1-bit + f32 rows"),
     ("vecindex-1bit-i8", "vecindex 1-bit + int8 rows"),
+    ("vecindex-cascade", "vecindex cascade: 1-bit, 4-bit, f32 rows"),
+    ("vecindex-cascade-i8", "vecindex cascade: 1-bit, 4-bit, int8 rows"),
     ("faiss-ivfpqfs", "FAISS IVF4096,PQ50x4fs,RFlat"),
     ("faiss-hnsw", "FAISS HNSW32"),
     ("leann", "LEANN (HNSW, vectors stored)"),

@@ -231,6 +231,8 @@ VI_API int vi_set_layout(vi_db *db, int code_bits, int row_bytes)
     return 0;
 }
 
+VI_API int vi_set_cascade(vi_db *db, int on) { return store_set_cascade(db->s, (i32)on); }
+
 VI_API int vi_save(vi_db *db, const char *path)
 {
     const char *p = path ? path : db->path;

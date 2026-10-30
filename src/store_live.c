@@ -95,12 +95,12 @@ static i32 store_rebuild_(RagStore *s, i32 nth)
 {
     StoreSnap sn;
     Tq *nt, *old;
-    i32 n, nc, live, dead, bits, round, stuck = 0, unpin;
+    i32 n, nc, live, dead, bits, round, stuck = 0, unpin, cas;
     u32 seed;
     f64 t0 = tq_now_();
     pthread_mutex_lock(&s->rb_mu);
     pthread_rwlock_rdlock(&s->lock);
-    n = s->count; live = s->live; dead = n - live; bits = s->codebits; seed = s->goal.seed;
+    n = s->count; live = s->live; dead = n - live; bits = s->codebits; seed = s->goal.seed; cas = s->cascade;
     if (live <= 0 || s->idx) {
         pthread_rwlock_unlock(&s->lock); pthread_mutex_unlock(&s->rb_mu); store_stat_set_(&s->rebuilding, 0); return -1;
     }
@@ -110,6 +110,7 @@ static i32 store_rebuild_(RagStore *s, i32 nth)
     nc = store_nclusters_(live);
     nt = tq_build_skip(&sn.col, n, s->dim, seed, nc, nth, bits, nc > 1 ? sn.dead : (const u64 *)0);
     store_snap_free_(&sn);
+    if (nt && cas && tq_cascade_on(nt, nth) != 0) { tq_free(nt); nt = (Tq *)0; }   /* rows added later get theirs in tq_add_put */
     if (!nt) { pthread_mutex_unlock(&s->rb_mu); store_stat_set_(&s->rebuilding, 0); return -1; }
     for (round = 0; round < 8 && !stuck; ++round) {             /* the rows added meanwhile, into the private index */
         i32 c;
@@ -140,6 +141,7 @@ static i32 store_rebuild_(RagStore *s, i32 nth)
         i32 np = (i32)((f64)old->nprobe * (f64)nt->nc / (f64)old->nc + 0.5);
         nt->nprobe = np < 1 ? 1 : (np > nt->nc ? nt->nc : np);
     }
+    if (nt->codes1 && !s->cascade) tq_cascade_off(nt);         /* turned off while this was building */
     s->tq = nt;
     s->built_upto = nt->n;                                       /* rows beyond it (if any) pend, as usual */
     s->tuned_n = 0;
@@ -148,7 +150,7 @@ static i32 store_rebuild_(RagStore *s, i32 nth)
     unpin = s->mem_tier >= 1;
     pthread_rwlock_unlock(&s->lock);
     pthread_mutex_unlock(&s->mt_mu);
-    if (unpin) store_tq_pin_(s, old, 0);                         /* a loaded index's locked pages go back */
+    if (unpin) store_tq_pin_(s, old, 0, 0);                      /* a loaded index's locked pages go back */
     tq_free(old);
     pthread_mutex_unlock(&s->rb_mu);
     store_stat_add_(&s->n_rebuilds, 1);

@@ -157,6 +157,13 @@ VI_API void vi_set_recall(vi_db *db, float target);
  * -1 when the store already has rows or a value is not one of these. */
 VI_API int vi_set_layout(vi_db *db, int code_bits, int row_bytes);
 
+/* The cascade, for 4-bit codes: 1-bit codes (the signs, derived from the 4-bit ones: dim / 8 more bytes a row) beside
+ * them. A search scans the 1-bit codes, re-scores the best 8 x R of them with their 4-bit codes and the best R of
+ * those exactly from the rows: every query reads a quarter of the code bytes, the exact re-score as few rows as
+ * before. An existing index gets its 1-bit codes at once, builds and rebuilds keep making them, and the file keeps
+ * them (a store saved with them opens with the cascade on). on 0 drops them. 0, or -1 (not 4-bit codes, no memory). */
+VI_API int vi_set_cascade(vi_db *db, int on);
+
 /* How much of the machine the store may use, 0..1 (default 1, or the environment variable VECINDEX_AGGRESSION):
  * the threads of builds, batches and a big store's single-query scan scale with it, out of the CPUs the process may
  * run on (its affinity mask and cgroup quota); background work (live indexing, rebuilds, snapshots) runs at nice 10

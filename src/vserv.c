@@ -1,7 +1,7 @@
 /* vserv.c - vecindex over a socket: libc + pthreads + Linux epoll, and TLS through the vendored BearSSL
  * (third_party/bearssl, MIT, no malloc inside). Nothing else.
  *
- *   vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g AGGRESSION] [-m TIER] [-d DIM] [-x] [-L] [-r RECALL]
+ *   vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g AGGRESSION] [-m TIER] [-C] [-d DIM] [-x] [-L] [-r RECALL]
  *         [-f SECONDS] [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT.pem -k KEY.pem [-a CA.pem] [-P] [-T]] [-U]
  *         STORE.vxi | DIR
  *     STORE.vxi one store; DIR: a store per tenant, DIR/NAME.vxi, opened on a client's first "use NAME" (created
@@ -16,6 +16,8 @@
  *               1 what every search scans (the index's codes, slot table, centroids) - rows stay on the disk and are
  *               read only for the candidates a query re-scores; 2 the rows, ids and tags too. Needs a memlock limit
  *               that large (ulimit -l, systemd's LimitMEMLOCK=); what it refuses is only read ahead
+ *     -C        the cascade (store_set_cascade): 1-bit codes beside the 4-bit ones, scanned first, the 4-bit codes
+ *               re-scoring a shortlist - a quarter of the code bytes a query reads; -m 1 then locks just those
  *     -d DIM    dimension of a new, empty store when STORE.vxi does not exist yet (it is created at once, with its
  *               journal, so every write is journaled from the start)
  *     -x        save the store to STORE.vxi on SIGINT / SIGTERM
@@ -236,7 +238,7 @@ static i32 vs_ntens, vs_ten_cn;                   /* -U: a client certificate's 
 static pthread_mutex_t vs_ten_mu = PTHREAD_MUTEX_INITIALIZER;
 static Arena vs_arena;
 static f32 vs_aggr = 1.0f, vs_recall;             /* applied to every store opened (-g, -r, -L, -m) */
-static i32 vs_live, vs_mem;
+static i32 vs_live, vs_mem, vs_cascade;
 static i32 vs_dim, vs_reqcap, vs_reqmax;          /* a request's buffer starts at reqcap, grows to reqmax for texts */
 static VsListen vs_ls[2];
 static i32 vs_nls;
@@ -258,6 +260,8 @@ static i32 vs_ten_setup_(VsTen *t)
     store_set_aggression(t->s, vs_aggr);
     if (vs_recall > 0.0f) store_set_target_recall(t->s, vs_recall);
     if (vs_live) store_set_live(t->s, 1, 1.0f);
+    if (vs_cascade && store_set_cascade(t->s, 1) != 0)            /* before -m: the 1-bit codes are what it locks */
+        vs_log_((const VsConn *)0, 1, "cascade refused file=%s: not 4-bit codes, or no memory", t->path);
     if (vs_mem > 0) r = store_set_memory(t->s, vs_mem);         /* reads the locked part in before it serves */
     t->last_snap = vs_now_();
     t->mods_snap = store_changes(t->s);
@@ -899,6 +903,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) dim = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-x")) save_on_exit = 1;
         else if (!strcmp(argv[i], "-L")) vs_live = 1;
+        else if (!strcmp(argv[i], "-C")) vs_cascade = 1;
         else if (!strcmp(argv[i], "-U")) vs_ten_cn = 1;
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) vs_recall = (f32)atof(argv[++i]);
         else if (!strcmp(argv[i], "-c") && i + 1 < argc) cert = argv[++i];
@@ -912,7 +917,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-A")) vs_log_all = 1;
         else if (argv[i][0] != '-' && !path) path = argv[i];
         else {
-            fprintf(stderr, "usage: vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g A] [-m TIER] [-d DIM] [-x] [-L] [-r RECALL]\n"
+            fprintf(stderr, "usage: vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g A] [-m TIER] [-C] [-d DIM] [-x] [-L] [-r RECALL]\n"
                             "             [-f SECONDS] [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT -k KEY [-a CA] [-P] [-T]] [-U]\n"
                             "             STORE.vxi | DIR\n");
             return 2;

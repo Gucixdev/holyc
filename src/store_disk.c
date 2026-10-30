@@ -284,7 +284,8 @@ static int store_tq_w_(FILE *f, const Tq *t)
     i32 h[8], c, nb, i, nc1 = t->nc > 1 ? t->nc : 1, *bl, *cs, bad = 0;
     size_t bb = (size_t)t->vd * 16;
     h[0] = t->dim; h[1] = t->dpad; h[2] = t->n; h[3] = t->nblk + t->xn; h[4] = t->nc; h[5] = t->nprobe;
-    h[6] = t->slot_row != (i32 *)0; h[7] = t->bits == 4 ? 0 : t->bits;                /* 0 = 4-bit (older files) */
+    h[6] = t->slot_row != (i32 *)0;
+    h[7] = t->codes1 ? 5 : (t->bits == 4 ? 0 : t->bits);        /* 0 = 4-bit (older files); 5 = 4-bit, then the 1-bit codes */
     if (store_pad_(f) || STORE_W32(f, h, 8)
         || store_pad_(f) || STORE_W32(f, t->s1, (size_t)t->dpad)
         || store_pad_(f) || STORE_W32(f, t->s2, (size_t)t->dpad)
@@ -302,6 +303,11 @@ static int store_tq_w_(FILE *f, const Tq *t)
     }
     if (!bad) bad = store_pad_(f) != 0;
     for (i = 0; i < nb && !bad; ++i) bad = fwrite(tq_bptr_(t, bl[i]), 1, bb, f) != bb;
+    if (t->codes1) {                                             /* the cascade's 1-bit codes, blocks in the same order */
+        size_t b1 = (size_t)t->vd1 * 16;
+        if (!bad) bad = store_pad_(f) != 0;
+        for (i = 0; i < nb && !bad; ++i) bad = fwrite(tq_bptr1_(t, bl[i]), 1, b1, f) != b1;
+    }
     free(bl); free(cs);
     return bad ? -1 : 0;
 }
@@ -707,14 +713,22 @@ static Tq *store_tq_r_(u8 *map, size_t len, FILE *f, size_t off, i32 rows)
     }
     if (h[6]) { t->slot_row = (i32 *)store_take_(map, len, f, o, 4, (size_t)t->nblk * 32); o = STORE_AL(o + (size_t)t->nblk * 128); }
     t->codes = (u8 *)store_take_(map, len, f, o, 1, (size_t)t->nblk * (size_t)t->vd * 16);
-    if (!t->s1 || !t->s2 || !t->perm || (t->nc > 1 && (!t->cent || !t->cstart)) || (h[6] && !t->slot_row) || !t->codes) {
+    if (h[7] == 5 && t->codes) {                                 /* the cascade's 1-bit codes follow */
+        o = STORE_AL(o + (size_t)t->nblk * (size_t)t->vd * 16);
+        t->vd1 = tq_vd_(t->dpad, 1);
+        t->codes1 = (u8 *)store_take_(map, len, f, o, 1, (size_t)t->nblk * (size_t)t->vd1 * 16);
+        t->c1_own = !map;
+    }
+    if (!t->s1 || !t->s2 || !t->perm || (t->nc > 1 && (!t->cent || !t->cstart)) || (h[6] && !t->slot_row) || !t->codes
+        || (h[7] == 5 && !t->codes1)) {
         tq_free(t);
         return (Tq *)0;
     }
     tq_prepare_(t);
-    if (map) {                                                   /* the codes are scanned on every query: start reading them now */
-        size_t pg = (size_t)sysconf(_SC_PAGESIZE), a = (size_t)t->codes & ~(pg - 1);
-        madvise((void *)a, (size_t)t->codes + (size_t)t->nblk * (size_t)t->vd * 16 - a, MADV_WILLNEED);
+    if (map) {                    /* what every query scans (the 1-bit codes of a cascade, else the codes): read it now */
+        const u8 *sc = t->codes1 ? t->codes1 : t->codes;
+        size_t pg = (size_t)sysconf(_SC_PAGESIZE), a = (size_t)sc & ~(pg - 1);
+        madvise((void *)a, (size_t)sc + (size_t)t->nblk * (size_t)(t->codes1 ? t->vd1 : t->vd) * 16 - a, MADV_WILLNEED);
     }
     return t;
 }
@@ -821,7 +835,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
         if (kind == 2) s->tq = store_tq_r_(map, len, f, o_kind + 1, live);
         fclose(f);
         s->fast = 1; s->fast_target = 0.97f;                     /* fast stores are saved without an engine index */
-        if (s->tq) s->built_upto = live;
+        if (s->tq) { s->built_upto = live; s->cascade = s->tq->codes1 != (u8 *)0; }   /* saved with the cascade: on */
         else store_build(s);                                      /* no saved scan index (or an unreadable one): build it */
     }
     s->stamp = stamp;

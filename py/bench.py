@@ -2,7 +2,8 @@
 """One method of the vecindex benchmark on a prepared dataset (prepare_glove.py); prints JSON lines.
 
 usage: bench.py DATA_DIR METHOD [--threads T] [--lat N]
-methods: vecindex, vecindex-i8, vecindex-2bit, vecindex-2bit-i8, vecindex-1bit, vecindex-1bit-i8, turbovec4, turbovec2,
+methods: vecindex, vecindex-i8, vecindex-2bit, vecindex-2bit-i8, vecindex-1bit, vecindex-1bit-i8, vecindex-cascade,
+         vecindex-cascade-i8, turbovec4, turbovec2,
          faiss-hnsw, faiss-ivfflat, faiss-ivfpqfs, qdrant, vecgrid, leann
 
 Per method: build (timed, T threads), index size, save and load (timed, warm page cache), then for every
@@ -45,15 +46,17 @@ def cpu_model():
 
 class VecIndex:
     """vecindex: the store's index (rotated 4-bit fast-scan, IVF from 600k rows, exact re-score of the candidates).
-    bits=2 or 1: 2-bit or 1-bit codes; vbytes=1: int8 rows (the compact modes for very large stores)."""
+    bits=2 or 1: 2-bit or 1-bit codes; vbytes=1: int8 rows (the compact modes for very large stores); cascade: 1-bit
+    codes beside the 4-bit ones, scanned first, the 4-bit codes re-scoring a shortlist of 8 x rerank."""
     pins_threads = True
 
-    def __init__(self, dim, threads, bits=4, vbytes=4):
+    def __init__(self, dim, threads, bits=4, vbytes=4, cascade=False):
         lib = ctypes.CDLL(os.path.join(BENCH, "libvi.so"))
         P, I, L, LL, F = ctypes.c_void_p, ctypes.c_int, ctypes.c_long, ctypes.c_longlong, ctypes.c_char_p
         lib.vi_new.restype = P; lib.vi_new.argtypes = [I]
         lib.vi_new2.restype = P; lib.vi_new2.argtypes = [I, I, I]
         lib.vi_set_rerank.argtypes = [P, I]
+        lib.vi_set_cascade.restype = I; lib.vi_set_cascade.argtypes = [P, I]
         lib.vi_file_bytes.restype = LL; lib.vi_file_bytes.argtypes = [P]
         lib.vi_add.restype = I; lib.vi_add.argtypes = [P, P, L, L]
         lib.vi_build.argtypes = [P]
@@ -65,12 +68,14 @@ class VecIndex:
         lib.vi_search.restype = I; lib.vi_search.argtypes = [P, P, I, P]
         lib.vi_search_batch.argtypes = [P, P, I, I, P, I]
         self.lib, self.dim, self.threads, self.s = lib, dim, threads, None
-        self.bits, self.vbytes = bits, vbytes
+        self.bits, self.vbytes, self.cascade = bits, vbytes, cascade
         self.version = os.popen(f"git -C {HERE} rev-parse --short HEAD 2>/dev/null").read().strip()
 
     def build(self, X):
         X = np.ascontiguousarray(X, dtype=np.float32)
         self.s = self.lib.vi_new2(self.dim, self.bits, self.vbytes)
+        if self.cascade and self.lib.vi_set_cascade(self.s, 1) != 0:
+            raise RuntimeError("vi_set_cascade refused")
         self.lib.vi_add(self.s, X.ctypes.data, len(X), 0)
         self.lib.vi_build(self.s)
 
@@ -95,6 +100,8 @@ class VecIndex:
             return [{"nprobe": p, "rerank": r} for p in (48, 64, 96, 128, 192, 256, 384, 512, 768) for r in (1000, 4000)]
         if self.bits == 2:                               # coarser codes: re-score more candidates
             return [{"nprobe": p, "rerank": r} for p in (48, 64, 96, 128, 192, 256, 384, 512, 768) for r in (256, 1000)]
+        if self.cascade:                                 # the shortlist is 8 x rerank: let it grow too
+            return [{"nprobe": p, "rerank": r} for p in (32, 48, 64, 96, 128, 192, 256, 384, 512, 768) for r in (128, 256, 512)]
         # rerank = rows re-scored exactly, like FAISS's k_factor x k
         return [{"nprobe": p, "rerank": r} for p in (32, 48, 64, 96, 128, 192, 256, 384, 512, 768) for r in (128, 256)]
 
@@ -422,6 +429,10 @@ def make(method, dim, threads):
         return VecIndex(dim, threads, 1, 4)
     if method == "vecindex-1bit-i8":
         return VecIndex(dim, threads, 1, 1)
+    if method == "vecindex-cascade":
+        return VecIndex(dim, threads, 4, 4, cascade=True)
+    if method == "vecindex-cascade-i8":
+        return VecIndex(dim, threads, 4, 1, cascade=True)
     if method == "turbovec4":
         return TurboVec(dim, threads, 4)
     if method == "turbovec2":
