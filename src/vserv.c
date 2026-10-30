@@ -2,7 +2,10 @@
  * (third_party/bearssl, MIT, no malloc inside). Nothing else.
  *
  *   vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g AGGRESSION] [-m TIER] [-d DIM] [-x] [-L] [-r RECALL]
- *         [-f SECONDS] [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT.pem -k KEY.pem [-a CA.pem] [-P] [-T]] STORE.vxi
+ *         [-f SECONDS] [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT.pem -k KEY.pem [-a CA.pem] [-P] [-T]] [-U]
+ *         STORE.vxi | DIR
+ *     STORE.vxi one store; DIR: a store per tenant, DIR/NAME.vxi, opened on a client's first "use NAME" (created
+ *               there when it does not exist yet; -d gives every tenant's dimension and is required) and kept open
  *     -s PATH   Unix socket, created mode 0600 (default ./vecindex.sock when -p is not given)
  *     -p PORT   TCP port, bound to 127.0.0.1 unless -b gives another address
  *     -t N      worker threads (default: the CPUs the process may use - its affinity and cgroup quota - times -g)
@@ -33,6 +36,8 @@
  *               still accepts plaintext from local clients, unless -T
  *     -a FILE   mutual TLS: a client must present a certificate that chains to one of the CA certificates in FILE
  *               (or is one of them), else the handshake fails; its name goes into the log
+ *     -U        with DIR and -a: a client certificate's name is the one tenant it may use - the CA, not the server,
+ *               decides who sees which tenant (clients without a certificate, on the Unix socket, may use any)
  *
  * The store is opened with store_load (mmap: ready in milliseconds whatever its size). Every socket speaks three
  * protocols, told apart by the first byte of a request (vserv_proto.c has the details):
@@ -46,7 +51,9 @@
  *     POST /hybrid?k=10 | POST /add?id=N | POST /delete?id=N (or ?lo=A&hi=B) | POST /build | POST /save |
  *     POST /snapshot; vectors as a JSON array ([0.1, -0.2, ...]), {"vector": [...], "text": "..."}, or raw
  *     little-endian f32 with Content-Type: application/octet-stream; replies are JSON.
- * An add replaces the row with the same id in every protocol: one row per id.
+ * An add replaces the row with the same id in every protocol: one row per id. A tenant server first needs the
+ * tenant: "use NAME" (lines), op 14 (binary), or a path under /t/NAME/ (HTTP: /t/acme/search?k=10); tenants share
+ * the workers, the log and the housekeeping, and nothing else - each has its own file, journal, index and snapshots.
  *
  * Who may connect is the operating system's business (the socket file's mode and group, the address the port is
  * bound to) and TLS client certificates'; what each connection did goes to the log. Durability: the journal of
@@ -117,6 +124,7 @@ typedef struct VsConn {
     unsigned long id, nreq;                     /* for the log: its number, requests answered */
     u8 named;                                   /* TLS: its certificate's name is in peer */
     char peer[112];                             /* who is on the other end (vserv_log.c) */
+    struct VsTen *t;                            /* the store its requests go to; NULL: a tenant server, none chosen */
 } VsConn;
 
 typedef struct { i32 fd, tcp; } VsListen;       /* epoll data for a listening socket */
@@ -206,8 +214,28 @@ struct VsTls { i32 unused; };
 #endif
 static i32 vs_tls_on, vs_plain_ok, vs_unix_tls_only;
 
-static RagStore *vs_store;
-static const char *vs_path;
+/* A store and what the main thread keeps about it. A server of one store has one (vs_one); a tenant server (a
+ * directory given instead of a file) opens DIR/NAME.vxi on a client's first "use NAME" and keeps it open, newest
+ * first in vs_tens: a tenant is added under vs_ten_mu and never removed, so whoever read the head may walk the
+ * rest without the lock. */
+#define VS_TNAME   64                             /* a tenant's name: 1 to 64 of A-Z a-z 0-9 _ - */
+#define VS_TENANTS 4096                           /* open at once, at most */
+typedef struct VsTen {
+    char name[VS_TNAME + 1];
+    const char *path;                             /* its file */
+    RagStore *s;
+    f64 last_snap;                                /* housekeeping: when the last timed snapshot was considered */
+    i64 mods_snap, done;                          /* changes when the last snapshot started; snapshots finished */
+    struct VsTen *next;
+} VsTen;
+static VsTen vs_one;
+static VsTen *vs_tens;
+static const char *vs_dir;                        /* a tenant server: the directory of the tenants' stores */
+static i32 vs_ntens, vs_ten_cn;                   /* -U: a client certificate's name is the one tenant it may use */
+static pthread_mutex_t vs_ten_mu = PTHREAD_MUTEX_INITIALIZER;
+static Arena vs_arena;
+static f32 vs_aggr = 1.0f, vs_recall;             /* applied to every store opened (-g, -r, -L, -m) */
+static i32 vs_live, vs_mem;
 static i32 vs_dim, vs_reqcap, vs_reqmax;          /* a request's buffer starts at reqcap, grows to reqmax for texts */
 static VsListen vs_ls[2];
 static i32 vs_nls;
@@ -217,6 +245,91 @@ static double vs_now_(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, 
 static void vs_on_signal_(int sig) { (void)sig; vs_stop = 1; }
 
 #include "vserv_log.c"
+
+/* ---- stores and tenants ---- */
+
+/* the settings every store gets once it is open (-t's one query a thread, -g, -r, -L, -m); 0, or -1 when the
+ * memlock limit refused part of -m */
+static i32 vs_ten_setup_(VsTen *t)
+{
+    i32 r = 0;
+    store_set_threads(t->s, 1);                  /* one query per thread: the workers are the parallelism */
+    store_set_aggression(t->s, vs_aggr);
+    if (vs_recall > 0.0f) store_set_target_recall(t->s, vs_recall);
+    if (vs_live) store_set_live(t->s, 1, 1.0f);
+    if (vs_mem > 0) r = store_set_memory(t->s, vs_mem);         /* reads the locked part in before it serves */
+    t->last_snap = vs_now_();
+    t->mods_snap = store_changes(t->s);
+    t->done = store_snapshots_done(t->s);
+    return r;
+}
+
+static i32 vs_tname_ok_(char ch)
+{
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
+}
+
+/* opens tenant name[0, n) from DIR/NAME.vxi, or creates it there with the server's dimension; under vs_ten_mu.
+ * NULL with *err the reason for the client. */
+static VsTen *vs_ten_open_(const char *name, i32 n, const char **err)
+{
+    VsTen *t;
+    struct stat st;
+    char *path;
+    i32 created = 0;
+    if (vs_ntens >= VS_TENANTS) { *err = "too many tenants open"; return (VsTen *)0; }
+    t = (VsTen *)calloc(1, sizeof(VsTen));
+    path = t ? (char *)malloc(strlen(vs_dir) + (size_t)n + 6) : (char *)0;
+    if (!path) { free(t); *err = "out of memory"; return (VsTen *)0; }
+    memcpy(t->name, name, (size_t)n); t->name[n] = 0;
+    sprintf(path, "%s/%s.vxi", vs_dir, t->name);
+    t->path = path;
+    t->s = store_load(&vs_arena, t->path);
+    if (!t->s && stat(t->path, &st) != 0) {                      /* none yet: a new, empty store, journaled at once */
+        t->s = store_new(&vs_arena, vs_dim);
+        if (t->s && store_save(t->s, t->path) != 0) { store_destroy(t->s); t->s = (RagStore *)0; }
+        created = 1;
+    }
+    if (t->s && t->s->dim != vs_dim) { store_destroy(t->s); t->s = (RagStore *)0; *err = "the tenant's store has another dimension"; }
+    else if (!t->s) *err = created ? "cannot create the tenant's store" : "the tenant's store cannot be read";
+    if (!t->s) {
+        vs_log_((const VsConn *)0, 1, "tenant name=%s file=%s: %s", t->name, t->path, *err);
+        free(path); free(t);
+        return (VsTen *)0;
+    }
+    if (vs_ten_setup_(t) != 0) vs_log_((const VsConn *)0, 1, "tenant name=%s: the memlock limit refused part of -m %d", t->name, (int)vs_mem);
+    t->next = vs_tens;
+    vs_tens = t;
+    ++vs_ntens;
+    vs_log_((const VsConn *)0, 0, "tenant %s name=%s rows=%d", created ? "created" : "opened", t->name, store_count(t->s));
+    return t;
+}
+
+/* Points the connection's requests at tenant name[0, n), opening or creating it: NULL, or why not (for the client).
+ * With -U a client that showed a certificate may use only the tenant its certificate names. */
+static const char *vs_use_(VsConn *c, const char *name, i32 n)
+{
+    VsTen *t;
+    const char *err = (const char *)0;
+    i32 i;
+    if (!vs_dir) return "this server has one store, no tenants";
+    if (n < 1 || n > VS_TNAME) return "a tenant's name is 1 to 64 of A-Z a-z 0-9 _ -";
+    for (i = 0; i < n; ++i) if (!vs_tname_ok_(name[i])) return "a tenant's name is 1 to 64 of A-Z a-z 0-9 _ -";
+#ifdef VSERV_TLS
+    if (vs_ten_cn && c->tls && c->tls->cn.status > 0
+        && (strlen(c->tls->cnbuf) != (size_t)n || memcmp(c->tls->cnbuf, name, (size_t)n) != 0)) {
+        vs_log_(c, 1, "use %.*s refused: the certificate names another tenant", (int)n, name);
+        return "your certificate names another tenant";
+    }
+#endif
+    pthread_mutex_lock(&vs_ten_mu);
+    for (t = vs_tens; t; t = t->next) if (!strncmp(t->name, name, (size_t)n) && !t->name[n]) break;
+    if (!t) t = vs_ten_open_(name, n, &err);
+    pthread_mutex_unlock(&vs_ten_mu);
+    if (!t) return err;
+    if (c->t != t) { c->t = t; vs_log_(c, 0, "use"); }
+    return (const char *)0;
+}
 
 /* ---- small formatting helpers (no printf on the hot path) ---- */
 
@@ -393,11 +506,11 @@ static void vs_flush_(VsWorker *w, VsConn *c)
 
 /* ---- the store operations both protocols share ---- */
 
-static i32 vs_search_(VsWorker *w, const f32 *q, i32 k) { return store_search(vs_store, q, k, w->ids, w->sc); }
+static i32 vs_search_(VsWorker *w, VsConn *c, const f32 *q, i32 k) { return store_search(c->t->s, q, k, w->ids, w->sc); }
 
-static void vs_stats_(i64 *v)
+static void vs_stats_(VsConn *c, i64 *v)
 {
-    v[0] = store_count(vs_store); v[1] = vs_dim; v[2] = store_pending(vs_store); v[3] = store_built(vs_store);
+    v[0] = store_count(c->t->s); v[1] = vs_dim; v[2] = store_pending(c->t->s); v[3] = store_built(c->t->s);
 }
 
 #include "vserv_proto.c"
@@ -602,6 +715,7 @@ static void vs_accept_(VsWorker *w, const VsListen *l)
         c = (VsConn *)calloc(1, sizeof(VsConn));
         if (!c) { close(fd); continue; }
         c->fd = fd; c->last = vs_now_(); c->tcp = (u8)l->tcp;
+        c->t = vs_dir ? (VsTen *)0 : &vs_one;     /* a tenant server: none until the client names one */
 #if defined(__GNUC__)
         c->id = __atomic_add_fetch(&vs_conn_seq, 1UL, __ATOMIC_RELAXED);
 #else
@@ -695,56 +809,77 @@ static i32 vs_ntas_(void)
 
 static i64 vs_fsize_(const char *path) { struct stat st; return stat(path, &st) == 0 ? (i64)st.st_size : 0; }
 
-/* The main thread, while the workers serve: reaps finished snapshots (and logs them), flushes the journal every
- * sync_s seconds, and starts a background snapshot every snap_s seconds when something changed, or whenever the
- * journal has outgrown the file (and 64 MB): the file stays the bulk of the data, a restart replays little. */
+/* every open store: the one, or each tenant (the list only grows at its head, so it is walked without the lock) */
+static VsTen *vs_first_(void)
+{
+    VsTen *t;
+    if (!vs_dir) return &vs_one;
+    pthread_mutex_lock(&vs_ten_mu);
+    t = vs_tens;
+    pthread_mutex_unlock(&vs_ten_mu);
+    return t;
+}
+
+/* one store's turn: reap and log a finished snapshot, flush the journal when sync is due, start a snapshot */
+static void vs_keep_(VsTen *t, i32 sync, f64 snap_s)
+{
+    i64 us;
+    i32 run, last;
+    store_snapshot_info(t->s, &run, &last, &us);
+    if (run) store_snapshot_poll(t->s, 0);                       /* reaps it once the child is done */
+    store_snapshot_info(t->s, &run, &last, &us);
+    if (store_snapshots_done(t->s) != t->done) {                 /* finished since the last look, whoever reaped it */
+        t->done = store_snapshots_done(t->s);
+        vs_log_((const VsConn *)0, last != 0, "snapshot %s file=%s ms=%ld", last == 0 ? "ok" : "failed", t->path, (long)(us / 1000));
+    }
+    if (sync && store_journal_bytes(t->s, t->path) >= 0 && store_sync(t->s, t->path) != 0)
+        vs_log_((const VsConn *)0, 1, "journal flush failed file=%s", t->path);
+    if (!run) {
+        i64 jb = store_journal_bytes(t->s, t->path), m = store_changes(t->s);
+        i32 by_time = snap_s > 0 && vs_now_() - t->last_snap >= snap_s && m != t->mods_snap;
+        i32 by_size = jb > ((i64)64 << 20) && jb > vs_fsize_(t->path);
+        if (by_time || by_size) {
+            if (store_snapshot(t->s, t->path) == 0) {
+                t->mods_snap = m;
+                vs_log_((const VsConn *)0, 0, "snapshot started file=%s (%s)", t->path, by_size ? "the journal outgrew the file" : "timer");
+            }
+            t->last_snap = vs_now_();
+        }
+    }
+}
+
+/* The main thread, while the workers serve, for every open store: reaps finished snapshots (and logs them), flushes
+ * the journal every sync_s seconds, and starts a background snapshot every snap_s seconds when something changed, or
+ * whenever the journal has outgrown the file (and 64 MB): the file stays the bulk of the data, a restart replays
+ * little. */
 static void vs_housekeep_(f64 sync_s, f64 snap_s)
 {
-    f64 last_sync = vs_now_(), last_snap = last_sync;
-    i64 mods_snap = store_changes(vs_store), us, done = store_snapshots_done(vs_store);
-    i32 run, last;
+    f64 last_sync = vs_now_();
     while (!vs_stop) {
         struct timespec ts;
+        VsTen *t;
+        i32 sync = sync_s > 0 && vs_now_() - last_sync >= sync_s;
         ts.tv_sec = 0; ts.tv_nsec = 100000000L;
         nanosleep(&ts, (struct timespec *)0);
-        store_snapshot_info(vs_store, &run, &last, &us);
-        if (run) store_snapshot_poll(vs_store, 0);               /* reaps it once the child is done */
-        store_snapshot_info(vs_store, &run, &last, &us);
-        if (store_snapshots_done(vs_store) != done) {            /* finished since the last look, whoever reaped it */
-            done = store_snapshots_done(vs_store);
-            vs_log_((const VsConn *)0, last != 0, "snapshot %s file=%s ms=%ld", last == 0 ? "ok" : "failed", vs_path, (long)(us / 1000));
-        }
-        if (sync_s > 0 && vs_now_() - last_sync >= sync_s) {
-            if (store_journal_bytes(vs_store, vs_path) >= 0 && store_sync(vs_store, vs_path) != 0) vs_log_((const VsConn *)0, 1, "journal flush failed");
-            last_sync = vs_now_();
-        }
-        if (!run) {
-            i64 jb = store_journal_bytes(vs_store, vs_path), m = store_changes(vs_store);
-            i32 by_time = snap_s > 0 && vs_now_() - last_snap >= snap_s && m != mods_snap;
-            i32 by_size = jb > ((i64)64 << 20) && jb > vs_fsize_(vs_path);
-            if (by_time || by_size) {
-                if (store_snapshot(vs_store, vs_path) == 0) {
-                    mods_snap = m;
-                    vs_log_((const VsConn *)0, 0, "snapshot started file=%s (%s)", vs_path, by_size ? "the journal outgrew the file" : "timer");
-                }
-                last_snap = vs_now_();
-            }
-        }
+        for (t = vs_first_(); t; t = t->next) vs_keep_(t, sync, snap_s);
+        if (sync) last_sync = vs_now_();
     }
 }
 
 int main(int argc, char **argv)
 {
-    static Arena arena;
     const char *sock = (const char *)0, *bind_addr = "127.0.0.1", *cert = (const char *)0, *key = (const char *)0, *ca = (const char *)0;
-    const char *logdest = (const char *)0;
-    i32 port = 0, nth = 0, dim = 0, save_on_exit = 0, live = 0, created = 0, mem = 0, memrc = 0, i, j;
+    const char *logdest = (const char *)0, *path = (const char *)0;
+    i32 port = 0, nth = 0, dim = 0, save_on_exit = 0, created = 0, memrc = 0, i, j;
     i64 hot = 0, cold = 0;
-    f32 recall = 0.0f, aggr = -1.0f;
+    f32 aggr = -1.0f;
     f64 sync_s = 1.0, snap_s = 0.0;
     size_t outcap;
     VsWorker *ws;
+    VsTen *t;
     struct sigaction sa;
+    struct stat st;
+    char tail[320];
     double t0;
 
     for (i = 1; i < argc; ++i) {
@@ -753,11 +888,12 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-b") && i + 1 < argc) bind_addr = argv[++i];
         else if (!strcmp(argv[i], "-t") && i + 1 < argc) nth = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-g") && i + 1 < argc) aggr = (f32)atof(argv[++i]);
-        else if (!strcmp(argv[i], "-m") && i + 1 < argc) mem = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-m") && i + 1 < argc) vs_mem = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) dim = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-x")) save_on_exit = 1;
-        else if (!strcmp(argv[i], "-L")) live = 1;
-        else if (!strcmp(argv[i], "-r") && i + 1 < argc) recall = (f32)atof(argv[++i]);
+        else if (!strcmp(argv[i], "-L")) vs_live = 1;
+        else if (!strcmp(argv[i], "-U")) vs_ten_cn = 1;
+        else if (!strcmp(argv[i], "-r") && i + 1 < argc) vs_recall = (f32)atof(argv[++i]);
         else if (!strcmp(argv[i], "-c") && i + 1 < argc) cert = argv[++i];
         else if (!strcmp(argv[i], "-k") && i + 1 < argc) key = argv[++i];
         else if (!strcmp(argv[i], "-a") && i + 1 < argc) ca = argv[++i];
@@ -767,15 +903,27 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-S") && i + 1 < argc) snap_s = atof(argv[++i]);
         else if (!strcmp(argv[i], "-l") && i + 1 < argc) logdest = argv[++i];
         else if (!strcmp(argv[i], "-A")) vs_log_all = 1;
-        else if (argv[i][0] != '-' && !vs_path) vs_path = argv[i];
+        else if (argv[i][0] != '-' && !path) path = argv[i];
         else {
             fprintf(stderr, "usage: vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-g A] [-m TIER] [-d DIM] [-x] [-L] [-r RECALL]\n"
-                            "             [-f SECONDS] [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT -k KEY [-a CA] [-P] [-T]] STORE.vxi\n");
+                            "             [-f SECONDS] [-S SECONDS] [-l syslog|-|FILE] [-A] [-c CERT -k KEY [-a CA] [-P] [-T]] [-U]\n"
+                            "             STORE.vxi | DIR\n");
             return 2;
         }
     }
     if (logdest && vs_log_open_(logdest) != 0) { fprintf(stderr, "vserv: cannot open the log %s: %s\n", logdest, strerror(errno)); return 1; }
-    if (!vs_path) { fprintf(stderr, "vserv: no store file given\n"); return 2; }
+    if (!path) { fprintf(stderr, "vserv: no store file or tenant directory given\n"); return 2; }
+    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {           /* a directory: a store per tenant in it */
+        char *d = (char *)malloc(strlen(path) + 1);
+        size_t n;
+        if (!d) return 1;
+        strcpy(d, path);
+        for (n = strlen(d); n > 1 && d[n - 1] == '/'; --n) d[n - 1] = 0;
+        vs_dir = d;
+        if (dim <= 0) { fprintf(stderr, "vserv: a tenant directory needs -d DIM, the dimension of its stores\n"); return 2; }
+        vs_dim = dim;
+    }
+    if (vs_ten_cn && !vs_dir) { fprintf(stderr, "vserv: -U binds clients to tenants: give a directory\n"); return 2; }
     if ((cert || key || ca || vs_unix_tls_only) && !(cert && key)) { fprintf(stderr, "vserv: TLS needs both -c CERT and -k KEY\n"); return 2; }
 #ifdef VSERV_TLS
     if (cert) {
@@ -794,25 +942,24 @@ int main(int argc, char **argv)
     if (aggr < 0.0f) { const char *ag = getenv("VECINDEX_AGGRESSION"); aggr = ag && *ag ? (f32)atof(ag) : 1.0f; }
     if (aggr < 0.0f) aggr = 0.0f;
     if (aggr > 1.0f) aggr = 1.0f;
+    vs_aggr = aggr;
     if (nth <= 0) { nth = (i32)(aggr * (f32)store_cpus_avail_() + 0.5f); if (nth < 1) nth = 1; }
 
     t0 = vs_now_();
-    vs_store = store_load(&arena, vs_path);
-    if (!vs_store) {
-        struct stat st;
-        if (stat(vs_path, &st) == 0) { fprintf(stderr, "vserv: %s exists but cannot be read as a store\n", vs_path); return 1; }
-        if (dim <= 0) { fprintf(stderr, "vserv: cannot load %s (give -d DIM to start a new store)\n", vs_path); return 1; }
-        vs_store = store_new(&arena, dim);
-        if (store_save(vs_store, vs_path) != 0) { fprintf(stderr, "vserv: cannot create %s: %s\n", vs_path, strerror(errno)); return 1; }
-        created = 1;                                             /* the file and its journal exist from the first write on */
+    if (!vs_dir) {                                               /* one store */
+        vs_one.path = path;
+        vs_one.s = store_load(&vs_arena, path);
+        if (!vs_one.s) {
+            if (stat(path, &st) == 0) { fprintf(stderr, "vserv: %s exists but cannot be read as a store\n", path); return 1; }
+            if (dim <= 0) { fprintf(stderr, "vserv: cannot load %s (give -d DIM to start a new store)\n", path); return 1; }
+            vs_one.s = store_new(&vs_arena, dim);
+            if (store_save(vs_one.s, path) != 0) { fprintf(stderr, "vserv: cannot create %s: %s\n", path, strerror(errno)); return 1; }
+            created = 1;                                         /* the file and its journal exist from the first write on */
+        }
+        vs_dim = vs_one.s->dim;
+        memrc = vs_ten_setup_(&vs_one);
+        store_tiers(vs_one.s, &hot, &cold);
     }
-    vs_dim = vs_store->dim;
-    store_set_threads(vs_store, 1);              /* one query per thread: the workers are the parallelism */
-    store_set_aggression(vs_store, aggr);
-    if (recall > 0.0f) store_set_target_recall(vs_store, recall);
-    if (live) store_set_live(vs_store, 1, 1.0f);
-    if (mem > 0) memrc = store_set_memory(vs_store, mem);        /* reads the locked part in before serving */
-    store_tiers(vs_store, &hot, &cold);
     /* one request: headers + a JSON vector (~24 bytes a number) or the binary frame */
     vs_reqcap = 2048 + vs_dim * 24;
     if (vs_reqcap < 4096) vs_reqcap = 4096;
@@ -844,31 +991,41 @@ int main(int argc, char **argv)
             epoll_ctl(w->ep, EPOLL_CTL_ADD, vs_ls[j].fd, &e);
         }
     }
-    fprintf(stderr, "vserv: %s: %d rows x %d, loaded in %.1f ms; %d threads;%s%s%s%s%s%s%s\n", vs_path, store_count(vs_store), vs_dim,
-            (vs_now_() - t0) * 1e3, nth, live ? " live;" : "", sock ? " unix " : "", sock ? sock : "", port ? " tcp " : "", port ? bind_addr : "",
-            vs_tls_on ? (vs_ntas_() ? " (TLS, client certificates required)" : " (TLS)") : "",
-            vs_tls_on ? (vs_plain_ok ? " + plaintext on tcp" : (vs_unix_tls_only ? "" : "; plaintext on unix only")) : "");
-    vs_log_((const VsConn *)0, 0, "start file=%s rows=%d dim=%d threads=%d%s%s%s journal=%s memory=%d hot=%.0f cold=%.0f", vs_path,
-            store_count(vs_store), vs_dim, nth, created ? " created" : "", live ? " live" : "", vs_tls_on ? " tls" : "",
-            store_journal_bytes(vs_store, vs_path) >= 0 ? "on" : "off", (int)mem, (double)hot, (double)cold);
-    if (memrc != 0)
-        fprintf(stderr, "vserv: the memlock limit refused part of -m %d; that part is only read ahead (raise it: ulimit -l, "
-                        "or LimitMEMLOCK=infinity in the systemd unit)\n", (int)mem);
-    if (store_journal_bytes(vs_store, vs_path) < 0)
-        fprintf(stderr, "vserv: no journal for %s: writes are durable only once saved or snapshotted\n", vs_path);
+    snprintf(tail, sizeof(tail), "%d threads;%s%s%s%s%s%s%s", nth, vs_live ? " live;" : "", sock ? " unix " : "", sock ? sock : "",
+             port ? " tcp " : "", port ? bind_addr : "", vs_tls_on ? (vs_ntas_() ? " (TLS, client certificates required)" : " (TLS)") : "",
+             vs_tls_on ? (vs_plain_ok ? " + plaintext on tcp" : (vs_unix_tls_only ? "" : "; plaintext on unix only")) : "");
+    if (vs_dir) {
+        fprintf(stderr, "vserv: %s: a store per tenant (NAME.vxi, %d dimensions), opened on first use%s; %s\n", vs_dir, vs_dim,
+                vs_ten_cn ? ", a client certificate names its tenant" : "", tail);
+        vs_log_((const VsConn *)0, 0, "start dir=%s dim=%d threads=%d%s%s%s memory=%d", vs_dir, vs_dim, nth, vs_live ? " live" : "",
+                vs_tls_on ? " tls" : "", vs_ten_cn ? " tenant=certificate" : "", (int)vs_mem);
+    } else {
+        fprintf(stderr, "vserv: %s: %d rows x %d, loaded in %.1f ms; %s\n", path, store_count(vs_one.s), vs_dim, (vs_now_() - t0) * 1e3, tail);
+        vs_log_((const VsConn *)0, 0, "start file=%s rows=%d dim=%d threads=%d%s%s%s journal=%s memory=%d hot=%.0f cold=%.0f", path,
+                store_count(vs_one.s), vs_dim, nth, created ? " created" : "", vs_live ? " live" : "", vs_tls_on ? " tls" : "",
+                store_journal_bytes(vs_one.s, path) >= 0 ? "on" : "off", (int)vs_mem, (double)hot, (double)cold);
+        if (memrc != 0)
+            fprintf(stderr, "vserv: the memlock limit refused part of -m %d; that part is only read ahead (raise it: ulimit -l, "
+                            "or LimitMEMLOCK=infinity in the systemd unit)\n", (int)vs_mem);
+        if (store_journal_bytes(vs_one.s, path) < 0)
+            fprintf(stderr, "vserv: no journal for %s: writes are durable only once saved or snapshotted\n", path);
+    }
     for (i = 0; i < nth; ++i) pthread_create(&ws[i].th, (const pthread_attr_t *)0, vs_worker_, &ws[i]);
     vs_housekeep_(sync_s, snap_s);
     for (i = 0; i < nth; ++i) pthread_join(ws[i].th, (void **)0);
 
     for (j = 0; j < vs_nls; ++j) close(vs_ls[j].fd);
     if (sock) unlink(sock);
-    if (save_on_exit) {
-        if (store_save(vs_store, vs_path) == 0) fprintf(stderr, "vserv: saved %s\n", vs_path);
-        else fprintf(stderr, "vserv: saving %s failed\n", vs_path);
-    } else if (store_journal_bytes(vs_store, vs_path) >= 0)
-        store_sync(vs_store, vs_path);                           /* everything written so far is on the disk */
-    store_snapshot_poll(vs_store, 1);
-    vs_log_((const VsConn *)0, 0, "stop rows=%d", store_count(vs_store));
+    for (t = vs_first_(); t; t = t->next) {
+        if (save_on_exit) {
+            if (store_save(t->s, t->path) == 0) fprintf(stderr, "vserv: saved %s\n", t->path);
+            else fprintf(stderr, "vserv: saving %s failed\n", t->path);
+        } else if (store_journal_bytes(t->s, t->path) >= 0)
+            store_sync(t->s, t->path);                           /* everything written so far is on the disk */
+        store_snapshot_poll(t->s, 1);
+        if (vs_dir) vs_log_((const VsConn *)0, 0, "stop name=%s rows=%d", t->name, store_count(t->s));
+        else vs_log_((const VsConn *)0, 0, "stop rows=%d", store_count(t->s));
+    }
     for (i = 0; i < nth; ++i) {
         close(ws[i].ep); free(ws[i].out); free(ws[i].vec); free(ws[i].ids); free(ws[i].sc);
     }

@@ -10,6 +10,12 @@
  *   conn=9 peer=tcp:10.0.0.5:51234,cn="ingest-1" del lo=1048576 hi=2097151 removed=37
  *   snapshot ok file=docs.vxi ms=812
  *
+ * A tenant server (a directory of stores) adds the tenant a connection uses to each of its lines, and logs every
+ * tenant it opens or creates:
+ *
+ *   tenant created name=acme rows=0
+ *   conn=12 peer=tcp:10.0.0.7:40112,cn="acme" tenant=acme add id=7 ok
+ *
  * Writes (add, delete, build, save, snapshot), connections opening and closing, refused requests and failed TLS
  * handshakes are always logged once -l is given; searches only with -A. A line is built in a local buffer and goes
  * out in one write, so lines from different workers never interleave. */
@@ -43,6 +49,7 @@ static void vs_log_(const VsConn *c, i32 warn, const char *fmt, ...)
         n += sprintf(line + n, "vserv[%d] ", (int)getpid());
     }
     if (c) n += snprintf(line + n, sizeof(line) - (size_t)n, "conn=%lu peer=%s ", c->id, c->peer);
+    if (c && vs_dir && c->t) n += snprintf(line + n, sizeof(line) - (size_t)n, "tenant=%s ", c->t->name);
     va_start(ap, fmt);
     n += vsnprintf(line + n, sizeof(line) - (size_t)n - 1, fmt, ap);
     va_end(ap);

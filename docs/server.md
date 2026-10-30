@@ -108,7 +108,7 @@ and port on TCP, and the certificate's name under mutual TLS - kept across sessi
 above, with `-l - -A`:
 
 ```
-2026-10-30T00:05:54Z vserv[21369] start file=/tmp/demo.vxi rows=0 dim=4 threads=2 created journal=on
+2026-10-30T00:05:54Z vserv[21369] start file=/tmp/demo.vxi rows=0 dim=4 threads=2 created journal=on memory=0 hot=0 cold=0
 2026-10-30T00:05:55Z vserv[21369] conn=1 peer=tcp:127.0.0.1:52036 open
 2026-10-30T00:05:55Z vserv[21369] conn=1 peer=tcp:127.0.0.1:52036 add id=1 ok
 2026-10-30T00:05:55Z vserv[21369] conn=1 peer=tcp:127.0.0.1:52036 add id=2 ok
@@ -121,6 +121,29 @@ above, with `-l - -A`:
 Writes, connections, refused requests, failed TLS handshakes and snapshots are logged once `-l` is given; searches
 only with `-A`. A bulk load logs one line per row: for millions of rows prefer `-l FILE` to syslog, which journald
 rate-limits.
+
+## Tenants: a store file each
+
+Given a directory instead of a file, the server keeps a store per tenant in it, `DIR/NAME.vxi` with its own journal,
+index and snapshots; workers, the log and the housekeeping are shared. A client names its tenant before anything else:
+
+```sh
+.build/vserv -p 8077 -d 384 -l syslog /srv/vx/                # every tenant's store has 384 dimensions
+printf 'use acme\nsearch 5 0.1 ...\n' | nc localhost 8077      # lines: use NAME, then as on a one-store server
+curl -s -X POST 'localhost:8077/t/acme/search?k=5' -d '[0.1, ...]'   # HTTP: /t/NAME/ before every path
+```
+
+The binary protocol has op 14 with the name as its payload; until a tenant is chosen every other request gets status
+5 (lines: `err no tenant: use NAME first`; HTTP: 400). A tenant opens on first use (mmap, milliseconds), or is created
+there when its file does not exist yet, and stays open; up to 4096 at once. Names are 1 to 64 of `A-Z a-z 0-9 _ -`,
+so a name never leaves the directory. Every log line of a connection carries its tenant (`tenant=acme`), and opening
+or creating one is logged.
+
+Which client may use which tenant is, again, not a table of users inside the server. With mutual TLS (`-a CA`) and
+`-U`, a client may use only the tenant its certificate names, so issuing the certificate is granting the access;
+clients without a certificate (local ones on the Unix socket, whose file mode decides who connects) may use any.
+Another split is a server per group of tenants, each with its own directory and socket, whose file mode and group
+decide who connects.
 
 ## TLS
 

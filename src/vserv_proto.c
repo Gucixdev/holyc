@@ -7,14 +7,14 @@
 /* the replace-or-add every protocol's add means (one row per id) */
 static i32 vs_put_(VsConn *c, const f32 *v, i64 id)
 {
-    i32 r = store_put(vs_store, v, id, 0);
+    i32 r = store_put(c->t->s, v, id, 0);
     if (vs_logging_()) vs_log_(c, r != 0, "add id=%ld %s", (long)id, r == 0 ? "ok" : "refused (NaN or Inf)");
     return r;
 }
 
 static i32 vs_del_(VsConn *c, i64 lo, i64 hi)
 {
-    i32 n = lo == hi ? store_delete(vs_store, lo) : store_delete_range(vs_store, lo, hi);
+    i32 n = lo == hi ? store_delete(c->t->s, lo) : store_delete_range(c->t->s, lo, hi);
     if (vs_logging_()) {
         if (lo == hi) vs_log_(c, 0, "del id=%ld removed=%d", (long)lo, n);
         else vs_log_(c, 0, "del lo=%ld hi=%ld removed=%d", (long)lo, (long)hi, n);
@@ -25,14 +25,14 @@ static i32 vs_del_(VsConn *c, i64 lo, i64 hi)
 static void vs_build_(VsConn *c)
 {
     double t0 = vs_now_();
-    store_build(vs_store);
+    store_build(c->t->s);
     vs_log_(c, 0, "build ok ms=%.0f", (vs_now_() - t0) * 1e3);
 }
 
 static i32 vs_save_(VsConn *c)
 {
     double t0 = vs_now_();
-    i32 r = vs_path ? store_save(vs_store, vs_path) : -1;
+    i32 r = store_save(c->t->s, c->t->path);
     vs_log_(c, r != 0, "save %s ms=%.0f", r == 0 ? "ok" : "failed", (vs_now_() - t0) * 1e3);
     return r;
 }
@@ -40,7 +40,7 @@ static i32 vs_save_(VsConn *c)
 /* 0 started, 1 one runs already (or a build or save holds the store), -1 failed */
 static i32 vs_snapshot_(VsConn *c)
 {
-    i32 r = store_snapshot(vs_store, vs_path);
+    i32 r = store_snapshot(c->t->s, c->t->path);
     vs_log_(c, r < 0, "snapshot %s", r == 0 ? "started" : (r == 1 ? "busy" : "failed"));
     return r;
 }
@@ -53,24 +53,24 @@ static void vs_logsearch_(VsConn *c, i32 k, i32 got, double t0)
 #include "vserv_text.c"
 
 /* the text of id into the worker's buffer: its length (0: none), -1 no such row, -2 out of memory */
-static i32 vs_get_text_(VsWorker *w, i64 id, char **t)
+static i32 vs_get_text_(VsWorker *w, VsConn *c, i64 id, char **t)
 {
-    i32 n = store_get_text(vs_store, id, (char *)0, 0);
+    i32 n = store_get_text(c->t->s, id, (char *)0, 0);
     if (n <= 0) { *t = w->txt; return n; }
     if (!(*t = vs_txt_(w, n))) return -2;
-    return store_get_text(vs_store, id, *t, n) == n ? n : -1;   /* replaced in between: -1, ask again */
+    return store_get_text(c->t->s, id, *t, n) == n ? n : -1;   /* replaced in between: -1, ask again */
 }
 
 /* hybrid search into w->ids / w->sc: the vector when hv, the words t[0, tn) when tn > 0 */
-static i32 vs_hybrid_(VsWorker *w, i32 hv, const char *t, i32 tn, i32 k)
+static i32 vs_hybrid_(VsWorker *w, VsConn *c, i32 hv, const char *t, i32 tn, i32 k)
 {
-    return store_search_hybrid(vs_store, hv ? w->vec : (const f32 *)0, t, tn, k, w->ids, w->sc);
+    return store_search_hybrid(c->t->s, hv ? w->vec : (const f32 *)0, t, tn, k, w->ids, w->sc);
 }
 
 /* ---- binary protocol: little-endian frames, nothing to parse ----
  *   request  u8 0xB5 | u8 op | u16 k | u32 nbytes | payload[nbytes]
  *   response u8 0xB5 | u8 status | u16 count | u32 nbytes | payload[nbytes]
- *   status 0 ok, 1 refused or failed, 2 bad request, 3 unknown op, 4 busy
+ *   status 0 ok, 1 refused or failed, 2 bad request, 3 unknown op, 4 busy, 5 no tenant chosen (a tenant server)
  *   op 1 search        payload: dim x f32            reply: count x { i64 id, f32 score }
  *   op 2 add           payload: i64 id, dim x f32    (replaces a row with the same id)
  *   op 3 delete        payload: i64 id               reply count: rows removed
@@ -82,7 +82,9 @@ static i32 vs_hybrid_(VsWorker *w, i32 hv, const char *t, i32 tn, i32 k)
  *   op 11 get the text     payload: i64 id           reply: the text's bytes (status 1: no row)
  *   op 12 range            payload: i64 lo, i64 hi   reply: count x i64, the ids in [lo, hi] ascending (k at most)
  *   op 13 hybrid search    payload: u32 1 (a vector follows) or 0, [dim x f32], then the words' bytes
- *                          reply: count x { i64 id, f32 fused score } */
+ *                          reply: count x { i64 id, f32 fused score }
+ *   op 14 use a tenant     payload: its name (a tenant server; opened or created) - the connection's later requests
+ *                          go to its store. status 1 with the reason as the payload when refused */
 
 /* a reply whose payload sits elsewhere (a text): the header, then the payload as it is */
 static void vs_bin_reply_at_(VsWorker *w, VsConn *c, u8 status, u16 count, const char *payload, u32 nbytes)
@@ -129,6 +131,13 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
     if (nb > (u32)vs_reqmax - 8) { vs_log_(c, 1, "binary frame of %lu bytes refused", (unsigned long)nb); return -1; }
     if ((u32)c->len < 8 + nb) return 0;
     b += 8;
+    if (op == 14) {                                              /* use a tenant: the payload is its name */
+        const char *why = nb <= VS_TNAME ? vs_use_(c, (const char *)b, (i32)nb) : "a tenant's name is 1 to 64 of A-Z a-z 0-9 _ -";
+        if (why) vs_bin_reply_(w, c, 1, 0, why, (u32)strlen(why));
+        else vs_bin_reply_(w, c, 0, 0, (const char *)0, 0);
+        return (i32)(8 + nb);
+    }
+    if (!c->t) { vs_bin_reply_(w, c, 5, 0, (const char *)0, 0); return (i32)(8 + nb); }   /* a tenant server: none chosen */
     switch (op) {
     case 1: {
         double t0 = vs_now_();
@@ -136,7 +145,7 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
         vs_getf_(w->vec, b, vs_dim);
         if (k < 1) k = 10;
         if (k > VS_MAXK) k = VS_MAXK;
-        got = vs_search_(w, w->vec, k);
+        got = vs_search_(w, c, w->vec, k);
         {   char *o = w->out + 8;
             for (i = 0; i < got; ++i) { vs_put64_(o, w->ids[i]); vs_put32_(o + 8, vs_fbits_(w->sc[i])); o += 12; }
             vs_bin_reply_(w, c, 0, (u16)got, w->out + 8, (u32)got * 12u); }
@@ -156,14 +165,14 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
     case 5: vs_bin_reply_(w, c, (u8)(vs_save_(c) == 0 ? 0 : 1), 0, (const char *)0, 0); break;
     case 6: {
         i64 v[4]; char p[32];
-        vs_stats_(v);
+        vs_stats_(c, v);
         for (i = 0; i < 4; ++i) vs_put64_(p + 8 * i, v[i]);
         vs_bin_reply_(w, c, 0, 4, p, sizeof(p));
         break; }
     case 7: { i32 r = vs_snapshot_(c); vs_bin_reply_(w, c, (u8)(r == 0 ? 0 : (r == 1 ? 4 : 1)), 0, (const char *)0, 0); } break;
     case 8:
         if (nb != 8) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
-        if (store_get_vec(vs_store, vs_le64_(b), w->vec) != 0) { vs_bin_reply_(w, c, 1, 0, (const char *)0, 0); break; }
+        if (store_get_vec(c->t->s, vs_le64_(b), w->vec) != 0) { vs_bin_reply_(w, c, 1, 0, (const char *)0, 0); break; }
         {   char *o = w->out + 8;
             for (i = 0; i < vs_dim; ++i) vs_put32_(o + 4 * i, vs_fbits_(w->vec[i]));
             vs_bin_reply_(w, c, 0, 0, o, (u32)vs_dim * 4u); }
@@ -183,7 +192,7 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
     case 11:
         if (nb != 8) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
         {   char *t;
-            i32 n = vs_get_text_(w, vs_le64_(b), &t);
+            i32 n = vs_get_text_(w, c, vs_le64_(b), &t);
             if (n < 0) vs_bin_reply_(w, c, 1, 0, (const char *)0, 0);
             else vs_bin_reply_at_(w, c, 0, 0, t, (u32)n); }
         break;
@@ -191,7 +200,7 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
         if (nb != 16) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
         if (k < 1) k = 100;
         if (k > VS_MAXK) k = VS_MAXK;
-        got = store_range(vs_store, vs_le64_(b), vs_le64_(b + 8), w->ids, k);
+        got = store_range(c->t->s, vs_le64_(b), vs_le64_(b + 8), w->ids, k);
         if (got < 0) { vs_bin_reply_(w, c, 1, 0, (const char *)0, 0); break; }
         {   char *o = w->out + 8;
             for (i = 0; i < got; ++i) vs_put64_(o + 8 * i, w->ids[i]);
@@ -204,7 +213,7 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
         if (hv) vs_getf_(w->vec, b + 4, vs_dim);
         if (k < 1) k = 10;
         if (k > VS_MAXK) k = VS_MAXK;
-        got = vs_hybrid_(w, (i32)hv, (const char *)b + at, (i32)(nb - at), k);
+        got = vs_hybrid_(w, c, (i32)hv, (const char *)b + at, (i32)(nb - at), k);
         {   char *o = w->out + 8;
             for (i = 0; i < got; ++i) { vs_put64_(o, w->ids[i]); vs_put32_(o + 8, vs_fbits_(w->sc[i])); o += 12; }
             vs_bin_reply_(w, c, 0, (u16)got, w->out + 8, (u32)got * 12u); }
@@ -219,6 +228,8 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
  * A request is words separated by spaces or tabs, ending in \n (or \r\n); the reply is one line, "ok ..." or
  * "err ...", so any language - or nc, socat, a shell - can speak it with a readline:
  *   ping                      ok pong
+ *   use NAME                  ok                           (a tenant server: later lines go to NAME's store, opened or
+ *                                                           created; until then only ping, help and quit answer)
  *   stats                     ok count=N dim=D pending=P built=0|1 snapshot=idle|running last=ok|failed|none
  *                                hot=BYTES cold=BYTES memory=0|1|2   (store_tiers; -m sets the memory tier)
  *   search K X1 .. XD         ok N ID SCORE ID SCORE ...   (N <= K hits, best first; SCORE = -|q - v|^2)
@@ -307,12 +318,21 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
 #define VS_CMD(word) (!strncmp(b, word, sizeof(word) - 1) && (b[sizeof(word) - 1] == 0 || b[sizeof(word) - 1] == ' ' || b[sizeof(word) - 1] == '\t'))
     a = b;
     while (*a && *a != ' ' && *a != '\t') ++a;                   /* a: just past the command */
-    if (VS_CMD("search")) {
+    if (VS_CMD("use")) {                                         /* a tenant server: the store later lines go to */
+        const char *e, *f, *why;
+        while (*a == ' ' || *a == '\t') ++a;
+        for (e = a; *e && *e != ' ' && *e != '\t'; ++e) {}
+        for (f = e; *f == ' ' || *f == '\t'; ++f) {}
+        why = e == a || *f ? "usage: use NAME" : vs_use_(c, a, (i32)(e - a));
+        if (why) VS_LINE_ERR(why);
+        else vs_line_reply_(w, c, o, vs_str_(o, "ok"));
+    } else if (!c->t && !VS_CMD("ping") && !VS_CMD("help") && !VS_CMD("quit")) VS_LINE_ERR("no tenant: use NAME first");
+    else if (VS_CMD("search")) {
         double t0 = vs_now_();
         if (!(a = vs_wint_(a, &x)) || vs_wvec_(w, a) != 0) VS_LINE_ERR("usage: search K X1 .. XD (D numbers)");
         else {
             i32 k = x < 1 ? 1 : (x > VS_MAXK ? VS_MAXK : (i32)x);
-            got = vs_search_(w, w->vec, k);
+            got = vs_search_(w, c, w->vec, k);
             p = vs_str_(o, "ok "); p = vs_i64_(p, got);
             for (i = 0; i < got; ++i) { *p++ = ' '; p = vs_i64_(p, w->ids[i]); *p++ = ' '; p = vs_f32_(p, w->sc[i]); }
             vs_line_reply_(w, c, o, p);
@@ -324,7 +344,7 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         else vs_line_reply_(w, c, o, vs_str_(o, "ok"));
     } else if (VS_CMD("get")) {
         if (!(a = vs_wint_(a, &x)) || *vs_word_(a)) VS_LINE_ERR("usage: get ID");
-        else if (store_get_vec(vs_store, x, w->vec) != 0) VS_LINE_ERR("no such id");
+        else if (store_get_vec(c->t->s, x, w->vec) != 0) VS_LINE_ERR("no such id");
         else {
             p = vs_str_(o, "ok");
             for (i = 0; i < vs_dim; ++i) { *p++ = ' '; p = vs_f32_(p, w->vec[i]); }
@@ -338,16 +358,16 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
     } else if (VS_CMD("stats")) {
         i64 v[4], us;
         i32 run, last;
-        vs_stats_(v);
-        store_snapshot_info(vs_store, &run, &last, &us);
+        vs_stats_(c, v);
+        store_snapshot_info(c->t->s, &run, &last, &us);
         p = vs_str_(o, "ok count="); p = vs_i64_(p, v[0]); p = vs_str_(p, " dim="); p = vs_i64_(p, v[1]);
         p = vs_str_(p, " pending="); p = vs_i64_(p, v[2]); p = vs_str_(p, " built="); p = vs_i64_(p, v[3]);
         p = vs_str_(p, run ? " snapshot=running" : " snapshot=idle");
         p = vs_str_(p, last == 0 ? " last=ok" : (last == -1 ? " last=failed" : " last=none"));
         {   i64 hot, cold;
-            store_tiers(vs_store, &hot, &cold);
+            store_tiers(c->t->s, &hot, &cold);
             p = vs_str_(p, " hot="); p = vs_i64_(p, hot); p = vs_str_(p, " cold="); p = vs_i64_(p, cold);
-            p = vs_str_(p, " memory="); p = vs_i64_(p, (i64)vs_store->mem_tier); }
+            p = vs_str_(p, " memory="); p = vs_i64_(p, (i64)c->t->s->mem_tier); }
         vs_line_reply_(w, c, o, p);
     } else if (VS_CMD("build")) { vs_build_(c); vs_line_reply_(w, c, o, vs_str_(o, "ok")); }
     else if (VS_CMD("save")) { if (vs_save_(c) == 0) vs_line_reply_(w, c, o, vs_str_(o, "ok")); else VS_LINE_ERR("save failed"); }
@@ -367,7 +387,7 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         char *t, *r;
         i32 n;
         if (!(a = vs_wint_(a, &x)) || *vs_word_(a)) VS_LINE_ERR("usage: text ID");
-        else if ((n = vs_get_text_(w, x, &t)) < 0) VS_LINE_ERR(n == -1 ? "no such id" : "out of memory");
+        else if ((n = vs_get_text_(w, c, x, &t)) < 0) VS_LINE_ERR(n == -1 ? "no such id" : "out of memory");
         else if (!(r = (char *)malloc((size_t)n * 2 + 32))) VS_LINE_ERR("out of memory");
         else {
             p = vs_str_(r, "ok "); p = vs_i64_(p, n); *p++ = ' ';
@@ -379,7 +399,7 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         i64 mx = 100;
         if (!(a = vs_wint_(a, &x)) || !(a = vs_wint_(a, &y)) || y < x || (*vs_word_(a) && (!(a = vs_wint_(a, &mx)) || *vs_word_(a) || mx < 1)))
             VS_LINE_ERR("usage: range LO HI [MAX]");
-        else if ((got = store_range(vs_store, x, y, w->ids, (i32)(mx > VS_MAXK ? VS_MAXK : mx))) < 0) VS_LINE_ERR("out of memory");
+        else if ((got = store_range(c->t->s, x, y, w->ids, (i32)(mx > VS_MAXK ? VS_MAXK : mx))) < 0) VS_LINE_ERR("out of memory");
         else {
             p = vs_str_(o, "ok "); p = vs_i64_(p, got);
             for (i = 0; i < got; ++i) { *p++ = ' '; p = vs_i64_(p, w->ids[i]); }
@@ -393,12 +413,12 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         else {
             t = vs_word_(a);
             k = x < 1 ? 1 : (x > VS_MAXK ? VS_MAXK : (i32)x);
-            got = vs_hybrid_(w, hv, t, (i32)(nl - t), k);
+            got = vs_hybrid_(w, c, hv, t, (i32)(nl - t), k);
             vs_line_hits_(w, c, got);
             vs_logsearch_(c, k, got, t0);
         }
     } else if (VS_CMD("ping")) vs_line_reply_(w, c, o, vs_str_(o, "ok pong"));
-    else if (VS_CMD("help")) vs_line_reply_(w, c, o, vs_str_(o, "ok ping stats search add addt get text range hybrid words del build save snapshot help quit"));
+    else if (VS_CMD("help")) vs_line_reply_(w, c, o, vs_str_(o, "ok ping use stats search add addt get text range hybrid words del build save snapshot help quit"));
     else if (VS_CMD("quit")) { vs_line_reply_(w, c, o, vs_str_(o, "ok bye")); c->closing = 1; }
     else { VS_LINE_ERR("unknown command (help lists them)"); vs_log_(c, 1, "unknown line command"); }
 #undef VS_CMD
@@ -552,20 +572,34 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
 
 #define VS_IS(m, path) (mlen == (i32)strlen(m) && !memcmp(b, m, (size_t)mlen) && tn >= (i32)strlen(path) \
                         && !memcmp(t, path, strlen(path)) && (tn == (i32)strlen(path) || t[strlen(path)] == '?'))
+    if (vs_dir && !VS_IS("GET", "/health")) {                    /* a tenant server: /t/NAME/search?k=10 and so on */
+        const char *why = "no tenant: the path starts /t/NAME/";
+        i32 e = 3;
+        if (tn > 3 && !memcmp(t, "/t/", 3)) {
+            while (e < tn && t[e] != '/' && t[e] != '?') ++e;
+            why = vs_use_(c, t + 3, e - 3);
+        }
+        if (why) {
+            char *p = vs_str_(o, "{\"error\":\""); p = vs_str_(p, why); p = vs_str_(p, "\"}");
+            vs_http_reply_(w, c, e == 3 ? "400 Bad Request" : "403 Forbidden", o, (i32)(p - o), keep);
+            return he + clen;
+        }
+        t += e; tn -= e;                                         /* the rest routes as on a server of one store */
+    }
     if (VS_IS("GET", "/health")) {
         VS_HTTP_LIT(w, c, "200 OK", "{\"ok\":true}", keep);
     } else if (VS_IS("GET", "/stats")) {
         i64 v[4], us, hot, cold; i32 run, last; char *p = o;
-        vs_stats_(v);
-        store_snapshot_info(vs_store, &run, &last, &us);
-        store_tiers(vs_store, &hot, &cold);
+        vs_stats_(c, v);
+        store_snapshot_info(c->t->s, &run, &last, &us);
+        store_tiers(c->t->s, &hot, &cold);
         p = vs_str_(p, "{\"count\":"); p = vs_i64_(p, v[0]); p = vs_str_(p, ",\"dim\":"); p = vs_i64_(p, v[1]);
         p = vs_str_(p, ",\"pending\":"); p = vs_i64_(p, v[2]); p = vs_str_(p, ",\"built\":"); p = vs_str_(p, v[3] ? "true" : "false");
         p = vs_str_(p, ",\"snapshot\":"); p = vs_str_(p, run ? "\"running\"" : "\"idle\"");
         p = vs_str_(p, ",\"last_snapshot\":"); p = vs_str_(p, last == 0 ? "\"ok\"" : (last == -1 ? "\"failed\"" : "\"none\""));
         p = vs_str_(p, ",\"last_snapshot_ms\":"); p = vs_i64_(p, us / 1000);
         p = vs_str_(p, ",\"hot\":"); p = vs_i64_(p, hot); p = vs_str_(p, ",\"cold\":"); p = vs_i64_(p, cold);
-        p = vs_str_(p, ",\"memory\":"); p = vs_i64_(p, (i64)vs_store->mem_tier); *p++ = '}';
+        p = vs_str_(p, ",\"memory\":"); p = vs_i64_(p, (i64)c->t->s->mem_tier); *p++ = '}';
         vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
     } else if (VS_IS("POST", "/search")) {
         char *p = o;
@@ -577,7 +611,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
             k = (i32)vs_qparam_(t, tn, "k", 10);
             if (k < 1) k = 1;
             if (k > VS_MAXK) k = VS_MAXK;
-            got = vs_search_(w, w->vec, k);
+            got = vs_search_(w, c, w->vec, k);
             p = vs_str_(p, "{\"ids\":[");
             for (i = 0; i < got; ++i) { if (i) *p++ = ','; p = vs_i64_(p, w->ids[i]); }
             p = vs_str_(p, "],\"scores\":[");
@@ -602,7 +636,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         }
     } else if (VS_IS("GET", "/text")) {
         char *tx, *r, *p;
-        i32 n = vs_get_text_(w, vs_qparam_(t, tn, "id", -1), &tx);
+        i32 n = vs_get_text_(w, c, vs_qparam_(t, tn, "id", -1), &tx);
         if (n == -1) VS_HTTP_LIT(w, c, "404 Not Found", "{\"error\":\"no such id\"}", keep);
         else if (n < 0 || !(r = (char *)malloc((size_t)n * 6 + 16))) VS_HTTP_LIT(w, c, "500 Internal Server Error", "{\"error\":\"out of memory\"}", keep);
         else {
@@ -613,7 +647,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
     } else if (VS_IS("GET", "/range")) {
         char *p = o;
         i64 mx = vs_qparam_(t, tn, "max", 100);
-        got = store_range(vs_store, vs_qparam_(t, tn, "lo", 0), vs_qparam_(t, tn, "hi", -1), w->ids, (i32)(mx < 1 ? 1 : (mx > VS_MAXK ? VS_MAXK : mx)));
+        got = store_range(c->t->s, vs_qparam_(t, tn, "lo", 0), vs_qparam_(t, tn, "hi", -1), w->ids, (i32)(mx < 1 ? 1 : (mx > VS_MAXK ? VS_MAXK : mx)));
         if (got < 0) VS_HTTP_LIT(w, c, "500 Internal Server Error", "{\"error\":\"out of memory\"}", keep);
         else {
             p = vs_str_(p, "{\"ids\":[");
@@ -631,7 +665,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
             k = (i32)vs_qparam_(t, tn, "k", 10);
             if (k < 1) k = 1;
             if (k > VS_MAXK) k = VS_MAXK;
-            got = vs_hybrid_(w, hv, w->txt, txl > 0 ? txl : 0, k);
+            got = vs_hybrid_(w, c, hv, w->txt, txl > 0 ? txl : 0, k);
             p = vs_str_(p, "{\"ids\":[");
             for (i = 0; i < got; ++i) { if (i) *p++ = ','; p = vs_i64_(p, w->ids[i]); }
             p = vs_str_(p, "],\"scores\":[");
@@ -642,7 +676,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         }
     } else if (VS_IS("GET", "/get")) {
         char *p = o;
-        if (store_get_vec(vs_store, vs_qparam_(t, tn, "id", -1), w->vec) != 0)
+        if (store_get_vec(c->t->s, vs_qparam_(t, tn, "id", -1), w->vec) != 0)
             VS_HTTP_LIT(w, c, "404 Not Found", "{\"error\":\"no such id\"}", keep);
         else {
             p = vs_str_(p, "{\"vector\":[");

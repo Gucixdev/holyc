@@ -19,7 +19,7 @@ static char *vs_txt_(VsWorker *w, i32 need)
 /* upsert with a text (every protocol's add with a text) */
 static i32 vs_put_text_(VsConn *c, const f32 *v, i64 id, const char *t, i32 n)
 {
-    i32 r = store_put_text(vs_store, v, id, 0, t, n);
+    i32 r = store_put_text(c->t->s, v, id, 0, t, n);
     if (vs_logging_()) vs_log_(c, r != 0, "add id=%ld text=%d %s", (long)id, n, r == 0 ? "ok" : "refused (NaN, Inf or too long)");
     return r;
 }
