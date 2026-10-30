@@ -473,15 +473,15 @@ i32 mem_cold_open(Mem *m, const char *path)
 static i32 mem_cold_count_(Mem *m)
 {
     i32 n = 0;
-    long size, pos = 0;
+    i64 size, pos = 0;
     if (!m->cf) return 0;
-    if (fseek(m->cf, 0, SEEK_END) != 0 || (size = ftell(m->cf)) < 0) return 0;
+    if (fseeko(m->cf, 0, SEEK_END) != 0 || (size = (i64)ftello(m->cf)) < 0) return 0;
     for (;;) {
         i32 hdr[6];
-        long body;
-        if (fseek(m->cf, pos, SEEK_SET) != 0 || fread(hdr, 4, 6, m->cf) != 6) break;   /* kind,nl,tl,nprov,corrob,contra */
+        i64 body;
+        if (fseeko(m->cf, (off_t)pos, SEEK_SET) != 0 || fread(hdr, 4, 6, m->cf) != 6) break;   /* kind,nl,tl,nprov,corrob,contra */
         if (hdr[1] < 0 || hdr[2] < 0 || hdr[3] < 0) break;
-        body = (long)hdr[1] + (long)hdr[2] + (long)hdr[3] * 4;
+        body = (i64)hdr[1] + (i64)hdr[2] + (i64)hdr[3] * 4;
         if (body > size - pos - 24) break;                                              /* header without its full body */
         pos += 24 + body;
         ++n;
@@ -520,7 +520,7 @@ i32 mem_archive(Mem *m, i32 vid)
     title = m->db->nodes[vid].name; nl = (i32)strlen(title);
     text = vecdb_text(m->db, vid); tl = text ? (i32)strlen(text) : 0;
     cid = mem_cold_count_(m);
-    fseek(m->cf, 0, SEEK_END);
+    fseeko(m->cf, 0, SEEK_END);
     { i32 hdr[6]; hdr[0] = (i32)e->kind; hdr[1] = nl; hdr[2] = tl; hdr[3] = e->nprov; hdr[4] = e->corroboration; hdr[5] = e->contradiction;
       fwrite(hdr, 4, 6, m->cf); }
     fwrite(title, 1, (size_t)nl, m->cf);
@@ -551,7 +551,7 @@ i32 mem_recall(Mem *m, i32 cold_id)
     pthread_rwlock_wrlock(&m->lk);                                /* the whole scan: it shares m->cf's file position with mem_archive,
                                                                     * and m->cf itself is read under the lock too (mem_cold_open) */
     if (!m->cf) { pthread_rwlock_unlock(&m->lk); return -1; }
-    fseek(m->cf, 0, SEEK_SET);
+    fseeko(m->cf, 0, SEEK_SET);
     for (i = 0; ; ++i) {
         i32 hdr[6]; char *title, *text; i32 *prov;
         if (fread(hdr, 4, 6, m->cf) != 6) { pthread_rwlock_unlock(&m->lk); return -1; }

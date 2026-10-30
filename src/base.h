@@ -377,7 +377,7 @@ i32 bit_lsb_index64(u64 x)
 {
     i32 not_zero = (x != 0);
     u64 safe_x = x | (u64)(!not_zero); /* avoid UB from ctzll(0) below */
-    return (i32)(__builtin_ctzl((unsigned long)safe_x)) * not_zero + (-1) * (1 - not_zero);
+    return (i32)(__builtin_ctzll(safe_x)) * not_zero + (-1) * (1 - not_zero);     /* ll: long is 32-bit on 32-bit CPUs */
 }
 
 u8 bit_reverse8(u8 x)
@@ -471,7 +471,7 @@ i32 popcount32(u32 x)
 
 i32 popcount64(u64 x)
 {
-    return __builtin_popcountl((unsigned long)x);
+    return __builtin_popcountll(x);                     /* ll: long is 32-bit on 32-bit CPUs */
 }
 
 i32 clz32(u32 x)

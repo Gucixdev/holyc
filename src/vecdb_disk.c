@@ -158,7 +158,7 @@ VecDB *vecdb_load_with(Arena *a, const char *path, void (*embed)(void *, const c
     u8 *kinds = (u8 *)0, *spaces = (u8 *)0;
     i64 *toff = (i64 *)0; i32 *tlen = (i32 *)0;
     RagStore *st;
-    long tsize;
+    i64 tsize;
     u64 bodygen = 0;
 
     vdb_err_[0] = 0;
@@ -192,7 +192,7 @@ VecDB *vecdb_load_with(Arena *a, const char *path, void (*embed)(void *, const c
     tp = vdb_ext_gen_(path, ".vdt", bodygen); vp = vdb_ext_gen_(path, ".vxi", bodygen);
     if (db->tf) fclose(db->tf);
     db->tf = fopen(tp, "r+b"); db->tpath = tp;
-    if (db->tf) { fseek(db->tf, 0, SEEK_END); tsize = ftell(db->tf); db->tend = tsize; }
+    if (db->tf) { fseeko(db->tf, 0, SEEK_END); tsize = (i64)ftello(db->tf); db->tend = tsize; }
 
     /* recreate the nodes in their original order so ids (= store doc ids) stay valid */
     for (i = 0; i < nn; ++i) {

@@ -65,7 +65,7 @@ i32 mem_load(Mem *m, const char *path)
             MemMeta *e = mem_new_meta_(m, vid, (MemKind)kind);
             e->born_at = born; e->last_touch = touch; e->access_count = ac; e->corroboration = cor; e->contradiction = con;
             if (nprov > 0) { e->prov = (i32 *)malloc((size_t)nprov * sizeof(i32)); if (fread(e->prov, 4, (size_t)nprov, f) != (size_t)nprov) { fclose(f); return -1; } e->nprov = e->provcap = nprov; }
-        } else if (nprov > 0) { fseek(f, (long)nprov * 4, SEEK_CUR); }
+        } else if (nprov > 0) { fseeko(f, (off_t)nprov * 4, SEEK_CUR); }
     }
     fclose(f);
     return 0;

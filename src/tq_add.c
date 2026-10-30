@@ -163,7 +163,7 @@ void tq_fit0(Tq *t, const TqCol *rows)
 static i32 tq_pop64_(u64 x)
 {
 #if defined(__GNUC__)
-    return __builtin_popcountl((unsigned long)x);
+    return __builtin_popcountll(x);                     /* ll: long is 32-bit on 32-bit CPUs */
 #else
     i32 c = 0;
     for (; x; x &= x - 1u) ++c;

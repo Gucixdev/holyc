@@ -500,7 +500,7 @@ i32 vecdb_embed_cache_open(VecDB *db, const char *path, const char *tag)
             h64_put(&c->map, (i64)h, c->n++);
         }
         free(buf);
-        fseek(c->f, (long)(16 + (size_t)c->n * rec), SEEK_SET);
+        fseeko(c->f, (off_t)(16 + (size_t)c->n * rec), SEEK_SET);
     } else {                                                     /* new file, or another model: start empty */
         if (c->f) fclose(c->f);
         c->f = fopen(path, "w+b");
@@ -521,7 +521,7 @@ static i32 vdb_ec_get_(VECache *c, u64 h, f32 *out)
     pthread_mutex_lock(&c->mu);
     row = h64_get(&c->map, (i64)h);
     if (row < 0) { pthread_mutex_unlock(&c->mu); return 0; }
-    fseek(c->f, (long)(16 + (size_t)row * rec + 8), SEEK_SET);
+    fseeko(c->f, (off_t)(16 + (size_t)row * rec + 8), SEEK_SET);
     ok = fread(out, sizeof(f32), (size_t)c->dim, c->f) == (size_t)c->dim;
     pthread_mutex_unlock(&c->mu);
     return ok;
@@ -534,7 +534,7 @@ static void vdb_ec_put_(VECache *c, u64 h, const f32 *vec)
     if (vdb_zero_(vec, c->dim)) return;
     pthread_mutex_lock(&c->mu);
     if (h64_get(&c->map, (i64)h) < 0) {
-        fseek(c->f, 0, SEEK_END);
+        fseeko(c->f, 0, SEEK_END);
         fwrite(&h, 8, 1, c->f); fwrite(vec, sizeof(f32), (size_t)c->dim, c->f);
         h64_put(&c->map, (i64)h, c->n++);
     }
@@ -654,7 +654,7 @@ static void vdb_text_put_(VecDB *db, VNode *v, const char *t, i32 n)
 {
     if (!db->tf) { v->tlen = -1; return; }
     pthread_mutex_lock(&db->tf_mu);
-    fseek(db->tf, 0, SEEK_END);
+    fseeko(db->tf, 0, SEEK_END);
     v->toff = db->tend;
     if (n > 0 && fwrite(t, 1, (size_t)n, db->tf) != (size_t)n) { v->tlen = -1; pthread_mutex_unlock(&db->tf_mu); return; }
     v->tlen = n; db->tend += n;
@@ -671,7 +671,7 @@ static char *vdbl_text(const VecDB *db, i32 id)
     if (v->tlen < 0) return (char *)0;
     b = (char *)malloc((size_t)v->tlen + 1);
     pthread_mutex_lock(&((VecDB *)db)->tf_mu);
-    fseek(db->tf, (long)v->toff, SEEK_SET);
+    fseeko(db->tf, (off_t)v->toff, SEEK_SET);
     if (v->tlen > 0 && fread(b, 1, (size_t)v->tlen, db->tf) != (size_t)v->tlen) { pthread_mutex_unlock(&((VecDB *)db)->tf_mu); free(b); return (char *)0; }
     pthread_mutex_unlock(&((VecDB *)db)->tf_mu);
     b[v->tlen] = 0;
