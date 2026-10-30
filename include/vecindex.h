@@ -59,6 +59,17 @@ VI_API vi_db *vi_open(const char *path, int dim, int flags);
  * rewrite the file: the next vi_open replays the journal. */
 VI_API void vi_close(vi_db *db);
 
+/* Tenants without a server: a directory with a store per tenant, path/NAME.vxi. vi_dir_get opens a tenant's store
+ * on its first use (vi_open: created with dim dimensions and flags when it does not exist yet) and returns the same
+ * handle after; NULL for a bad name or a store that cannot be opened. Names are 1 to 64 of A-Z a-z 0-9 _ -, so a
+ * name never leaves the directory. Safe from many threads. vi_dir_close closes every store it opened, and their
+ * handles with them. vi_dir_open returns NULL when path is not a directory. On a 32-bit CPU each open store reserves
+ * 256 MB of address space, so about ten fit at once there. */
+typedef struct vi_dir vi_dir;
+VI_API vi_dir *vi_dir_open(const char *path, int dim, int flags);
+VI_API vi_db *vi_dir_get(vi_dir *d, const char *name);
+VI_API void vi_dir_close(vi_dir *d);
+
 /* Dimensions; live rows (added and not deleted). */
 VI_API int vi_dim(const vi_db *db);
 VI_API vi_i64 vi_count(vi_db *db);

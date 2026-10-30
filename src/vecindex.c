@@ -59,6 +59,64 @@ VI_API void vi_close(vi_db *db)
     free(db);
 }
 
+/* ---- tenants without a server: a directory of stores, opened on first use ---- */
+
+typedef struct vi_ten { char name[65]; vi_db *db; struct vi_ten *next; } vi_ten;
+struct vi_dir {
+    char *path;
+    int dim, flags;
+    pthread_mutex_t mu;         /* the list, and opening a store into it */
+    vi_ten *head;
+};
+
+VI_API vi_dir *vi_dir_open(const char *path, int dim, int flags)
+{
+    struct stat st;
+    vi_dir *d;
+    if (!path || stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) return (vi_dir *)0;
+    d = (vi_dir *)calloc(1, sizeof(vi_dir));
+    if (!d || !(d->path = vi_strdup_(path))) { free(d); return (vi_dir *)0; }
+    d->dim = dim; d->flags = flags;
+    pthread_mutex_init(&d->mu, (const pthread_mutexattr_t *)0);
+    return d;
+}
+
+VI_API vi_db *vi_dir_get(vi_dir *d, const char *name)
+{
+    vi_ten *t;
+    size_t n = name ? strlen(name) : 0, i;
+    if (n < 1 || n > 64) return (vi_db *)0;
+    for (i = 0; i < n; ++i) {
+        char ch = name[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-')) return (vi_db *)0;
+    }
+    pthread_mutex_lock(&d->mu);
+    for (t = d->head; t; t = t->next) if (!strcmp(t->name, name)) break;
+    if (!t) {                                                    /* first use: open it, or create it there */
+        char *p = (char *)malloc(strlen(d->path) + n + 6);
+        t = (vi_ten *)calloc(1, sizeof(vi_ten));
+        if (p && t) {
+            sprintf(p, "%s/%s.vxi", d->path, name);
+            t->db = vi_open(p, d->dim, d->flags);
+        }
+        free(p);
+        if (t && t->db) { memcpy(t->name, name, n + 1); t->next = d->head; d->head = t; }
+        else { free(t); t = (vi_ten *)0; }
+    }
+    pthread_mutex_unlock(&d->mu);
+    return t ? t->db : (vi_db *)0;
+}
+
+VI_API void vi_dir_close(vi_dir *d)
+{
+    vi_ten *t, *nx;
+    if (!d) return;
+    for (t = d->head; t; t = nx) { nx = t->next; vi_close(t->db); free(t); }
+    pthread_mutex_destroy(&d->mu);
+    free(d->path);
+    free(d);
+}
+
 VI_API int vi_dim(const vi_db *db) { return db->s->dim; }
 
 VI_API vi_i64 vi_count(vi_db *db) { return (vi_i64)store_count(db->s); }

@@ -27,6 +27,7 @@ from any thread on the same handle at once.
 | `vi_add_text(db, id, vec, text, len)` | `vi_add` with a text kept beside the row (any bytes, up to 16 MB - 1; `len` -1: a C string) |
 | `vi_get_text(db, id, buf, cap)` | the row's text: its length, the first `cap` bytes copied into `buf` |
 | `vi_range(db, lo, hi, ids, max)` | the ids in `[lo, hi]` that have a row, ascending: the chunks of a document |
+| `vi_dir_open(path, dim, flags)`, `vi_dir_get(dir, name)`, `vi_dir_close(dir)` | tenants without a server: a directory with a store per tenant (`path/NAME.vxi`), each opened - or created - on its first `vi_dir_get` and handed back after; names are 1 to 64 of `A-Z a-z 0-9 _ -` |
 | `vi_batch_begin(db)`, `vi_batch_add(b, id, vec)`, `vi_batch_add_text(b, id, vec, text, len)`, `vi_batch_delete(b, id)`, `vi_batch_delete_range(b, lo, hi)` | a write batch: its changes are copied in as they are added and wait |
 | `vi_batch_commit(b, sync)`, `vi_batch_abort(b)` | applies the batch as one change - searches see none of it before and all of it after, and a crash leaves all or none of it (one journal record with a CRC-32C) - and frees it; `sync` 1: on the disk before it returns. The number of changes, -1 refused with nothing applied (a NaN, a bad text, no memory), -2 applied but the fsync failed |
 | `vi_search_hybrid(db, q, text, tlen, k, ids, scores)` | the vector and the words (BM25 over the texts), fused by rank; either side may be left out |
