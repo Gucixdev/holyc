@@ -27,6 +27,8 @@ from any thread on the same handle at once.
 | `vi_add_text(db, id, vec, text, len)` | `vi_add` with a text kept beside the row (any bytes, up to 16 MB - 1; `len` -1: a C string) |
 | `vi_get_text(db, id, buf, cap)` | the row's text: its length, the first `cap` bytes copied into `buf` |
 | `vi_range(db, lo, hi, ids, max)` | the ids in `[lo, hi]` that have a row, ascending: the chunks of a document |
+| `vi_batch_begin(db)`, `vi_batch_add(b, id, vec)`, `vi_batch_add_text(b, id, vec, text, len)`, `vi_batch_delete(b, id)`, `vi_batch_delete_range(b, lo, hi)` | a write batch: its changes are copied in as they are added and wait |
+| `vi_batch_commit(b, sync)`, `vi_batch_abort(b)` | applies the batch as one change - searches see none of it before and all of it after, and a crash leaves all or none of it (one journal record with a CRC-32C) - and frees it; `sync` 1: on the disk before it returns. The number of changes, -1 refused with nothing applied (a NaN, a bad text, no memory), -2 applied but the fsync failed |
 | `vi_search_hybrid(db, q, text, tlen, k, ids, scores)` | the vector and the words (BM25 over the texts), fused by rank; either side may be left out |
 | `vi_set_tag`, `vi_get_tag` | a 64-bit tag per row |
 | `vi_search(db, q, k, ids, scores)` | the k nearest rows, best first |
@@ -236,6 +238,23 @@ answering searches and taking writes; the writes made meanwhile go to the old jo
 two journals belong together: both carry the same 64-bit stamp. `tests/scrash.c` kills a writer with snapshots running
 at random moments, in every other round together with its snapshot child, and checks that every synced row is there
 exactly once.
+
+Every single write is atomic: one journal record, and a replacement removes the old row and adds the new one in that
+same record, so a crash leaves one or the other. Several writes are atomic together in a batch: replacing a document
+is deleting its range of ids and adding its new chunks, and
+
+```c
+vi_batch *b = vi_batch_begin(db);
+vi_batch_delete_range(b, doc << 20, (doc << 20) | 0xfffff);
+for (i = 0; i < nchunks; ++i) vi_batch_add_text(b, (doc << 20) | i, vec[i], text[i], -1);
+if (vi_batch_commit(b, 1) < 0) { /* -1: nothing changed; -2: changed, the fsync failed */ }
+```
+
+makes searches see the old document or the new one, never a mix, and leaves the same after a crash: the batch is one
+journal record (its length, a CRC-32C, the records), and replaying the journal applies it only when all of it is there
+and the CRC matches. Without `sync` the batch is on the disk at the next `vi_sync` (the server flushes every second);
+with it, `vi_batch_commit` returns once an fsync covers it, and commits that arrive while an fsync runs share the
+next one. A journal with batches in it needs this version of vecindex or a later one to be replayed.
 
 A snapshot costs memory for the pages the parent changes while the child writes, up to a second copy of whatever is
 rewritten meanwhile. Under strict overcommit (`vm.overcommit_memory=2`) `fork` can fail for a store larger than the

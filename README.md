@@ -127,6 +127,7 @@ measured: the older rows on a GTX 1050 Ti box (7.8 GB RAM, 12 cores), the scale,
 | Reranking | a cross-encoder second pass with a measured effect | `src/rerank.c`: MRR 0.751 -> 0.887, gold@1 62.1% -> 81.5% on the subset where it has room to help |
 | Independent review | **not done** | every test here was written and run by the author of the code |
 | Tenants | `vserv DIR`: a store file per tenant, opened on first use; `-U` binds a client certificate to its tenant | not yet run: written and compiled, tests to come |
+| Transactions | write batches: searches see all or none of one, a crash leaves all or none (one CRC-checked journal record), commit with fsync on request (`vi_batch_*`, `begin`/`commit` in `vserv`) | not yet run: written and compiled, tests to come |
 | Users and roles / replication | **not present, on purpose** | access is the socket's file mode, the bound address and client certificates; accountability is the log; a backup or a standby is a copy of the file and its journal ([docs/server.md](docs/server.md)) |
 
 ## Documentation

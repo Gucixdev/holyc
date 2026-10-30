@@ -9,6 +9,7 @@ static void store_jrec_text_(RagStore *s, i64 id, i64 meta, const f32 *vec, cons
     u8 op = 'Q';
     u32 n = (u32)len;
     i32 i;
+    ++s->jseq;
     fs[0] = s->jf; fs[1] = s->jf2;
     for (i = 0; i < 2; ++i) {
         if (!fs[i]) continue;

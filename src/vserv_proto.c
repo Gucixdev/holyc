@@ -4,22 +4,52 @@
 
 /* ---- what the protocols share: the store operations, and the log lines for writes ---- */
 
-/* the replace-or-add every protocol's add means (one row per id) */
+/* The replace-or-add every protocol's add means (one row per id). While the connection has a batch open (the line
+ * protocol's begin), adds and deletes from any protocol wait in it: logged when the batch commits, not one by one. */
 static i32 vs_put_(VsConn *c, const f32 *v, i64 id)
 {
-    i32 r = store_put(c->t->s, v, id, 0);
+    i32 r;
+    if (c->wb) return store_batch_put(c->wb, v, id, 0);
+    r = store_put(c->t->s, v, id, 0);
     if (vs_logging_()) vs_log_(c, r != 0, "add id=%ld %s", (long)id, r == 0 ? "ok" : "refused (NaN or Inf)");
     return r;
 }
 
+/* rows removed; 0 when the delete waits in a batch */
 static i32 vs_del_(VsConn *c, i64 lo, i64 hi)
 {
-    i32 n = lo == hi ? store_delete(c->t->s, lo) : store_delete_range(c->t->s, lo, hi);
+    i32 n;
+    if (c->wb) { if (lo == hi) store_batch_delete(c->wb, lo); else store_batch_delete_range(c->wb, lo, hi); return 0; }
+    n = lo == hi ? store_delete(c->t->s, lo) : store_delete_range(c->t->s, lo, hi);
     if (vs_logging_()) {
         if (lo == hi) vs_log_(c, 0, "del id=%ld removed=%d", (long)lo, n);
         else vs_log_(c, 0, "del lo=%ld hi=%ld removed=%d", (long)lo, (long)hi, n);
     }
     return n;
+}
+
+/* the line protocol's begin: a batch for this connection's later writes */
+static const char *vs_begin_(VsConn *c)
+{
+    if (c->wb) return "a batch is open already: commit or abort it";
+    if (!(c->wb = (StoreWb *)malloc(sizeof(StoreWb)))) return "out of memory";
+    store_batch_init(c->wb, c->t->s);
+    return (const char *)0;
+}
+
+/* commit (sync: on the disk before the reply) or, with apply 0, abort the open batch: as store_batch_commit, 0 for
+ * an abort */
+static i32 vs_end_(VsConn *c, i32 apply, i32 sync)
+{
+    i32 n = c->wb->n, r = 0;
+    double t0 = vs_now_();
+    if (apply) {
+        r = store_batch_commit(c->wb, sync);
+        vs_log_(c, r < 0, "commit changes=%d%s %s ms=%.0f", (int)n, sync ? " sync" : "",
+                r >= 0 ? "ok" : (r == -1 ? "refused, nothing applied" : "applied, the fsync failed"), (vs_now_() - t0) * 1e3);
+    } else vs_log_(c, 0, "abort changes=%d", (int)n);
+    store_batch_free(c->wb); free(c->wb); c->wb = (StoreWb *)0;
+    return r;
 }
 
 static void vs_build_(VsConn *c)
@@ -237,6 +267,11 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
  *   get ID                    ok X1 .. XD                  (the stored unit vector)
  *   del ID                    ok REMOVED
  *   del LO HI                 ok REMOVED                   (every id in [LO, HI])
+ *   begin                     ok                           (later adds and deletes, in any protocol on this
+ *                                                           connection, wait: "ok queued"; searches do not see them)
+ *   commit [sync]             ok CHANGES                   (all of them at once, journaled as one record; sync: on
+ *                                                           the disk before the reply)
+ *   abort                     ok 0                         (none of them; closing the connection does the same)
  *   build | save | snapshot   ok, or err busy (a snapshot already runs)
  *   addt ID X1 .. XD TEXT     ok                           (add with a text: the rest of the line, \n \r \t \0 \\
  *                                                          escaped; replaces the row with the same id)
@@ -340,8 +375,8 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         }
     } else if (VS_CMD("add")) {
         if (!(a = vs_wint_(a, &x)) || vs_wvec_(w, a) != 0) VS_LINE_ERR("usage: add ID X1 .. XD (D numbers)");
-        else if (vs_put_(c, w->vec, x) != 0) VS_LINE_ERR("vector has NaN or Inf");
-        else vs_line_reply_(w, c, o, vs_str_(o, "ok"));
+        else if (vs_put_(c, w->vec, x) != 0) VS_LINE_ERR(c->wb ? "vector has NaN or Inf: the batch will be refused, abort it" : "vector has NaN or Inf");
+        else vs_line_reply_(w, c, o, vs_str_(o, c->wb ? "ok queued" : "ok"));
     } else if (VS_CMD("get")) {
         if (!(a = vs_wint_(a, &x)) || *vs_word_(a)) VS_LINE_ERR("usage: get ID");
         else if (store_get_vec(c->t->s, x, w->vec) != 0) VS_LINE_ERR("no such id");
@@ -352,9 +387,12 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         }
     } else if (VS_CMD("del") || VS_CMD("delete")) {
         if (!(a = vs_wint_(a, &x))) VS_LINE_ERR("usage: del ID | del LO HI");
-        else if (!*vs_word_(a)) { p = vs_str_(o, "ok "); p = vs_i64_(p, vs_del_(c, x, x)); vs_line_reply_(w, c, o, p); }
-        else if (!(a = vs_wint_(a, &y)) || *vs_word_(a) || y < x) VS_LINE_ERR("usage: del ID | del LO HI");
-        else { p = vs_str_(o, "ok "); p = vs_i64_(p, vs_del_(c, x, y)); vs_line_reply_(w, c, o, p); }
+        else {
+            y = x;
+            if (*vs_word_(a) && (!(a = vs_wint_(a, &y)) || *vs_word_(a) || y < x)) VS_LINE_ERR("usage: del ID | del LO HI");
+            else if (c->wb) { vs_del_(c, x, y); vs_line_reply_(w, c, o, vs_str_(o, "ok queued")); }
+            else { p = vs_str_(o, "ok "); p = vs_i64_(p, vs_del_(c, x, y)); vs_line_reply_(w, c, o, p); }
+        }
     } else if (VS_CMD("stats")) {
         i64 v[4], us;
         i32 run, last;
@@ -375,14 +413,24 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         i32 r = vs_snapshot_(c);
         if (r == 0) vs_line_reply_(w, c, o, vs_str_(o, "ok started"));
         else VS_LINE_ERR(r == 1 ? "busy" : "snapshot failed");
+    } else if (VS_CMD("begin")) {
+        const char *why = *vs_word_(a) ? "usage: begin" : vs_begin_(c);
+        if (why) VS_LINE_ERR(why); else vs_line_reply_(w, c, o, vs_str_(o, "ok"));
+    } else if (VS_CMD("commit") || VS_CMD("abort")) {
+        const char *s = vs_word_(a);
+        i32 sync = !strncmp(s, "sync", 4) && (s[4] == 0 || s[4] == ' ' || s[4] == '\t'), r;
+        if (!c->wb) VS_LINE_ERR("no batch: begin first");
+        else if (VS_CMD("abort") ? *s != 0 : (*s && !sync)) VS_LINE_ERR("usage: commit [sync] | abort");
+        else if ((r = vs_end_(c, VS_CMD("commit"), sync)) >= 0) { p = vs_str_(o, "ok "); p = vs_i64_(p, r); vs_line_reply_(w, c, o, p); }
+        else VS_LINE_ERR(r == -1 ? "refused, nothing applied (a NaN or Inf, a bad text or no memory in the batch)" : "applied, but the fsync failed");
     } else if (VS_CMD("addt")) {
         const char *t;
         char *buf;
         i32 n;
         if (!(a = vs_wint_(a, &x)) || !(t = vs_wnums_(w, a)) || (*t != ' ' && *t != '\t')) VS_LINE_ERR("usage: addt ID X1 .. XD TEXT");
         else if (!(buf = vs_txt_(w, (i32)(nl - t))) || (n = vs_unesc_(t + 1, nl, buf)) < 0) VS_LINE_ERR("bad escape in the text (\\n \\r \\t \\0 \\\\)");
-        else if (vs_put_text_(c, w->vec, x, buf, n) != 0) VS_LINE_ERR("vector has NaN or Inf, or the text is too long");
-        else vs_line_reply_(w, c, o, vs_str_(o, "ok"));
+        else if (vs_put_text_(c, w->vec, x, buf, n) != 0) VS_LINE_ERR(c->wb ? "vector has NaN or Inf, or the text is too long: the batch will be refused, abort it" : "vector has NaN or Inf, or the text is too long");
+        else vs_line_reply_(w, c, o, vs_str_(o, c->wb ? "ok queued" : "ok"));
     } else if (VS_CMD("text")) {
         char *t, *r;
         i32 n;
@@ -418,7 +466,7 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
             vs_logsearch_(c, k, got, t0);
         }
     } else if (VS_CMD("ping")) vs_line_reply_(w, c, o, vs_str_(o, "ok pong"));
-    else if (VS_CMD("help")) vs_line_reply_(w, c, o, vs_str_(o, "ok ping use stats search add addt get text range hybrid words del build save snapshot help quit"));
+    else if (VS_CMD("help")) vs_line_reply_(w, c, o, vs_str_(o, "ok ping use stats search add addt get text range hybrid words del begin commit abort build save snapshot help quit"));
     else if (VS_CMD("quit")) { vs_line_reply_(w, c, o, vs_str_(o, "ok bye")); c->closing = 1; }
     else { VS_LINE_ERR("unknown command (help lists them)"); vs_log_(c, 1, "unknown line command"); }
 #undef VS_CMD

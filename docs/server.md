@@ -74,6 +74,21 @@ has outgrown the file (and 64 MB), every `-S SECONDS` when something changed, an
 `tests/vserv_test.c` kills the server with `kill -9` a second after a burst of adds and finds every one of them after
 the restart; `tests/scrash.c` does the same to the store at random moments, with snapshots running.
 
+Several writes go in together with a batch, begun and ended on the line protocol; what comes in between, in any
+of the three protocols on that connection, waits ("ok queued") and searches do not see it yet:
+
+```
+begin                         ok
+del 2097152 3145727           ok queued
+addt 2097152 0.1 ... first chunk of the new version     ok queued
+addt 2097153 0.2 ... second chunk                       ok queued
+commit sync                   ok 3
+```
+
+`commit` applies all of it at once and journals it as one record with a CRC-32C, so a crash leaves all or none of it;
+`commit sync` replies once it is on the disk (commits that arrive during an fsync share the next one). `abort`, or
+closing the connection, drops it. A tenant cannot be switched while a batch is open.
+
 There is no replication inside the server. A copy of the store is the file plus its journal, both written atomically
 (`rename`), so `rsync` or `cp` of the two at any moment is a consistent backup; a standby machine that replays them
 starts in milliseconds (mmap). A snapshot to another path (`store_snapshot` / `vi_snapshot` with a path) writes a

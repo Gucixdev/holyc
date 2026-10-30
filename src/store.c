@@ -22,6 +22,7 @@
  *       is O(file), not O(rebuild).
  *   store_sync             : flush the journal of adds/deletes since the last save (PATH.j) to the disk;
  *       the write lock is held only while the stdio buffers go out, not through the fsync.
+ *   store_batch_*          : several puts and deletes as one change, seen and journaled all or none (store_batch.c).
  *   store_snapshot / store_snapshot_poll : the same file, written in the background by a child process (fork:
  *       a copy-on-write image of the store at this moment) while searches and writes go on. Writes made
  *       meanwhile go to the old journal and to the new file's (PATH.jn), which takes over once the file is
@@ -176,6 +177,9 @@ typedef struct {
 typedef struct {
     FILE    *jf;            /* write-ahead journal of adds/deletes since the last full save (store_sync) */
     char    *jpath;
+    u64      jseq;          /* journal writes so far (under the write lock); a durable batch waits until jsynced >= its */
+    u64      jsynced;       /* the jseq an fsync last covered (under jsync_mu) */
+    pthread_mutex_t jsync_mu;   /* one fsync at a time: commits that arrive meanwhile find theirs covered */
     u64      stamp;         /* the stamp of the file the journal belongs to (v7); 0: an older file, or none */
     /* background snapshot (store_snapshot): one child process at a time writes the store's image to snap_path */
     pthread_mutex_t snap_mu;/* guards the fields below; store_save / store_build hold it through their compaction */
@@ -768,6 +772,7 @@ RagStore *store_new(Arena *a, i32 dim)
     pthread_mutex_init(&s->mt_cmu, (const pthread_mutexattr_t *)0);
     pthread_cond_init(&s->mt_cv, (const pthread_condattr_t *)0);
     pthread_mutex_init(&s->snap_mu, (const pthread_mutexattr_t *)0);
+    pthread_mutex_init(&s->jsync_mu, (const pthread_mutexattr_t *)0);
     s->snap_last = 2;
     s->spill_fd = -1;
     s->spill_min = STORE_SPILL_MIN;
@@ -813,6 +818,7 @@ void store_destroy(RagStore *s)
     store_snap_reap_(s, 1);                                      /* a snapshot still being written finishes first */
     pthread_mutex_unlock(&s->snap_mu);
     pthread_mutex_destroy(&s->snap_mu);
+    pthread_mutex_destroy(&s->jsync_mu);
     free(s->snap_path); s->snap_path = (char *)0;
     pthread_mutex_destroy(&s->mt_mu); pthread_mutex_destroy(&s->rb_mu); pthread_mutex_destroy(&s->mt_cmu); pthread_cond_destroy(&s->mt_cv);
     pthread_rwlock_destroy(&s->lock); tq_free(s->tq); s->tq = (Tq *)0;
@@ -1096,6 +1102,7 @@ static void store_jrec_(RagStore *s, u8 op, i64 id, i64 meta, const f32 *vec)
 {
     FILE *fs[2];
     i32 i;
+    ++s->jseq;
     fs[0] = s->jf; fs[1] = s->jf2;
     for (i = 0; i < 2; ++i) {
         if (!fs[i]) continue;
@@ -1378,5 +1385,10 @@ void store_build(RagStore *s)
 #include "store_search.c"
 
 #include "store_text.c"
+
+#if defined(__SSE4_2__) && defined(__x86_64__)
+#include <nmmintrin.h>      /* the CRC-32C instruction, for the batches' journal records */
+#endif
+#include "store_batch.c"
 
 #include "store_disk.c"

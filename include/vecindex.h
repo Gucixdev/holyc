@@ -95,6 +95,23 @@ VI_API int vi_get_text(vi_db *db, vi_i64 id, char *buf, int cap);
  * For more than max, call again from the last id + 1. */
 VI_API int vi_range(vi_db *db, vi_i64 lo, vi_i64 hi, vi_i64 *ids, int max);
 
+/* A write batch: adds or replacements (with or without a text), deletes and range deletes that searches see all or
+ * none of, and that a crash leaves all or none of - say a document's old chunks out and its new ones in, as one
+ * change. Vectors and texts are copied as they are added. An add that returns -1 (a NaN or an infinity, a bad
+ * length, no memory) makes the commit refuse the whole batch. */
+typedef struct vi_batch vi_batch;
+VI_API vi_batch *vi_batch_begin(vi_db *db);
+VI_API int vi_batch_add(vi_batch *b, vi_i64 id, const float *vec);
+VI_API int vi_batch_add_text(vi_batch *b, vi_i64 id, const float *vec, const char *text, int len);
+VI_API int vi_batch_delete(vi_batch *b, vi_i64 id);
+VI_API int vi_batch_delete_range(vi_batch *b, vi_i64 lo, vi_i64 hi);
+
+/* Applies the batch as one change and frees it. sync 1: also on the disk when this returns (a store opened from a
+ * file; commits arriving during an fsync share the next one). Returns how many changes it held; -1 refused, nothing
+ * applied; -2 applied, but the fsync failed. vi_batch_abort frees it unapplied. */
+VI_API int vi_batch_commit(vi_batch *b, int sync);
+VI_API void vi_batch_abort(vi_batch *b);
+
 /* A 64-bit tag on a row, for filtered search: 0, or -1 when there is no such row. */
 VI_API int vi_set_tag(vi_db *db, vi_i64 id, vi_i64 tag);
 VI_API int vi_get_tag(vi_db *db, vi_i64 id, vi_i64 *tag);

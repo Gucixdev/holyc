@@ -125,6 +125,7 @@ typedef struct VsConn {
     u8 named;                                   /* TLS: its certificate's name is in peer */
     char peer[112];                             /* who is on the other end (vserv_log.c) */
     struct VsTen *t;                            /* the store its requests go to; NULL: a tenant server, none chosen */
+    StoreWb *wb;                                /* a batch it began: its writes wait here until commit (or abort) */
 } VsConn;
 
 typedef struct { i32 fd, tcp; } VsListen;       /* epoll data for a listening socket */
@@ -313,6 +314,8 @@ static const char *vs_use_(VsConn *c, const char *name, i32 n)
     const char *err = (const char *)0;
     i32 i;
     if (!vs_dir) return "this server has one store, no tenants";
+    if (c->wb && (!c->t || strlen(c->t->name) != (size_t)n || memcmp(c->t->name, name, (size_t)n) != 0))
+        return "a batch is open: commit or abort it first";
     if (n < 1 || n > VS_TNAME) return "a tenant's name is 1 to 64 of A-Z a-z 0-9 _ -";
     for (i = 0; i < n; ++i) if (!vs_tname_ok_(name[i])) return "a tenant's name is 1 to 64 of A-Z a-z 0-9 _ -";
 #ifdef VSERV_TLS
@@ -519,6 +522,10 @@ static void vs_stats_(VsConn *c, i64 *v)
 
 static void vs_close_(VsWorker *w, VsConn *c)
 {
+    if (c->wb) {                                                 /* begun, never committed: none of it happened */
+        vs_log_(c, 1, "batch of %d changes dropped: the connection closed", (int)c->wb->n);
+        store_batch_free(c->wb); free(c->wb); c->wb = (StoreWb *)0;
+    }
     vs_log_(c, 0, "close requests=%lu", c->nreq);
 #ifdef VSERV_TLS
     if (c->tls) {

@@ -97,6 +97,39 @@ VI_API int vi_add_text(vi_db *db, vi_i64 id, const float *vec, const char *text,
 
 VI_API int vi_get_text(vi_db *db, vi_i64 id, char *buf, int cap) { return store_get_text(db->s, (i64)id, buf, (i32)cap); }
 
+struct vi_batch { StoreWb w; };
+
+VI_API vi_batch *vi_batch_begin(vi_db *db)
+{
+    vi_batch *b = (vi_batch *)malloc(sizeof(vi_batch));
+    if (b) store_batch_init(&b->w, db->s);
+    return b;
+}
+
+VI_API int vi_batch_add(vi_batch *b, vi_i64 id, const float *vec) { return store_batch_put(&b->w, vec, (i64)id, 0); }
+
+VI_API int vi_batch_add_text(vi_batch *b, vi_i64 id, const float *vec, const char *text, int len)
+{ return store_batch_put_text(&b->w, vec, (i64)id, 0, text, vi_len_(text, len)); }
+
+VI_API int vi_batch_delete(vi_batch *b, vi_i64 id) { return store_batch_delete(&b->w, (i64)id); }
+
+VI_API int vi_batch_delete_range(vi_batch *b, vi_i64 lo, vi_i64 hi) { return store_batch_delete_range(&b->w, (i64)lo, (i64)hi); }
+
+VI_API int vi_batch_commit(vi_batch *b, int sync)
+{
+    i32 r = store_batch_commit(&b->w, (i32)sync);
+    store_batch_free(&b->w);
+    free(b);
+    return r;
+}
+
+VI_API void vi_batch_abort(vi_batch *b)
+{
+    if (!b) return;
+    store_batch_free(&b->w);
+    free(b);
+}
+
 VI_API int vi_range(vi_db *db, vi_i64 lo, vi_i64 hi, vi_i64 *ids, int max)
 { return store_range(db->s, (i64)lo, (i64)hi, (i64 *)ids, (i32)max); }
 

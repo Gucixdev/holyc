@@ -35,7 +35,8 @@ static int store_goal_r_(FILE *f, EngGoal *g)
     return 0;
 }
 
-/* ---- the journal: PATH.j = 'VXJ2' dim(i32) stamp(u64), then records A/P/D/M/R (store_jrec_). The stamp is the one in
+/* ---- the journal: PATH.j = 'VXJ2' dim(i32) stamp(u64), then records A/P/D/M/R (store_jrec_), Q (store_jrec_text_)
+ * and G (a batch: its length, CRC-32C and records, store_batch.c), in the host's byte order. The stamp is the one in
  * the header of the file it belongs to (v7), so a journal is replayed only onto that file. A file from before v7 has
  * no stamp: its journal is 'VXJ1' base_live(i32) base_bytes(i64) dim(i32), matched on rows and file size. ---- */
 #define STORE_JMAGIC  0x314a5856u
@@ -115,8 +116,59 @@ static void store_journal_reset_(RagStore *s, const char *path)
     free(jn);
 }
 
+/* One journal record (its op already read from f) applied to the store being loaded: 0, or -1 when it is torn or
+ * not a record. vec is [dim] scratch, *txt a buffer of *txcap bytes grown as texts need. */
+static i32 store_jrec_play_(RagStore *s, FILE *f, u8 op, f32 *vec, char **txt, i32 *txcap)
+{
+    i64 id, meta;
+    if (op == 'Q') {                                             /* an upsert with its text */
+        u32 n;
+        if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1 || fread(vec, sizeof(f32), (size_t)s->dim, f) != (size_t)s->dim
+            || fread(&n, 4, 1, f) != 1 || n > (u32)STORE_TXMAX) return -1;
+        if (n > (u32)*txcap) {
+            char *t = (char *)realloc(*txt, (size_t)n);
+            if (!t) return -1;
+            *txt = t; *txcap = (i32)n;
+        }
+        if (n && fread(*txt, 1, (size_t)n, f) != (size_t)n) return -1;
+        store_put_text(s, vec, id, meta, *txt, (i32)n);
+    } else if (op == 'A' || op == 'P') {
+        if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1 || fread(vec, sizeof(f32), (size_t)s->dim, f) != (size_t)s->dim) return -1;
+        if (op == 'A') store_add_meta(s, vec, id, meta); else store_put(s, vec, id, meta);
+    } else if (op == 'D') {
+        if (fread(&id, 8, 1, f) != 1) return -1;
+        store_delete(s, id);
+    } else if (op == 'M' || op == 'R') {
+        if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1) return -1;
+        if (op == 'M') store_set_meta(s, id, meta); else store_delete_range(s, id, meta);
+    } else return -1;
+    return 0;
+}
+
+/* A batch, 'G' len crc records[len] (its op already read): applied only when all of it is there and its CRC-32C
+ * matches - nothing of a torn or damaged one. 0, or -1 (the journal's good part ends before it). */
+static i32 store_jgroup_play_(RagStore *s, FILE *f, f32 *vec, char **txt, i32 *txcap)
+{
+    u32 n, crc;
+    u8 *g, op;
+    FILE *m;
+    i32 r = 0;
+    if (fread(&n, 4, 1, f) != 1 || fread(&crc, 4, 1, f) != 1 || (size_t)n > STORE_BATCH_MAX) return -1;
+    if (n == 0) return 0;
+    if (!(g = (u8 *)malloc((size_t)n))) return -1;
+    if (fread(g, 1, (size_t)n, f) != (size_t)n || store_crc32c_(g, (size_t)n) != crc || !(m = fmemopen(g, (size_t)n, "rb"))) {
+        free(g);
+        return -1;
+    }
+    while (fread(&op, 1, 1, m) == 1)                             /* the CRC vouched for the bytes: these are whole */
+        if (store_jrec_play_(s, m, op, vec, txt, txcap) != 0) { r = -1; break; }
+    fclose(m);
+    free(g);
+    return r;
+}
+
 /* Replays the journal file jn onto a freshly loaded store when it belongs to the file at path. Returns the length of
- * its good part (a torn last record is not in it), or -1 when it belongs to another file or cannot be read. */
+ * its good part (a torn last record or batch is not in it), or -1 when it belongs to another file or cannot be read. */
 static i64 store_journal_play_(RagStore *s, const char *path, const char *jn)
 {
     FILE *f = fopen(jn, "rb");
@@ -140,29 +192,9 @@ static i64 store_journal_play_(RagStore *s, const char *path, const char *jn)
     vec = (f32 *)malloc((size_t)s->dim * sizeof(f32));
     good = (i64)ftello(f);
     for (;;) {
-        u8 op; i64 id, meta;
+        u8 op;
         if (fread(&op, 1, 1, f) != 1) break;
-        if (op == 'Q') {                                         /* an upsert with its text */
-            u32 n;
-            if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1 || fread(vec, sizeof(f32), (size_t)s->dim, f) != (size_t)s->dim
-                || fread(&n, 4, 1, f) != 1 || n > (u32)STORE_TXMAX) break;
-            if (n > (u32)txcap) {
-                char *t = (char *)realloc(txt, (size_t)n);
-                if (!t) break;
-                txt = t; txcap = (i32)n;
-            }
-            if (n && fread(txt, 1, (size_t)n, f) != (size_t)n) break;
-            store_put_text(s, vec, id, meta, txt, (i32)n);
-        } else if (op == 'A' || op == 'P') {
-            if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1 || fread(vec, sizeof(f32), (size_t)s->dim, f) != (size_t)s->dim) break;
-            if (op == 'A') store_add_meta(s, vec, id, meta); else store_put(s, vec, id, meta);
-        } else if (op == 'D') {
-            if (fread(&id, 8, 1, f) != 1) break;
-            store_delete(s, id);
-        } else if (op == 'M' || op == 'R') {
-            if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1) break;
-            if (op == 'M') store_set_meta(s, id, meta); else store_delete_range(s, id, meta);
-        } else break;
+        if (op == 'G' ? store_jgroup_play_(s, f, vec, &txt, &txcap) != 0 : store_jrec_play_(s, f, op, vec, &txt, &txcap) != 0) break;
         good = (i64)ftello(f);
     }
     fclose(f);
