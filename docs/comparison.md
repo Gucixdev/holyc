@@ -21,6 +21,7 @@ vector scores ranked together in one query inside the engine.
 | hnswlib | C++ header; Python | HNSW | f32† | - | - | index file† | Apache-2.0 |
 | USearch | C++11 header; 10+ languages | HNSW, user-defined metrics | 1 bit (`b1`); also f16, bf16, 8-bit floats, i8 | - | - | index file, served memory-mapped | Apache-2.0 |
 | DiskANN | Rust (C++ on an unmaintained branch) | Vamana graph; index on SSD, PQ codes in RAM† | PQ | - | - | index files | MIT |
+| KIOXIA AiSAQ | C++ (a DiskANN fork) | Vamana graph with its PQ codes on the SSD too, not in RAM; 4.8 billion vectors shown on one server | PQ | - | - | index files on SSD | MIT |
 | RaBitQ-Library | C++17; Python | IVF, HNSW, SymphonyQG over RaBitQ codes | 1 bit | - | - | index files | Apache-2.0 |
 | turbovec | Rust; Python | scan of every TurboQuant code, no clustering or graph; id allowlist filter | 2 bit | - | - | one file, written with fsync + rename | MIT |
 | sqlite-vec | C, SQLite extension; runs where SQLite runs, WASM too | brute force (`vec0`); IVF and DiskANN in the 0.1.10 alphas | 1 bit (binary) | FTS5, fused in SQL | SQLite tables | SQLite | MIT or Apache-2.0 |
@@ -47,8 +48,11 @@ vector scores ranked together in one query inside the engine.
 | Redis 8 | C | server, cloud† | FLAT, HNSW, SVS-VAMANA; vector sets | ? | yes: Query Engine full text | cluster, replicas† | RSALv2, SSPLv1 or AGPL-3.0 |
 | Vespa | Java, C++† | server, cloud | HNSW or exact; binary vectors with hamming distance | 1 bit (packed in int8) | yes: BM25 rank feature and vectors in one multi-phase ranking | content clusters† | Apache-2.0 |
 | Pinecone | closed source | cloud only | proprietary | ? | yes: dense + sparse; BM25 full text in public preview since May 2026 | serverless; dedicated read nodes (GA April 2026) | proprietary |
+| MongoDB Vector Search | C++, Java† | Atlas cloud; Community and Enterprise self-managed | HNSW† | 1 bit: binary quantization with a re-score from the full vectors, or int8 | yes: with Atlas Search full text | sharding† | ? |
+| VAST DataBase | closed source | VAST's own storage platform | hierarchical clustering ("Hyperscale Vector Index"), only the needed parts of the quantized vectors loaded per query | ? | ? - SQL filters and vectors in one query path | shared-everything nodes, no sharding; trillions claimed | proprietary |
+| UBASE (ByteDance) | closed, internal | ByteDance's search infrastructure (7,000+ clusters, 300 PB) | vectors, lexical matching and filters in one engine | ? | yes | trillion-vector scale (paper, 2026) | not available |
 
-Not covered: ScaNN, Annoy, NMSLIB, MongoDB Atlas Vector Search, Azure AI Search, turbopuffer, Typesense, Marqo.
+Not covered: ScaNN, Annoy, NMSLIB, Azure AI Search, turbopuffer, Typesense, Marqo.
 
 ### What the field already has
 
@@ -58,6 +62,10 @@ Not covered: ScaNN, Annoy, NMSLIB, MongoDB Atlas Vector Search, Azure AI Search,
   quantization, Elasticsearch BBQ. The codes are expected, not a difference.
 - **BM25 hybrid inside the engine** is standard on the servers (Qdrant, Milvus, Weaviate, Elasticsearch, OpenSearch,
   Redis, Vespa, Pinecone) and present in-process in LanceDB, Chroma, zvec and Milvus Lite.
+- **Past one machine's RAM** the field goes two ways: the index on SSD (DiskANN; KIOXIA AiSAQ keeps even the PQ
+  codes there and showed 4.8 billion vectors on one server) or a hierarchy of clusters loading only what a query
+  needs (VAST and ByteDance's UBASE claim trillions). vecindex keeps rows on disk and its codes in RAM: one level of
+  clusters, which is the next thing to grow ([roadmap.md](roadmap.md)).
 - **Graph indexes** (HNSW, Vamana) are the default almost everywhere; IVF-only (vecindex, vec1) and a full scan of
   codes (turbovec) are the exceptions.
 
@@ -182,6 +190,13 @@ Pages:
   [moved into the SQLite source tree on 2026-09-30](https://book.st-hakky.com/news/sqlite-vec1-vector-search-extension).
 - Vespa: [hybrid search tutorial](https://docs.vespa.ai/en/tutorials/hybrid-search.html),
   [binary vectors](https://pyvespa.readthedocs.io/en/stable/examples/mixedbread-binary-embeddings-with-sentence-transformers-cloud.html).
+- KIOXIA AiSAQ: [repository](https://github.com/kioxia-jp/aisaq-diskann) (MIT, last commit 2026-10-05),
+  [4.8 billion vectors on one server](https://www.storagenewsletter.com/2026/03/19/nvidia-gtc-2026-kioxia-achieves-4-8-billion-high-dimensional-vector-search-database-on-a-single-server-with-7-8x-index-build-time-acceleration-via-gpus/).
+- VAST: [AI OS 5.5, the Hyperscale Vector Index](https://www.vastdata.com/blog/vast-ai-os-5-5-is-generally-available),
+  [no sharding, trillions](https://www.vastdata.com/features/ai-ready).
+- MongoDB: [Vector Search changelog](https://www.mongodb.com/docs/atlas/search-changelog.md),
+  [binary quantization with rescoring](https://mongodb.com/blog/post/binary-quantization-rescoring-96-less-memory-faster-search).
+- UBASE: [the paper's abstract](https://www.emergentmind.com/papers/2608.30607) (arXiv 2608.30607).
 - Pinecone: [2026 release notes](https://docs.pinecone.io/release-notes/2026.md),
   [dedicated read nodes](https://docs.pinecone.io/guides/index-data/dedicated-read-nodes/overview).
 - Measurements: `py/bench.py` on GloVe-100, results kept with commit, machine and date; the README table and

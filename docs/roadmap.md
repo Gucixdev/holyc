@@ -15,8 +15,6 @@ derived 1-bit codes against a 1-bit build byte for byte, added rows, recall agai
 
 Open:
 - the cascade's benchmark, and its shortlist tuned rather than fixed at 8 x R
-- competitors for docs/comparison.md: MongoDB Atlas Vector Search, VAST Data, KIOXIA AiSAQ (SSD-resident ANN),
-  "ubase" (not identified yet) - none checked yet
 - streaming chunking; lazy loading beyond what mmap and tenants opened on first use already do
 - checksums per block, ZFS-style: cryptographic (BLAKE3 or SHA-256) to catch bitrot, checked on read and by a scrub
 - versioning: older snapshots kept and readable
