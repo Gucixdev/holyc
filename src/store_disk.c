@@ -246,7 +246,7 @@ static int store_tq_w_(FILE *f, const Tq *t)
     i32 h[8], c, nb, i, nc1 = t->nc > 1 ? t->nc : 1, *bl, *cs, bad = 0;
     size_t bb = (size_t)t->vd * 16;
     h[0] = t->dim; h[1] = t->dpad; h[2] = t->n; h[3] = t->nblk + t->xn; h[4] = t->nc; h[5] = t->nprobe;
-    h[6] = t->slot_row != (i32 *)0; h[7] = t->bits == 2 ? 2 : 0;                     /* 0 = 4-bit (older files) */
+    h[6] = t->slot_row != (i32 *)0; h[7] = t->bits == 4 ? 0 : t->bits;                /* 0 = 4-bit (older files) */
     if (store_pad_(f) || STORE_W32(f, h, 8)
         || store_pad_(f) || STORE_W32(f, t->s1, (size_t)t->dpad)
         || store_pad_(f) || STORE_W32(f, t->s2, (size_t)t->dpad)
@@ -651,7 +651,7 @@ static Tq *store_tq_r_(u8 *map, size_t len, FILE *f, size_t off, i32 rows)
     t = (Tq *)calloc(1, sizeof(Tq));
     t->dim = h[0]; t->dpad = h[1]; t->n = h[2]; t->nblk = h[3]; t->nc = h[4]; t->nprobe = h[5];
     t->nbuilt = t->n;                                            /* growth counts from the load (fit0: on first add) */
-    t->bits = h[7] == 2 ? 2 : 4; t->vd = tq_vd_(t->dpad, t->bits);
+    t->bits = h[7] == 2 || h[7] == 1 ? h[7] : 4; t->vd = tq_vd_(t->dpad, t->bits);
     t->mapped = map != (u8 *)0;
     o = STORE_AL(o + 32);
     t->s1 = (f32 *)store_take_(map, len, f, o, 4, (size_t)t->dpad); o = STORE_AL(o + (size_t)t->dpad * 4);

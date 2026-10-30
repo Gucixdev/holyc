@@ -465,6 +465,38 @@ int main(void)
         store_destroy(ref); store_destroy(c8);
         remove("/tmp/store_demo_i8.vxi"); remove("/tmp/store_demo_i8.vxi.j");
     }
+    /* 1-bit codes: the signs of the rotated coordinates, dim / 8 bytes a row, through the same 16-entry tables and
+     * kernel; with f32 rows the default re-scores four times as many candidates */
+    {
+        RagStore *ref = store_new(a, dim), *b1 = store_new(a, dim), *bl;
+        i32 tried = 0, agree = 0, self = 0, same = 0, x, vd1 = ((dim + 3) / 4 + 1) & ~1;
+        store_set_fast(ref, 0.9f); store_set_fast(b1, 0.9f);
+        store_set_codes(b1, 1);
+        for (i = 0; i < n; ++i) { store_add(ref, vv + (size_t)i * dim, 9000 + i); store_add(b1, vv + (size_t)i * dim, 9000 + i); }
+        store_build(ref); store_build(b1);
+        if (!b1->tq || b1->tq->bits != 1 || b1->tq->vd != vd1) ok = 0;
+        for (i = 0; i < n; i += 7) {          /* a hit counts when its exact score reaches the exact 10th best (rows of a topic tie) */
+            i64 r1[10], r2[10]; f32 c1[10], c2[10];
+            i32 h1 = store_search(ref, vv + (size_t)i * dim, 10, r1, c1), h2 = store_search(b1, vv + (size_t)i * dim, 10, r2, c2);
+            for (x = 0; x < h2 && h1 == 10; ++x) if (c2[x] >= c1[9] - 1e-4f) ++agree;
+            tried += h1;
+            if (h2 > 0 && r2[0] == 9000 + i) ++self;
+        }
+        if (store_save(b1, "/tmp/store_demo_b1.vxi") != 0 || !(bl = store_load(a, "/tmp/store_demo_b1.vxi")) || !bl->tq || bl->tq->bits != 1) { ok = 0; bl = (RagStore *)0; }
+        for (i = 0; bl && i < n; i += 11) {
+            i64 r1[5], r2[5]; f32 c1[5], c2[5];
+            i32 h1 = store_search(b1, vv + (size_t)i * dim, 5, r1, c1), h2 = store_search(bl, vv + (size_t)i * dim, 5, r2, c2), eq = h1 == h2;
+            for (x = 0; x < h1 && eq; ++x) if (r1[x] != r2[x]) eq = 0;
+            same += eq;
+        }
+        print_cstr("  1-bit codes ("); print_i64(vd1 / 2); print_cstr(" bytes a row for "); print_i64(dim); print_cstr(" dimensions) + f32 rows: top-10 as close as the exact top-10 on ");
+        print_i64((i64)(100L * agree / (tried ? tried : 1))); print_cstr("%, self@1 "); print_i64((i64)(100L * self / ((n + 6) / 7)));
+        print_cstr("%, save/load identical on "); print_i64((i64)(100L * same / ((n + 10) / 11))); print_cstr("%\n");
+        if (agree * 100 < tried * 90 || self * 100 < ((n + 6) / 7) * 95 || same != (n + 10) / 11) ok = 0;
+        if (bl) store_destroy(bl);
+        store_destroy(ref); store_destroy(b1);
+        remove("/tmp/store_demo_b1.vxi"); remove("/tmp/store_demo_b1.vxi.j");
+    }
     {   /* 2-bit IVF over every cluster == 2-bit flat */
         f32 *un = (f32 *)malloc((size_t)n * dim * sizeof(f32));
         u8 *hv;

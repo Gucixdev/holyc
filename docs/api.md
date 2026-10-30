@@ -34,7 +34,7 @@ from any thread on the same handle at once.
 | `vi_search_batch(db, qs, nq, k, ids, scores, threads)` | many queries on several threads |
 | `vi_build(db)` | builds the index (searches before it scan the new rows exactly) |
 | `vi_set_recall(db, target)` | keeps recall@10 at `target`: every build picks the fewest probes that reach it |
-| `vi_set_layout(db, code_bits, row_bytes)` | 4- or 2-bit scan codes, f32 or int8 rows, before the first row |
+| `vi_set_layout(db, code_bits, row_bytes)` | 4-, 2- or 1-bit scan codes (dim/2, dim/4 or dim/8 bytes a row), f32 or int8 rows, before the first row |
 | `vi_set_aggression(db, a)` | how much of the machine to take, 0..1 (default 1, or `VECINDEX_AGGRESSION`): threads out of the CPUs the process may use (affinity, cgroup quota); background work at nice 10 to 19 |
 | `vi_save(db, path)` | rewrites the file and starts a fresh journal |
 | `vi_sync(db)` | flushes the journal to the disk |

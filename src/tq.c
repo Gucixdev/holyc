@@ -81,7 +81,8 @@ typedef struct {
     i32  *perm;             /* [dpad] */
     u8   *codes;            /* nblk * vd * 16 bytes */
     i32   mapped;           /* 1: the arrays point into a file mapping the caller owns (store_load) */
-    i32   bits;             /* 4: one 4-bit code a coordinate; 2: one 4-bit code a pair of coordinates (2 bits each) */
+    i32   bits;             /* 4: one 4-bit code a coordinate; 2: one 4-bit code a pair of coordinates (2 bits each); 1: one
+                             * 4-bit code four coordinates (their signs) */
     i32   vd;               /* code columns a row: dpad (4-bit) or dpad/2 rounded up to even (2-bit) */
     /* the centroids again as int8 for picking the probes with VNNI (derived, malloc'd; NULL without VNNI):
      * c8 is [ngroups][d4][16 centroids][4 dims], c8b the bias of each centroid (128 x its byte sum, since the query
@@ -112,7 +113,8 @@ typedef struct {
 #define TQ_VNNI 0
 #endif
 
-static i32 tq_vd_(i32 dpad, i32 bits) { return bits == 2 ? ((dpad / 2) + 1) & ~1 : dpad; }
+/* code columns a row: 4-bit one per coordinate; 2-bit one per pair; 1-bit one per four (an even count of columns) */
+static i32 tq_vd_(i32 dpad, i32 bits) { return bits == 2 ? ((dpad / 2) + 1) & ~1 : bits == 1 ? ((dpad + 3) / 4 + 1) & ~1 : dpad; }
 
 #define TQ_FLAT_MAX   1024              /* more clusters than this: two-level k-means */
 #define TQ_SAMPLE_MAX ((size_t)512 << 20)   /* bytes of training sample at most (100M rows: ~25 a centroid) */
@@ -255,11 +257,23 @@ static void tq_codes_(const f32 *rot, i32 dpad, u8 *codes)
 static const f32 TQ_CENT2[4] = { -1.5104f, -0.4528f, 0.4528f, 1.5104f };
 static const f32 TQ_B2[3] = { -0.9816f, 0.0f, 0.9816f };
 
+/* 1-bit: the Lloyd-Max level of the standard normal for one bit, +-sqrt(2 / pi) */
+#define TQ_L1 0.7978846f
+
 /* code columns of a rotated row: 4-bit, one per coordinate; 2-bit, coordinates 2v and 2v+1 share column v as
- * (code of 2v) | (code of 2v+1) << 2, so the 16-entry tables and the scan kernel stay exactly the same */
+ * (code of 2v) | (code of 2v+1) << 2; 1-bit, the signs of coordinates 4v..4v+3 as bits 0-3 of column v. The 16-entry
+ * tables and the scan kernel stay exactly the same for all three. */
 static void tq_encode_row_(const Tq *t, const f32 *rot, u8 *cd)
 {
     i32 v;
+    if (t->bits == 1) {
+        for (v = 0; v < t->vd; ++v) {
+            i32 i, c = 0;
+            for (i = 0; i < 4; ++i) if (4 * v + i < t->dpad && rot[4 * v + i] > 0.0f) c |= 1 << i;
+            cd[v] = (u8)c;
+        }
+        return;
+    }
     if (t->bits != 2) { tq_codes_(rot, t->dpad, cd); return; }
     for (v = 0; v < t->vd; ++v) {
         f32 a = 2 * v < t->dpad ? rot[2 * v] : 0.0f, b = 2 * v + 1 < t->dpad ? rot[2 * v + 1] : 0.0f;
@@ -892,7 +906,7 @@ Tq *tq_build_skip(const TqCol *rows, i32 n, i32 dim, u32 seed, i32 nc, i32 nth, 
     TqEncJob ej;
     if (nth < 1) nth = 1;
     t->dim = dim; t->dpad = dim + (dim & 1); t->n = n; t->nbuilt = n;
-    t->bits = bits == 2 ? 2 : 4; t->vd = tq_vd_(t->dpad, t->bits);
+    t->bits = bits == 2 || bits == 1 ? bits : 4; t->vd = tq_vd_(t->dpad, t->bits);
     t->s1 = (f32 *)malloc((size_t)t->dpad * sizeof(f32)); t->s2 = (f32 *)malloc((size_t)t->dpad * sizeof(f32));
     t->perm = (i32 *)malloc((size_t)t->dpad * sizeof(i32));
     for (i = 0; i < t->dpad; ++i) { t->s1[i] = (tq_rng_(&r) & 1u) ? 1.0f : -1.0f; t->s2[i] = (tq_rng_(&r) & 1u) ? 1.0f : -1.0f; t->perm[i] = i; }

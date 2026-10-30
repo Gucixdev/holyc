@@ -124,7 +124,7 @@ VI_API void vi_set_recall(vi_db *db, float target) { store_set_target_recall(db-
 
 VI_API int vi_set_layout(vi_db *db, int code_bits, int row_bytes)
 {
-    if ((code_bits != 4 && code_bits != 2) || (row_bytes != 4 && row_bytes != 1) || store_count(db->s) > 0) return -1;
+    if ((code_bits != 4 && code_bits != 2 && code_bits != 1) || (row_bytes != 4 && row_bytes != 1) || store_count(db->s) > 0) return -1;
     if (store_set_vec_bytes(db->s, (i32)row_bytes) != 0) return -1;
     store_set_codes(db->s, (i32)code_bits);
     return 0;

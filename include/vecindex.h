@@ -123,9 +123,10 @@ VI_API void vi_build(vi_db *db);
  * probes that reach it. 0 turns it off. */
 VI_API void vi_set_recall(vi_db *db, float target);
 
-/* Memory per row before the first row is added: code_bits 4 (default) or 2 for what a search scans; row_bytes 4
- * (default, f32 rows, the most precise re-scoring) or 1 (int8 rows, a quarter of the room). Returns 0, or -1 when
- * the store already has rows or a value is not one of these. */
+/* Memory per row before the first row is added: code_bits 4 (default), 2 or 1 for what a search scans (dim / 2,
+ * dim / 4 or dim / 8 bytes a row; fewer bits scan faster and rank more coarsely, so more candidates are re-scored);
+ * row_bytes 4 (default, f32 rows, the most precise re-scoring) or 1 (int8 rows, a quarter of the room). Returns 0, or
+ * -1 when the store already has rows or a value is not one of these. */
 VI_API int vi_set_layout(vi_db *db, int code_bits, int row_bytes);
 
 /* How much of the machine the store may use, 0..1 (default 1, or the environment variable VECINDEX_AGGRESSION):

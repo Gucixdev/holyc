@@ -2,8 +2,8 @@
 """One method of the vecindex benchmark on a prepared dataset (prepare_glove.py); prints JSON lines.
 
 usage: bench.py DATA_DIR METHOD [--threads T] [--lat N]
-methods: vecindex, vecindex-i8, vecindex-2bit, vecindex-2bit-i8, turbovec4, turbovec2, faiss-hnsw, faiss-ivfflat,
-         faiss-ivfpqfs, qdrant, vecgrid, leann
+methods: vecindex, vecindex-i8, vecindex-2bit, vecindex-2bit-i8, vecindex-1bit, vecindex-1bit-i8, turbovec4, turbovec2,
+         faiss-hnsw, faiss-ivfflat, faiss-ivfpqfs, qdrant, vecgrid, leann
 
 Per method: build (timed, T threads), index size, save and load (timed, warm page cache), then for every
 search setting, on the LOADED index: recall@10 over all queries, single-thread QPS (one query per call,
@@ -45,7 +45,7 @@ def cpu_model():
 
 class VecIndex:
     """vecindex: the store's index (rotated 4-bit fast-scan, IVF from 600k rows, exact re-score of the candidates).
-    bits=2: 2-bit codes; vbytes=1: int8 rows (the compact modes for very large stores)."""
+    bits=2 or 1: 2-bit or 1-bit codes; vbytes=1: int8 rows (the compact modes for very large stores)."""
     pins_threads = True
 
     def __init__(self, dim, threads, bits=4, vbytes=4):
@@ -91,6 +91,8 @@ class VecIndex:
             raise RuntimeError("vi_load failed")
 
     def sweep(self):                                     # clusters: 4 sqrt(n) (GloVe: 4350 of ~270 rows)
+        if self.bits == 1:                               # signs only: re-score many more
+            return [{"nprobe": p, "rerank": r} for p in (48, 64, 96, 128, 192, 256, 384, 512, 768) for r in (1000, 4000)]
         if self.bits == 2:                               # coarser codes: re-score more candidates
             return [{"nprobe": p, "rerank": r} for p in (48, 64, 96, 128, 192, 256, 384, 512, 768) for r in (256, 1000)]
         # rerank = rows re-scored exactly, like FAISS's k_factor x k
@@ -416,6 +418,10 @@ def make(method, dim, threads):
         return VecIndex(dim, threads, 2, 4)
     if method == "vecindex-2bit-i8":
         return VecIndex(dim, threads, 2, 1)
+    if method == "vecindex-1bit":
+        return VecIndex(dim, threads, 1, 4)
+    if method == "vecindex-1bit-i8":
+        return VecIndex(dim, threads, 1, 1)
     if method == "turbovec4":
         return TurboVec(dim, threads, 4)
     if method == "turbovec2":

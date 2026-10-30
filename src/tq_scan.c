@@ -303,6 +303,13 @@ static void tq_lut_(const Tq *t, const f32 *q, f32 *rot, f32 *tmp, f32 *lf, u8 *
         if (t->bits == 2) {                                      /* column d = coordinates 2d, 2d+1, 2 bits each */
             f32 a = 2 * d < t->dpad ? rot[2 * d] : 0.0f, b = 2 * d + 1 < t->dpad ? rot[2 * d + 1] : 0.0f;
             for (c = 0; c < 16; ++c) { f32 v = a * TQ_CENT2[c & 3] + b * TQ_CENT2[c >> 2]; lf[d * 16 + c] = v; if (v < mn) mn = v; if (v > mx) mx = v; }
+        } else if (t->bits == 1) {                               /* column d = coordinates 4d..4d+3, a sign bit each */
+            f32 x[4];
+            for (i = 0; i < 4; ++i) x[i] = 4 * d + i < t->dpad ? rot[4 * d + i] * TQ_L1 : 0.0f;
+            for (c = 0; c < 16; ++c) {
+                f32 v = (c & 1 ? x[0] : -x[0]) + (c & 2 ? x[1] : -x[1]) + (c & 4 ? x[2] : -x[2]) + (c & 8 ? x[3] : -x[3]);
+                lf[d * 16 + c] = v; if (v < mn) mn = v; if (v > mx) mx = v;
+            }
         } else
             for (c = 0; c < 16; ++c) { f32 v = rot[d] * TQ_CENT[c]; lf[d * 16 + c] = v; if (v < mn) mn = v; if (v > mx) mx = v; }
         for (c = 0; c < 16; ++c) lf[d * 16 + c] -= mn;

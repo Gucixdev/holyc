@@ -40,8 +40,9 @@
  *   - doc ids that arrive in increasing order (the usual case) need no id map at all: lookups binary-search the
  *     id column. Only rows added out of order go into a hash of row numbers (8 bytes a slot);
  *   - for the largest stores two knobs trade a little recall for a lot of room (store_set_codes,
- *     store_set_vec_bytes): 2-bit codes (d/4 bytes a row in RAM instead of d/2) and int8 rows on disk (d + 4
- *     bytes instead of 4d). 100M rows of 96 dimensions then need 2.8 GB of RAM and 11.6 GB of disk.
+ *     store_set_vec_bytes): 2-bit or 1-bit codes (d/4 or d/8 bytes a row in RAM instead of d/2) and int8 rows on
+ *     disk (d + 4 bytes instead of 4d). 100M rows of 96 dimensions with 2-bit codes need 2.8 GB of RAM and 11.6 GB
+ *     of disk.
  *
  * Self-tuning: store_set_target_recall(s, 0.95) and the store keeps that recall@10 on its own - every build
  * measures recall against exact search and picks the fewest IVF probes that reach it, on the queries it has
@@ -226,7 +227,7 @@ typedef struct {
     SCol     vec, idc, metac;   /* the rows: unit vectors, caller doc ids, caller i64 tags (0 = none) */
     SCol     vsc;           /* int8 rows only: the f32 scale of each row */
     i32      vbytes;        /* 4: f32 rows; 1: int8 rows (each row times its scale) */
-    i32      codebits;      /* 4 or 2: the scan index's code width (store_set_codes) */
+    i32      codebits;      /* 4, 2 or 1: the scan index's code width (store_set_codes) */
     f32     *addbuf;        /* [dim] the row being added, normalised (under the write lock) */
     u64     *dead;          /* tombstones, one bit a row */
     i64      dead_words;
@@ -905,13 +906,14 @@ static Tq *store_tq_build_(RagStore *s, i32 n)
     return t;
 }
 
-/* Code width of the scan index from the next build on: 4 (default) or 2. 2-bit codes take d/4 bytes a row in RAM
- * instead of d/2 and scan twice as fast, but rank candidates more coarsely: re-score more of them
- * (store_set_rerank) to keep the recall. */
+/* Code width of the scan index from the next build on: 4 (default), 2 or 1. 2-bit codes take d/4 bytes a row in RAM
+ * instead of d/2 and scan twice as fast, 1-bit codes d/8 (the signs: 32x smaller than f32 rows) and four times as
+ * fast, but both rank candidates more coarsely: re-score more of them (store_set_rerank; 1-bit re-scores 4x as
+ * many by default) to keep the recall. */
 void store_set_codes(RagStore *s, i32 bits)
 {
     pthread_rwlock_wrlock(&s->lock);
-    s->codebits = bits == 2 ? 2 : 4;
+    s->codebits = bits == 2 || bits == 1 ? bits : 4;
     pthread_rwlock_unlock(&s->lock);
 }
 

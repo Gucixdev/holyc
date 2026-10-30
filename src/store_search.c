@@ -22,7 +22,9 @@ static i32 store_search_impl_(RagStore *s, const f32 *query, i32 k,
     mcol = store_tqcol_(&s->metac);
 
     if (s->tq) {
-        i32 R = filtered ? k * 40 + 256 : (s->tq_rerank > 0 ? s->tq_rerank : (k * 20 > 256 ? k * 20 : 256)), m, nth = 1;
+        /* candidates re-scored exactly: 20 k, at least 256 - four times that with 1-bit codes, which rank coarsely */
+        i32 R = filtered ? k * 40 + 256
+                         : (s->tq_rerank > 0 ? s->tq_rerank : (k * 20 > 256 ? k * 20 : 256) * (s->tq->bits == 1 ? 4 : 1)), m, nth = 1;
         i32 *rows = (i32 *)malloc((size_t)R * sizeof(i32));
         if (s->tq_threads > 0) nth = s->tq_threads;
         else if (s->tq->n >= 150000) { i32 c = store_ncpu_(s); nth = c > 4 ? 4 : c; }   /* the scan is memory-bound: 4 threads already saturate the bus */
