@@ -5,8 +5,22 @@
 
 /* Scores of the 32 vectors of one block into out[32] (u16, bigger = closer). Returns a bit mask of the rows
  * scoring above thr, so the caller only touches those (most rows of a scan never get near the top R).
- * AVX-512BW: 4 dimensions per 64-byte step; AVX2: 2 per step; the lane sums and the threshold test stay in
- * registers. */
+ * AVX-512BW: 4 dimensions per 64-byte step; AVX2: 2 per step; NEON: 2 per step (two 16-byte loads); the lane sums
+ * and the threshold test stay in registers. */
+#if defined(VS_NEON)
+/* the 16-entry byte table t indexed by the 16 bytes of i (each < 16) */
+static uint8x16_t tq_tbl16_(uint8x16_t t, uint8x16_t i)
+{
+#if defined(__aarch64__)
+    return vqtbl1q_u8(t, i);
+#else
+    uint8x8x2_t tt;
+    tt.val[0] = vget_low_u8(t); tt.val[1] = vget_high_u8(t);
+    return vcombine_u8(vtbl2_u8(tt, vget_low_u8(i)), vtbl2_u8(tt, vget_high_u8(i)));
+#endif
+}
+#endif
+
 static u32 tq_block_(const u8 *blk, const u8 *lut, i32 dpad, u16 thr, u16 *out)
 {
 #if defined(__AVX2__)
@@ -71,6 +85,42 @@ static u32 tq_block_(const u8 *blk, const u8 *lut, i32 dpad, u16 thr, u16 *out)
         return m0 | (m1 << 16);
 #endif
     }
+#elif defined(VS_NEON)
+    /* NEON: one 16-byte table lookup per half-byte row; two dimensions are summed in u16 before they meet the
+     * accumulators, so each accumulator chain takes one add per two dimensions. Same u16 sums as the scalar code. */
+    uint16x8_t a0 = vdupq_n_u16(0), a1 = a0, b0 = a0, b1 = a0;
+    const uint8x16_t m0f = vdupq_n_u8(0x0f);
+    u32 m = 0;
+    i32 d = 0, j;
+    for (; d + 2 <= dpad; d += 2) {
+        uint8x16_t c0 = vld1q_u8(blk + (size_t)d * 16), c1 = vld1q_u8(blk + (size_t)d * 16 + 16);
+        uint8x16_t l0 = vld1q_u8(lut + (size_t)d * 16), l1 = vld1q_u8(lut + (size_t)d * 16 + 16);
+        uint8x16_t r0 = tq_tbl16_(l0, vandq_u8(c0, m0f)), r1 = tq_tbl16_(l0, vshrq_n_u8(c0, 4));
+        uint8x16_t s0 = tq_tbl16_(l1, vandq_u8(c1, m0f)), s1 = tq_tbl16_(l1, vshrq_n_u8(c1, 4));
+        a0 = vaddq_u16(a0, vaddl_u8(vget_low_u8(r0), vget_low_u8(s0)));
+        a1 = vaddq_u16(a1, vaddl_u8(vget_high_u8(r0), vget_high_u8(s0)));
+        b0 = vaddq_u16(b0, vaddl_u8(vget_low_u8(r1), vget_low_u8(s1)));
+        b1 = vaddq_u16(b1, vaddl_u8(vget_high_u8(r1), vget_high_u8(s1)));
+    }
+    if (d < dpad) {
+        uint8x16_t c0 = vld1q_u8(blk + (size_t)d * 16), l0 = vld1q_u8(lut + (size_t)d * 16);
+        uint8x16_t r0 = tq_tbl16_(l0, vandq_u8(c0, m0f)), r1 = tq_tbl16_(l0, vshrq_n_u8(c0, 4));
+        a0 = vaddw_u8(a0, vget_low_u8(r0)); a1 = vaddw_u8(a1, vget_high_u8(r0));
+        b0 = vaddw_u8(b0, vget_low_u8(r1)); b1 = vaddw_u8(b1, vget_high_u8(r1));
+    }
+    vst1q_u16(out, a0); vst1q_u16(out + 8, a1); vst1q_u16(out + 16, b0); vst1q_u16(out + 24, b1);
+#if defined(__aarch64__)
+    {   /* rows above thr: compare, weight lane i by 1 << i, add the lanes */
+        static const u16 w8[8] = { 1, 2, 4, 8, 16, 32, 64, 128 };
+        const uint16x8_t w = vld1q_u16(w8), t = vdupq_n_u16(thr);
+        m = (u32)vaddvq_u16(vandq_u16(vcgtq_u16(a0, t), w)) | ((u32)vaddvq_u16(vandq_u16(vcgtq_u16(a1, t), w)) << 8)
+          | ((u32)vaddvq_u16(vandq_u16(vcgtq_u16(b0, t), w)) << 16) | ((u32)vaddvq_u16(vandq_u16(vcgtq_u16(b1, t), w)) << 24);
+        (void)j;
+    }
+#else
+    for (j = 0; j < 32; ++j) if (out[j] > thr) m |= 1u << j;
+#endif
+    return m;
 #else
     i32 d, j;
     u32 m = 0;

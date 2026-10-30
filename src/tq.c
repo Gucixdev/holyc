@@ -28,7 +28,8 @@
  *   tq_search_many(tq, Q, nq, R, ...)                 the same for a batch, cluster by cluster
  *   tq_add_prep / tq_add_put                          rows n, n+1, ... into the index (prep reads only: no lock)
  *   tq_free
- * C89, AVX2 / AVX-512 (VNNI) kernels when compiled with -march=native, scalar otherwise; threads via pthreads. */
+ * C89, AVX2 / AVX-512 (VNNI) kernels when compiled with -march=native, NEON on ARM, scalar otherwise; threads via
+ * pthreads. */
 #ifndef TQ_C
 #define TQ_C
 
@@ -62,17 +63,8 @@ TqCol tq_col_flat(const void *base, size_t esz, u8 **holder)
 /* row r as f32: a pointer into the column, or (int8 rows) dequantised into buf[dim] */
 static const f32 *tq_row_(const TqCol *c, i64 r, f32 *buf)
 {
-    const i8 *x;
-    f32 s;
-    i32 d = 0;
     if (!c->i8) return TQ_ROW(c, r);
-    x = (const i8 *)(const void *)TQ_AT(c, r);
-    s = *(const f32 *)(const void *)TQ_AT(c->scale, r);
-#if defined(__AVX512F__)
-    for (; d + 16 <= c->dim; d += 16)
-        _mm512_storeu_ps(buf + d, _mm512_mul_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)(const void *)(x + d)))), _mm512_set1_ps(s)));
-#endif
-    for (; d < c->dim; ++d) buf[d] = s * (f32)x[d];
+    vs_i8_scale(buf, (const i8 *)(const void *)TQ_AT(c, r), c->dim, *(const f32 *)(const void *)TQ_AT(c->scale, r));
     return buf;
 }
 
@@ -182,6 +174,11 @@ static void tq_wht_(f32 *x, i32 dpad)
                 for (; j + 8 <= i + h; j += 8) {
                     __m256 a = _mm256_loadu_ps(x + j), b = _mm256_loadu_ps(x + j + h);
                     _mm256_storeu_ps(x + j, _mm256_add_ps(a, b)); _mm256_storeu_ps(x + j + h, _mm256_sub_ps(a, b));
+                }
+#elif defined(VS_NEON)
+                for (; j + 4 <= i + h; j += 4) {
+                    float32x4_t a = vld1q_f32(x + j), b = vld1q_f32(x + j + h);
+                    vst1q_f32(x + j, vaddq_f32(a, b)); vst1q_f32(x + j + h, vsubq_f32(a, b));
                 }
 #endif
                 for (; j < i + h; ++j) { f32 a = x[j], b = x[j + h]; x[j] = a + b; x[j + h] = a - b; }
@@ -336,6 +333,34 @@ static void tq_score_(const f32 *v, const f32 *ct, i32 ngroups, i32 dim, f32 *ou
             a0 = _mm256_fmadd_ps(x, _mm256_loadu_ps(c + (size_t)d * 16), a0); a1 = _mm256_fmadd_ps(x, _mm256_loadu_ps(c + (size_t)d * 16 + 8), a1);
         }
         _mm256_storeu_ps(out + (size_t)g * 16, a0); _mm256_storeu_ps(out + (size_t)g * 16 + 8, a1);
+    }
+#elif defined(VS_NEON)
+    for (; g + 2 <= ngroups; g += 2) {               /* 8 accumulators: two groups of 16 centroids */
+        const f32 *c = ct + (size_t)g * gs;
+        float32x4_t a0 = vdupq_n_f32(0.0f), a1 = a0, a2 = a0, a3 = a0, a4 = a0, a5 = a0, a6 = a0, a7 = a0;
+        f32 *o = out + (size_t)g * 16;
+        for (d = 0; d < dim; ++d) {
+            float32x4_t x = vdupq_n_f32(v[d]);
+            const f32 *p = c + (size_t)d * 16, *p2 = p + gs;
+            a0 = VS_FMAQ(a0, x, vld1q_f32(p));      a1 = VS_FMAQ(a1, x, vld1q_f32(p + 4));
+            a2 = VS_FMAQ(a2, x, vld1q_f32(p + 8));  a3 = VS_FMAQ(a3, x, vld1q_f32(p + 12));
+            a4 = VS_FMAQ(a4, x, vld1q_f32(p2));     a5 = VS_FMAQ(a5, x, vld1q_f32(p2 + 4));
+            a6 = VS_FMAQ(a6, x, vld1q_f32(p2 + 8)); a7 = VS_FMAQ(a7, x, vld1q_f32(p2 + 12));
+        }
+        vst1q_f32(o, a0); vst1q_f32(o + 4, a1); vst1q_f32(o + 8, a2); vst1q_f32(o + 12, a3);
+        vst1q_f32(o + 16, a4); vst1q_f32(o + 20, a5); vst1q_f32(o + 24, a6); vst1q_f32(o + 28, a7);
+    }
+    for (; g < ngroups; ++g) {
+        const f32 *c = ct + (size_t)g * gs;
+        float32x4_t a0 = vdupq_n_f32(0.0f), a1 = a0, a2 = a0, a3 = a0;
+        f32 *o = out + (size_t)g * 16;
+        for (d = 0; d < dim; ++d) {
+            float32x4_t x = vdupq_n_f32(v[d]);
+            const f32 *p = c + (size_t)d * 16;
+            a0 = VS_FMAQ(a0, x, vld1q_f32(p));      a1 = VS_FMAQ(a1, x, vld1q_f32(p + 4));
+            a2 = VS_FMAQ(a2, x, vld1q_f32(p + 8));  a3 = VS_FMAQ(a3, x, vld1q_f32(p + 12));
+        }
+        vst1q_f32(o, a0); vst1q_f32(o + 4, a1); vst1q_f32(o + 8, a2); vst1q_f32(o + 12, a3);
     }
 #else
     for (; g < ngroups; ++g) {

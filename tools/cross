@@ -17,7 +17,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 declare -A CC=([aarch64]=aarch64-linux-gnu-gcc [armv7]=arm-linux-gnueabihf-gcc [riscv64]=riscv64-linux-gnu-gcc [s390x]=s390x-linux-gnu-gcc)
 declare -A QEMU=([aarch64]=qemu-aarch64-static [armv7]=qemu-arm-static [riscv64]=qemu-riscv64-static [s390x]=qemu-s390x-static)
 declare -A ARCH=([aarch64]="-march=armv8-a" [armv7]="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard" [riscv64]="" [s390x]="")
-TESTS=${TESTS:-"hdict lex q1 q3 q4fs ivf hnsw engine store api"}
+TESTS=${TESTS:-"hdict lex q1 q3 q4fs ivf hnsw simd engine store api"}
 CFLAGS=(-std=c89 -pedantic -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -O2 -static -Isrc -Iinclude)
 
 targets=("$@")

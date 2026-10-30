@@ -29,7 +29,7 @@ STORE=("${ENG[@]}" src/store*.c src/hdict.c src/tq*.c)
 VECDB=("${STORE[@]}" src/lex.c src/vecdb*.c)
 
 fail=0
-for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf engine store vecdb mem ${1:+$1}; do
+for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store vecdb mem ${1:+$1}; do
     bin="$OUT/$name"
     src="tests/${name}_test.c"
     def=()
@@ -41,6 +41,7 @@ for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf engine store vecdb mem $
         q4fs)   deps=(src/q4.c src/q4fs.c src/vsimd.h) ;;
         hnsw)   deps=(src/hnsw.c src/vsimd.h) ;;
         ivf)    deps=(src/ivf.c) ;;
+        simd)   deps=(src/tq*.c src/vsimd.h src/base.h) ;;
         engine) deps=("${ENG[@]}"); def=(-DENGINE_SERIALIZE) ;;   # exercise the .vxi round-trip in the test
         store)  deps=("${STORE[@]}") ;;
         vecdb)  deps=("${VECDB[@]}") ;;
@@ -60,6 +61,22 @@ for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf engine store vecdb mem $
     [[ $name == real_val ]] && runargs=(emb)
     if ! "./$bin" "${runargs[@]}"; then echo "  ^ $name FAILED"; fail=1; fi
     echo
+done
+
+# ---- the SIMD kernels again, built for the other code paths this CPU can run: on x86-64 AVX2 without AVX-512 and no
+# ---- SIMD at all, on aarch64 no NEON (tools/cross covers 32-bit ARM, RISC-V and big-endian s390x) ----
+case $(uname -m) in
+    x86_64)  isas=(haswell x86-64) ;;
+    aarch64) isas=(armv8-a+nosimd) ;;
+    *)       isas=() ;;
+esac
+for isa in "${isas[@]}"; do
+    bin="$OUT/simd_$isa"
+    stale=0
+    [[ -x $bin ]] || stale=1
+    for d in tests/simd_test.c src/tq*.c src/vsimd.h src/base.h; do [[ $d -nt $bin ]] && stale=1; done
+    (( stale )) && "$CC" "${CFLAGS[@]/-march=native/-march=$isa}" tests/simd_test.c -lm -lpthread -o "$bin"
+    "./$bin" || { echo "  ^ simd ($isa) FAILED"; fail=1; }
 done
 
 # ---- the C API: libvecindex.so / .a with nothing but vi_* exported, and a program that uses only the header ----

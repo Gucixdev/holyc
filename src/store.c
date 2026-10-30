@@ -726,35 +726,16 @@ i32 store_set_vec_bytes(RagStore *s, i32 bytes)
 /* row r as f32: a pointer into the column, or dequantised into buf[dim] */
 static const f32 *store_row_(const RagStore *s, i32 r, f32 *buf)
 {
-    const i8 *x;
-    f32 sc;
-    i32 d = 0;
     if (s->vbytes != 1) return STORE_VEC(s, r);
-    x = STORE_I8(s, r); sc = STORE_SC(s, r);
-#if defined(__AVX512F__)
-    for (; d + 16 <= s->dim; d += 16)
-        _mm512_storeu_ps(buf + d, _mm512_mul_ps(_mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)(const void *)(x + d)))), _mm512_set1_ps(sc)));
-#endif
-    for (; d < s->dim; ++d) buf[d] = sc * (f32)x[d];
+    vs_i8_scale(buf, STORE_I8(s, r), s->dim, STORE_SC(s, r));
     return buf;
 }
 
 /* q . row r (q unit length): what every exact re-score uses */
 static f32 store_dot_(const RagStore *s, const f32 *q, i32 r)
 {
-    const i8 *x;
-    f32 acc = 0.0f;
-    i32 d = 0;
     if (s->vbytes != 1) return vs_dot(q, STORE_VEC(s, r), s->dim);
-    x = STORE_I8(s, r);
-#if defined(__AVX512F__)
-    {   __m512 a = _mm512_setzero_ps();
-        for (; d + 16 <= s->dim; d += 16)
-            a = _mm512_fmadd_ps(_mm512_loadu_ps(q + d), _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)(const void *)(x + d)))), a);
-        acc = _mm512_reduce_add_ps(a); }
-#endif
-    for (; d < s->dim; ++d) acc += q[d] * (f32)x[d];
-    return acc * STORE_SC(s, r);
+    return vs_dot_i8(q, STORE_I8(s, r), s->dim) * STORE_SC(s, r);
 }
 
 /* store a normalised f32 row into row r (int8: symmetric, scale = max |v| / 127) */

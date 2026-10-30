@@ -117,19 +117,8 @@ static void store_snap_free_(StoreSnap *sn) { free(sn->vch); free(sn->sch); free
 /* q . row r of a column (q unit length; int8 rows times their scale) */
 static f32 store_cdot_(const TqCol *c, const f32 *q, i64 r, i32 dim)
 {
-    const i8 *x;
-    f32 acc = 0.0f;
-    i32 d = 0;
     if (!c->i8) return vs_dot(q, TQ_ROW(c, r), dim);
-    x = (const i8 *)(const void *)TQ_AT(c, r);
-#if defined(__AVX512F__)
-    {   __m512 a = _mm512_setzero_ps();
-        for (; d + 16 <= dim; d += 16)
-            a = _mm512_fmadd_ps(_mm512_loadu_ps(q + d), _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)(const void *)(x + d)))), a);
-        acc = _mm512_reduce_add_ps(a); }
-#endif
-    for (; d < dim; ++d) acc += q[d] * (f32)x[d];
-    return acc * *(const f32 *)(const void *)TQ_AT(c->scale, r);
+    return vs_dot_i8(q, (const i8 *)(const void *)TQ_AT(c, r), dim) * *(const f32 *)(const void *)TQ_AT(c->scale, r);
 }
 
 /* maintenance counters, read without the lock (store_live_stats) */
