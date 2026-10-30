@@ -33,15 +33,31 @@ The commands: `ping`, `stats`, `search K X1 .. XD`, `add ID X1 .. XD`, `get ID`,
 the range), `build`, `save`, `snapshot`, `help`, `quit`. A reply is `ok ...` or `err WHAT`; scores are `-|q - v|^2`
 of the unit vectors, with 6 decimals.
 
-**Binary** (`0xB5` first): little-endian frames, nothing to parse - `u8 0xB5, u8 op, u16 k, u32 nbytes, payload`.
-Ops: 1 search, 2 add, 3 delete, 4 build, 5 save, 6 stats, 7 snapshot, 8 get, 9 delete a range of ids.
+Texts (see [api.md](api.md#texts-from-a-small-chunk-to-the-whole-document)): `addt ID X1 .. XD TEXT` adds a row with
+a text, the rest of the line, with `\n` `\r` `\t` `\0` `\\` for the bytes a line cannot carry; `text ID` answers
+`ok LEN TEXT` escaped the same way; `range LO HI [MAX]` lists the ids in the range, ascending; `hybrid K X1 .. XD
+WORDS` and `words K WORDS` search with the words against the texts (BM25), with or without a vector, and answer like
+`search` with fused scores (bigger is better):
 
-**HTTP/1.1** (anything else): `GET /health`, `GET /stats`, `GET /get?id=N`, `POST /search?k=`, `/add?id=`,
-`/delete?id=` or `/delete?lo=&hi=`, `/build`, `/save`, `/snapshot`; vectors as a JSON array or raw little-endian f32,
-keep-alive, pipelining. The header scan looks for the blank line 16 bytes at a time with SSE2 (the picohttpparser
+```
+addt 7340032 1 0 0 0 Oolong is partly oxidised.   ok
+text 7340032                                       ok 26 Oolong is partly oxidised.
+range 7340032 8388607                              ok 1 7340032
+words 3 oxidised                                   ok 1 7340032 0.049180
+```
+
+**Binary** (`0xB5` first): little-endian frames, nothing to parse - `u8 0xB5, u8 op, u16 k, u32 nbytes, payload`.
+Ops: 1 search, 2 add, 3 delete, 4 build, 5 save, 6 stats, 7 snapshot, 8 get, 9 delete a range of ids, 10 add with a
+text, 11 get a text, 12 the ids in a range, 13 hybrid search.
+
+**HTTP/1.1** (anything else): `GET /health`, `GET /stats`, `GET /get?id=N`, `GET /text?id=N`,
+`GET /range?lo=&hi=&max=`, `POST /search?k=`, `/hybrid?k=`, `/add?id=`, `/delete?id=` or `/delete?lo=&hi=`, `/build`,
+`/save`, `/snapshot`; vectors as a JSON array or raw little-endian f32 (an add's text after the floats), or
+`{"vector": [...], "text": "..."}` for an add with a text and for `/hybrid` (either key); keep-alive, pipelining. The header scan looks for the blank line 16 bytes at a time with SSE2 (the picohttpparser
 idea, cut down to what this server needs).
 
-In all three an add replaces the row with the same id: one row per id. The full reference is the comment at the top
+In all three an add replaces the row with the same id: one row per id. A request may carry up to 8 MB of text: the
+buffer of a connection starts small, grows for a big request and goes back once it is answered. The full reference is the comment at the top
 of `src/vserv_proto.c`.
 
 ## Durability: a journal and background snapshots, no replication

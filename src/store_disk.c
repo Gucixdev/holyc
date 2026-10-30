@@ -121,9 +121,10 @@ static i64 store_journal_play_(RagStore *s, const char *path, const char *jn)
 {
     FILE *f = fopen(jn, "rb");
     u32 magic;
-    i32 match = 0;
+    i32 match = 0, txcap = 0;
     i64 good;
     f32 *vec;
+    char *txt = (char *)0;
     if (!f) return -1;
     if (fread(&magic, 4, 1, f) == 1) {
         if (magic == STORE_JMAGIC2) {
@@ -141,7 +142,18 @@ static i64 store_journal_play_(RagStore *s, const char *path, const char *jn)
     for (;;) {
         u8 op; i64 id, meta;
         if (fread(&op, 1, 1, f) != 1) break;
-        if (op == 'A' || op == 'P') {
+        if (op == 'Q') {                                         /* an upsert with its text */
+            u32 n;
+            if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1 || fread(vec, sizeof(f32), (size_t)s->dim, f) != (size_t)s->dim
+                || fread(&n, 4, 1, f) != 1 || n > (u32)STORE_TXMAX) break;
+            if (n > (u32)txcap) {
+                char *t = (char *)realloc(txt, (size_t)n);
+                if (!t) break;
+                txt = t; txcap = (i32)n;
+            }
+            if (n && fread(txt, 1, (size_t)n, f) != (size_t)n) break;
+            store_put_text(s, vec, id, meta, txt, (i32)n);
+        } else if (op == 'A' || op == 'P') {
             if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1 || fread(vec, sizeof(f32), (size_t)s->dim, f) != (size_t)s->dim) break;
             if (op == 'A') store_add_meta(s, vec, id, meta); else store_put(s, vec, id, meta);
         } else if (op == 'D') {
@@ -154,7 +166,7 @@ static i64 store_journal_play_(RagStore *s, const char *path, const char *jn)
         good = (i64)ftello(f);
     }
     fclose(f);
-    free(vec);
+    free(vec); free(txt);
     return good;
 }
 
@@ -256,6 +268,37 @@ static int store_tq_w_(FILE *f, const Tq *t)
     return bad ? -1 : 0;
 }
 
+/* the texts of rows [0, n) except the tombstoned ones: the heap's length (u64), every written row's offset | length
+ * << 40 with the offsets of the new, gap-free heap (u64, little-endian), then the heap */
+static int store_text_w_(FILE *f, const RagStore *s, i64 n, const u64 *dead)
+{
+    u64 buf[512], len = 0, at = 0;
+    i32 nb = 0;
+    i64 r;
+    char *t;
+    for (r = 0; r < n; ++r) if (!(dead && ((dead[r >> 6] >> (r & 63)) & 1u))) len += (u64)STORE_TXLEN(STORE_TXO(s, r));
+    if (store_pad_(f) || engs_wle_(f, &len, 8, 1) || store_pad_(f)) return -1;
+    for (r = 0; r < n; ++r) {
+        u64 v;
+        if (dead && ((dead[r >> 6] >> (r & 63)) & 1u)) continue;
+        v = STORE_TXO(s, r);
+        buf[nb++] = v ? at | ((u64)(u32)STORE_TXLEN(v) << 40) : 0;
+        at += (u64)STORE_TXLEN(v);
+        if (nb == 512) { if (engs_wle_(f, buf, 8, 512)) return -1; nb = 0; }
+    }
+    if ((nb && engs_wle_(f, buf, 8, (size_t)nb)) || store_pad_(f)) return -1;
+    if (!(t = (char *)malloc((size_t)STORE_TXMAX + 1))) return -1;
+    for (r = 0; r < n; ++r) {
+        u64 v;
+        if (dead && ((dead[r >> 6] >> (r & 63)) & 1u)) continue;
+        if (!(v = STORE_TXO(s, r))) continue;
+        store_tx_copy_(&s->tx, v, t, STORE_TXLEN(v));
+        if (fwrite(t, 1, (size_t)STORE_TXLEN(v), f) != (size_t)STORE_TXLEN(v)) { free(t); return -1; }
+    }
+    free(t);
+    return 0;
+}
+
 /* Writes the store to tmp, flushes it to the disk, renames it over path and makes the rename durable: 0 or -1. Takes
  * no lock - the caller holds the write lock (store_save, after its compaction), or is the snapshot child, alone with
  * a private image of the store. Tombstoned rows are left out; only the child (child = 1) may then renumber the scan
@@ -288,14 +331,15 @@ static i32 store_write_file_(RagStore *s, const char *path, const char *tmp, u64
     kind = (u8)(s->idx && all_in && !dead ? 1 : (s->tq && all_in && s->tq->n == live ? 2 : 0));
     f = fopen(tmp, "wb");                                        /* the old file stays intact until the new one is complete */
     if (!f) return -1;
-    hdr[0] = (i32)STORE_MAGIC; hdr[1] = STORE_VERSION7; hdr[2] = s->dim; hdr[3] = live;
-    ext[0] = s->vbytes == 1 ? 1 : 0; ext[1] = 0;
+    hdr[0] = (i32)STORE_MAGIC; hdr[1] = s->has_text ? STORE_VERSION8 : STORE_VERSION7; hdr[2] = s->dim; hdr[3] = live;
+    ext[0] = (s->vbytes == 1 ? 1 : 0) | (s->has_text ? 2 : 0); ext[1] = 0;
     ext[2] = (i32)(u32)(stamp & 0xffffffffu); ext[3] = (i32)(u32)(stamp >> 32);
     bad = STORE_W32(f, hdr, 4) || STORE_W32(f, ext, 4) || store_goal_w_(f, &s->goal)
        || store_pad_(f) || store_col_w_live_(f, &s->vec, s->count, dead)
        || (s->vbytes == 1 && (store_pad_(f) || store_col_w_live_(f, &s->vsc, s->count, dead)))
        || store_pad_(f) || store_col_w_live_(f, &s->idc, s->count, dead)
        || store_pad_(f) || store_col_w_live_(f, &s->metac, s->count, dead)
+       || (s->has_text && store_text_w_(f, s, s->count, dead))
        || fwrite(&kind, 1, 1, f) != 1
        || (kind == 1 && engine_save(s->idx, f))
        || (kind == 2 && store_tq_w_(f, s->tq));
@@ -320,6 +364,7 @@ i32 store_save(RagStore *s, const char *path)
     store_index_locked_(s);                                      /* and what came in meanwhile: the file gets the index */
     had_idx = s->idx != (EngIndex *)0;
     live = store_compact_(s);                                    /* the scan index follows its rows */
+    store_tx_compact_(s);                                        /* and the texts of the rows that went */
     if (had_idx && !s->idx && live > 0) { store_engine_build_(s, live); s->built_upto = live; }   /* an engine index cannot */
     tmp = store_jname_(path, ".tmp");
     store_advise_(s, MADV_SEQUENTIAL);                           /* the save streams every row: read ahead */
@@ -631,22 +676,52 @@ static Tq *store_tq_r_(u8 *map, size_t len, FILE *f, size_t off, i32 rows)
     return t;
 }
 
+/* the text heap of len bytes at byte offset off: blocks that point into the mapping, or read into fresh blocks.
+ * New texts start on a fresh block either way. 0 or -1. */
+static i32 store_heap_r_(RagStore *s, u8 *map, size_t flen, FILE *f, size_t off, u64 len)
+{
+    i64 nb = (i64)((len + (u64)STORE_TXB - 1) >> STORE_TXSHIFT), i;
+    if (off > flen || len > (u64)(flen - off)) return -1;
+    for (i = 0; i < nb; ++i) {
+        size_t at = off + (size_t)(i << STORE_TXSHIFT);
+        if (map) {
+            if (s->tx.n == s->tx.cap) {
+                i32 nc = s->tx.cap ? s->tx.cap * 2 : 16;
+                u8 **b = (u8 **)realloc(s->tx.b, (size_t)nc * sizeof(u8 *));
+                u8 *h;
+                if (!b) return -1;
+                s->tx.b = b;
+                if (!(h = (u8 *)realloc(s->tx.how, (size_t)nc))) return -1;
+                s->tx.how = h; s->tx.cap = nc;
+            }
+            s->tx.b[s->tx.n] = map + at; s->tx.how[s->tx.n] = STORE_MAPPED; ++s->tx.n;
+        } else {
+            size_t n = (size_t)(len - ((u64)i << STORE_TXSHIFT));
+            if (n > (size_t)STORE_TXB) n = (size_t)STORE_TXB;
+            if (store_tx_push_(s, &s->tx) || fseeko(f, (off_t)at, SEEK_SET) != 0 || fread(s->tx.b[i], 1, n, f) != n) return -1;
+        }
+    }
+    s->tx.used = nb << STORE_TXSHIFT;
+    return 0;
+}
+
 /* v5, v6, v7: map the file privately (copy-on-write: the store may still edit rows in place, the file is never
  * written through the mapping) and point the columns and the scan index into it. Nothing is read up front;
  * pages arrive on first touch, the id lookups are built on first use. */
 static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *hdr)
 {
     RagStore *s;
-    i32 live = hdr[3], dim = hdr[2], ext[4], v7 = hdr[1] == STORE_VERSION7, i8rows = hdr[1] == STORE_VERSION_I8;
+    i32 live = hdr[3], dim = hdr[2], ext[4], v7 = hdr[1] == STORE_VERSION7 || hdr[1] == STORE_VERSION8,
+        i8rows = hdr[1] == STORE_VERSION_I8, texts = 0;
     struct stat st;
-    size_t len, o_vecs, o_vsc = 0, o_ids, o_meta, o_kind;
+    size_t len, o_vecs, o_vsc = 0, o_ids, o_meta, o_kind, o_txo = 0, o_heap = 0;
     u8 *map = (u8 *)0, kind = 0;
-    u64 stamp = 0;
+    u64 stamp = 0, hlen = 0;
 
     if (live < 0 || dim <= 0 || fstat(fileno(f), &st) != 0) { fclose(f); return (RagStore *)0; }
     len = (size_t)st.st_size;
     if ((v7 || i8rows) && STORE_R32(f, ext, 4)) { fclose(f); return (RagStore *)0; }
-    if (v7) { i8rows = ext[0] & 1; stamp = (u64)(u32)ext[2] | ((u64)(u32)ext[3] << 32); }
+    if (v7) { i8rows = ext[0] & 1; texts = hdr[1] == STORE_VERSION8 && (ext[0] & 2); stamp = (u64)(u32)ext[2] | ((u64)(u32)ext[3] << 32); }
     else if (i8rows && ext[0] != 1) { fclose(f); return (RagStore *)0; }
     s = store_new(a, dim);
     if (i8rows) store_set_vec_bytes(s, 1);
@@ -656,6 +731,17 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     else o_ids = STORE_AL(o_vecs + (size_t)live * (size_t)dim * 4);
     o_meta = STORE_AL(o_ids + (size_t)live * 8);
     o_kind = o_meta + (size_t)live * 8;
+    if (texts) {                                                 /* v8: the heap's length, the offsets, the heap */
+        size_t o_len = STORE_AL(o_kind);
+        if (o_len + 8 > len || fseeko(f, (off_t)o_len, SEEK_SET) != 0 || STORE_R64(f, (i64 *)(void *)&hlen, 1)) {
+            fclose(f); store_destroy(s); return (RagStore *)0;
+        }
+        o_txo = STORE_AL(o_len + 8);
+        o_heap = STORE_AL(o_txo + (size_t)live * 8);
+        if (o_heap > len || hlen > (u64)(len - o_heap)) { fclose(f); store_destroy(s); return (RagStore *)0; }
+        o_kind = o_heap + (size_t)hlen;
+        s->has_text = 1;
+    }
     if (o_kind >= len) { fclose(f); store_destroy(s); return (RagStore *)0; }
     if (!eng_host_be_() && live > 0) {
         void *m = mmap((void *)0, len, PROT_READ | PROT_WRITE, MAP_PRIVATE, fileno(f), 0);
@@ -664,7 +750,8 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     if (live > 0) {
         if (store_col_r_(s, &s->vec, map, len, f, o_vecs, live) || store_col_r_(s, &s->idc, map, len, f, o_ids, live)
             || store_col_r_(s, &s->metac, map, len, f, o_meta, live)
-            || (i8rows && store_col_r_(s, &s->vsc, map, len, f, o_vsc, live))) { fclose(f); store_destroy(s); return (RagStore *)0; }
+            || (i8rows && store_col_r_(s, &s->vsc, map, len, f, o_vsc, live))
+            || (texts && store_col_r_(s, &s->txo, map, len, f, o_txo, live))) { fclose(f); store_destroy(s); return (RagStore *)0; }
         s->dead_words = ((i64)live + 63) >> 6;
         s->dead = (u64 *)calloc((size_t)s->dead_words, sizeof(u64));
         if (map) {                                               /* re-scoring reads rows at random: no read-ahead */
@@ -672,6 +759,8 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
             madvise(map + b, o_ids - b, MADV_RANDOM);
         }
     }
+    if (texts && store_heap_r_(s, map, len, f, o_heap, hlen)) { fclose(f); store_destroy(s); return (RagStore *)0; }
+    s->txlive = (i64)hlen;
     s->count = live;
     s->live = live;
     s->idmap_ok = live == 0;
@@ -705,7 +794,8 @@ RagStore *store_load(Arena *a, const char *path)
     u8 has_idx;
     if (!f) return (RagStore *)0;
     if (STORE_R32(f, hdr, 4) || (u32)hdr[0] != STORE_MAGIC
-        || (hdr[1] != 4 && hdr[1] != STORE_VERSION && hdr[1] != STORE_VERSION_I8 && hdr[1] != STORE_VERSION7)) { fclose(f); return (RagStore *)0; }
+        || (hdr[1] != 4 && hdr[1] != STORE_VERSION && hdr[1] != STORE_VERSION_I8 && hdr[1] != STORE_VERSION7
+            && hdr[1] != STORE_VERSION8)) { fclose(f); return (RagStore *)0; }
     if (hdr[1] != 4) return store_load_v5_(a, path, f, hdr);
 
     /* v4: packed sections, no saved scan index - read everything, rebuild the scan */

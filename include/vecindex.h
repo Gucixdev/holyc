@@ -42,7 +42,7 @@ typedef int64_t vi_i64;
 
 typedef struct vi_db vi_db;
 
-#define VI_VERSION "0.2.0"
+#define VI_VERSION "0.3.0"
 
 /* flags for vi_open */
 #define VI_LIVE 1        /* index added rows as they come and rebuild the index as it ages, from a thread of its own */
@@ -80,6 +80,21 @@ VI_API int vi_delete_range(vi_db *db, vi_i64 lo, vi_i64 hi);
 /* The stored (unit-normalised) vector of id into out[dim]: 0, or -1 when there is no such row. */
 VI_API int vi_get(vi_db *db, vi_i64 id, float *out);
 
+/* vi_add with a text kept beside the row (a chunk of a document, a note: any bytes, len of them, at most 16 MB - 1;
+ * len -1: a 0-terminated string). The text comes back with vi_get_text and feeds the words side of
+ * vi_search_hybrid. 0, or -1 as vi_add (or a bad length). */
+VI_API int vi_add_text(vi_db *db, vi_i64 id, const float *vec, const char *text, int len);
+
+/* The text of id: its length (0: the row has none), the first min(length, cap) bytes copied into buf, no 0 added;
+ * -1 when there is no such row. A length above cap means buf was too small: call again with a bigger one. */
+VI_API int vi_get_text(vi_db *db, vi_i64 id, char *buf, int cap);
+
+/* The ids in [lo, hi] that have a row, ascending: the smallest max of them into ids; returns how many (-1: out of
+ * memory). With ids made as doc << 20 | chunk, vi_range(db, doc << 20, (doc << 20) | 0xfffff, ...) lists a
+ * document's chunks: search the small chunks, then hand the model the chunks around a hit, or the whole document.
+ * For more than max, call again from the last id + 1. */
+VI_API int vi_range(vi_db *db, vi_i64 lo, vi_i64 hi, vi_i64 *ids, int max);
+
 /* A 64-bit tag on a row, for filtered search: 0, or -1 when there is no such row. */
 VI_API int vi_set_tag(vi_db *db, vi_i64 id, vi_i64 tag);
 VI_API int vi_get_tag(vi_db *db, vi_i64 id, vi_i64 *tag);
@@ -90,6 +105,12 @@ VI_API int vi_search(vi_db *db, const float *query, int k, vi_i64 *ids, float *s
 
 /* The same, over rows whose tag has every bit of all set and, when any is not 0, at least one bit of any. */
 VI_API int vi_search_tagged(vi_db *db, const float *query, int k, vi_i64 all, vi_i64 any, vi_i64 *ids, float *scores);
+
+/* Hybrid search: the vector query (NULL: words only) and the words of text (tlen bytes, -1: 0-terminated; NULL: the
+ * vector only) against the rows' texts (BM25), fused by rank - so an exact name, a number or a rare word is found
+ * even where the embedding blurs it. ids and scores (the fused score, bigger = better) get up to k hits; returns how
+ * many. The first such search builds the word index over every text; later writes keep it current. */
+VI_API int vi_search_hybrid(vi_db *db, const float *query, const char *text, int tlen, int k, vi_i64 *ids, float *scores);
 
 /* nq queries (queries: nq x dim) on up to threads threads (0: every core); ids and scores get k slots a query, a
  * missing hit has id -1. */

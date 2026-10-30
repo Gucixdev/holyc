@@ -35,6 +35,137 @@ static f32 sd_recall_(RagStore *s, const f32 *x, i32 n, i32 dim, const f32 *Q, i
     return (f32)hits / (f32)(nq * 10);
 }
 
+/* ---- texts: put / get / upsert / delete, id ranges, hybrid search, save + load (v8), the journal, a snapshot, the
+ * heap's compaction ---- */
+#define SDT_DIM 16
+static i32 sdt_text_(i64 id, char *buf)                  /* the text of row id: words, its own rare word, some bytes */
+{
+    i32 n = sprintf(buf, "document %d chunk %d about tea and cats zq%dx ", (int)(id >> 20), (int)(id & 0xfffff), (int)((id >> 20) * 100 + (id & 0xfffff)));
+    buf[n++] = (char)0; buf[n++] = (char)0xff; buf[n++] = (char)(id & 0x7f);
+    return n;
+}
+static i32 sdt_same_(RagStore *s, i64 id, const char *want, i32 wn)
+{
+    static char got[128];
+    i32 n = store_get_text(s, id, got, (i32)sizeof(got));
+    return n == wn && wn <= 128 && memcmp(got, want, (size_t)wn) == 0;
+}
+static i32 sd_texts_(Arena *a)
+{
+    const char *path = "/tmp/store_demo_text.vxi", *snap = "/tmp/store_demo_text_snap.vxi";
+    RagStore *s = store_new(a, SDT_DIM), *l, *m;
+    static f32 v[SDT_DIM], far_[SDT_DIM];
+    static char buf[128];
+    char *big = (char *)malloc((size_t)3 << 20), *bb = (char *)malloc((size_t)3 << 20);
+    i64 ids[64], doc5[16];
+    f32 sc[64];
+    i32 ok = 1, d, c, i, n, bad = 0, hyb = 0, hn;
+    u32 st = 99u;
+    i64 used0;
+    remove(path); remove(snap);
+    for (i = 0; i < (3 << 20); ++i) big[i] = (char)(sd_rng_(&st) & 0xff);
+    for (d = 0; d < 30; ++d)                             /* 30 documents of 10 chunks, ids doc << 20 | chunk, in order */
+        for (c = 0; c < 10; ++c) {
+            i64 id = ((i64)d << 20) | c;
+            for (i = 0; i < SDT_DIM; ++i) v[i] = sd_f_(&st);
+            n = sdt_text_(id, buf);
+            if (store_put_text(s, v, id, 0, buf, n)) bad = 1;
+        }
+    for (i = 0; i < SDT_DIM; ++i) v[i] = sd_f_(&st);
+    if (store_put_text(s, v, (i64)40 << 20, 0, big, (3 << 20) - 7)) bad = 1;      /* crosses heap blocks */
+    for (d = 0; d < 30 && !bad; ++d)
+        for (c = 0; c < 10; ++c) { i64 id = ((i64)d << 20) | c; n = sdt_text_(id, buf); if (!sdt_same_(s, id, buf, n)) bad = 1; }
+    n = store_get_text(s, (i64)40 << 20, bb, 3 << 20);
+    if (n != (3 << 20) - 7 || memcmp(bb, big, (size_t)n) != 0) bad = 1;
+    if (store_get_text(s, (i64)40 << 20, bb, 10) != (3 << 20) - 7 || memcmp(bb, big, 10) != 0) bad = 1;   /* cap < length */
+    /* upsert with a new text, upsert without one, delete, delete a range */
+    if (store_put_text(s, v, (i64)3 << 20, 0, "replaced", 8) || !sdt_same_(s, (i64)3 << 20, "replaced", 8)) bad = 1;
+    if (store_put(s, v, ((i64)3 << 20) | 1, 0) || store_get_text(s, ((i64)3 << 20) | 1, buf, 8) != 0) bad = 1;
+    if (store_delete(s, ((i64)3 << 20) | 2) != 1 || store_get_text(s, ((i64)3 << 20) | 2, buf, 8) != -1) bad = 1;
+    if (store_delete_range(s, (i64)7 << 20, ((i64)7 << 20) | 0xfffff) != 10) bad = 1;
+    if (store_count(s) != 300 + 1 - 1 - 10) bad = 1;
+    /* ranges: a document's chunks; then rows out of order, merged; paging */
+    n = store_range(s, (i64)5 << 20, ((i64)5 << 20) | 0xfffff, doc5, 16);
+    if (n != 10) bad = 1;
+    for (i = 0; i < n; ++i) if (doc5[i] != (((i64)5 << 20) | i)) bad = 1;
+    if (store_range(s, (i64)7 << 20, ((i64)7 << 20) | 0xfffff, ids, 16) != 0) bad = 1;
+    if (store_range(s, (i64)3 << 20, ((i64)3 << 20) | 0xfffff, ids, 16) != 9 || ids[2] != (((i64)3 << 20) | 3)) bad = 1;
+    store_put_text(s, v, ((i64)5 << 20) | 30, 0, "late a", 6);                /* behind the sorted rows */
+    store_put_text(s, v, ((i64)5 << 20) | 20, 0, "late b", 6);
+    store_put_text(s, v, ((i64)50 << 20), 0, "far doc", 7);
+    n = store_range(s, (i64)5 << 20, ((i64)5 << 20) | 0xfffff, ids, 16);
+    if (n != 12 || ids[9] != (((i64)5 << 20) | 9) || ids[10] != (((i64)5 << 20) | 20) || ids[11] != (((i64)5 << 20) | 30)) bad = 1;
+    if (store_range(s, ((i64)5 << 20) | 19, ((i64)5 << 20) | 21, ids, 16) != 1 || ids[0] != (((i64)5 << 20) | 20)) bad = 1;   /* short */
+    n = store_range(s, ((i64)5 << 20) | 8, (i64)1 << 40, ids, 3);              /* wide range, paged by 3 */
+    if (n != 3 || ids[0] != (((i64)5 << 20) | 8) || ids[1] != (((i64)5 << 20) | 9) || ids[2] != (((i64)5 << 20) | 20)) bad = 1;
+    if (bad) { print_cstr("  texts: put/get/upsert/delete/range FAILED\n"); ok = 0; bad = 0; }
+    /* hybrid: a rare word finds its row whatever the vector says; words only; vector only */
+    for (i = 0; i < SDT_DIM; ++i) far_[i] = sd_f_(&st);
+    for (d = 0; d < 30; d += 3) {
+        i64 id = ((i64)d << 20) | 4;
+        sprintf(buf, "zq%dx", d * 100 + 4);
+        hn = store_search_hybrid(s, far_, buf, (i32)strlen(buf), 5, ids, sc);
+        if (hn > 0 && ids[0] == id) ++hyb;
+        if (store_search_hybrid(s, (const f32 *)0, buf, (i32)strlen(buf), 5, ids, sc) < 1 || ids[0] != id) bad = 1;
+    }
+    if (store_search_hybrid(s, far_, (const char *)0, 0, 5, ids, sc) != 5) bad = 1;
+    if (hyb != 10 || bad) { print_cstr("  texts: hybrid search FAILED\n"); ok = 0; bad = 0; }
+    /* save (v8) and load: every text, the ranges, the word index rebuilt */
+    if (store_save(s, path) != 0 || !(l = store_load(a, path))) { print_cstr("  texts: save/load FAILED\n"); store_destroy(s); free(big); free(bb); return 0; }
+    for (d = 0; d < 30; ++d)
+        for (c = 0; c < 10; ++c) {
+            i64 id = ((i64)d << 20) | c;
+            i32 want = d == 7 || (d == 3 && c == 2) ? -1 : d == 3 && c == 1 ? 0 : -2;
+            if (want == -2) { if (d == 3 && c == 0) { if (!sdt_same_(l, id, "replaced", 8)) bad = 1; } else { n = sdt_text_(id, buf); if (!sdt_same_(l, id, buf, n)) bad = 1; } }
+            else if (store_get_text(l, id, buf, 8) != want) bad = 1;
+        }
+    n = store_get_text(l, (i64)40 << 20, bb, 3 << 20);
+    if (n != (3 << 20) - 7 || memcmp(bb, big, (size_t)n) != 0) bad = 1;
+    if (store_range(l, (i64)5 << 20, ((i64)5 << 20) | 0xfffff, ids, 16) != 12) bad = 1;
+    sprintf(buf, "zq%dx", 2700 + 4);
+    if (store_search_hybrid(l, (const f32 *)0, buf, (i32)strlen(buf), 3, ids, sc) < 1 || ids[0] != (((i64)27 << 20) | 4)) bad = 1;
+    /* the journal: texts added after the load come back on the next one */
+    for (i = 0; i < 50; ++i) { sprintf(buf, "journal row %d qj%dz", i, i); if (store_put_text(l, v, ((i64)60 << 20) | i, 0, buf, (i32)strlen(buf))) bad = 1; }
+    store_put_text(l, v, ((i64)5 << 20) | 3, 0, "upserted after load", 19);
+    if (store_sync(l, path) != 0) bad = 1;
+    store_destroy(l);
+    if (!(l = store_load(a, path))) { print_cstr("  texts: reload FAILED\n"); store_destroy(s); free(big); free(bb); return 0; }
+    for (i = 0; i < 50; ++i) { sprintf(buf, "journal row %d qj%dz", i, i); if (!sdt_same_(l, ((i64)60 << 20) | i, buf, (i32)strlen(buf))) bad = 1; }
+    if (!sdt_same_(l, ((i64)5 << 20) | 3, "upserted after load", 19)) bad = 1;
+    if (store_search_hybrid(l, (const f32 *)0, "qj17z", 5, 3, ids, sc) < 1 || ids[0] != (((i64)60 << 20) | 17)) bad = 1;
+    if (bad) { print_cstr("  texts: save/load/journal FAILED\n"); ok = 0; bad = 0; }
+    /* a snapshot with deleted rows: the child leaves them and their texts out */
+    store_delete_range(l, (i64)60 << 20, ((i64)60 << 20) | 24);
+    if (store_snapshot(l, snap) != 0 || store_snapshot_poll(l, 1) != 0 || !(m = store_load(a, snap))) bad = 1;
+    else {
+        for (i = 0; i < 50; ++i) {
+            sprintf(buf, "journal row %d qj%dz", i, i);
+            if (i < 25 ? store_get_text(m, ((i64)60 << 20) | i, buf, 8) != -1 : !sdt_same_(m, ((i64)60 << 20) | i, buf, (i32)strlen(buf))) bad = 1;
+        }
+        n = store_get_text(m, (i64)40 << 20, bb, 3 << 20);
+        if (n != (3 << 20) - 7 || memcmp(bb, big, (size_t)n) != 0) bad = 1;
+        store_destroy(m);
+    }
+    if (bad) { print_cstr("  texts: snapshot FAILED\n"); ok = 0; bad = 0; }
+    /* garbage: replacing the big text again and again leaves old copies in the heap; a save reclaims them */
+    for (i = 0; i < 4; ++i) store_put_text(l, v, (i64)40 << 20, 0, big, (3 << 20) - 7 - i);
+    used0 = l->tx.used;
+    if (store_save(l, path) != 0) bad = 1;
+    if (!(l->tx.used < used0 / 2 && l->tx.used <= l->txlive + 2 * STORE_TXB)) bad = 1;
+    n = store_get_text(l, (i64)40 << 20, bb, 3 << 20);
+    if (n != (3 << 20) - 10 || memcmp(bb, big, (size_t)n) != 0) bad = 1;
+    print_cstr("  texts: 301 rows put with texts (one of 3 MB across heap blocks), upserts, deletes, a document's chunks by id range,");
+    print_cstr(" hybrid search found the row of a rare word "); print_i64(hyb); print_cstr("/10 with a vector pointing elsewhere;");
+    print_cstr(" save + load (v8), the journal and a snapshot keep every text; a save shrank the heap ");
+    print_i64(used0 >> 20); print_cstr(" -> "); print_i64(l->tx.used >> 20); print_cstr(" MB\n");
+    if (bad) { print_cstr("  texts: heap compaction FAILED\n"); ok = 0; }
+    store_destroy(l); store_destroy(s);
+    remove(path); remove(snap);
+    { char *j = store_jname_(path, ".j"); remove(j); free(j); j = store_jname_(snap, ".j"); remove(j); free(j); }
+    free(big); free(bb);
+    return ok;
+}
+
 int main(void)
 {
     static Arena arena;
@@ -678,6 +809,7 @@ int main(void)
         remove(P); remove("/tmp/store_demo_snap.vxi.j"); remove("/tmp/store_demo_snap.vxi.jn");
         remove(C); remove("/tmp/store_demo_snap_copy.vxi.j");
     }
+    if (!sd_texts_(a)) ok = 0;
     print_cstr(ok ? "  OK\n" : "  FAIL\n");
     print_flush();
     arena_free(a);

@@ -50,6 +50,23 @@ static void vs_logsearch_(VsConn *c, i32 k, i32 got, double t0)
     if (vs_log_all) vs_log_(c, 0, "search k=%d hits=%d us=%.0f", k, got, (vs_now_() - t0) * 1e6);
 }
 
+#include "vserv_text.c"
+
+/* the text of id into the worker's buffer: its length (0: none), -1 no such row, -2 out of memory */
+static i32 vs_get_text_(VsWorker *w, i64 id, char **t)
+{
+    i32 n = store_get_text(vs_store, id, (char *)0, 0);
+    if (n <= 0) { *t = w->txt; return n; }
+    if (!(*t = vs_txt_(w, n))) return -2;
+    return store_get_text(vs_store, id, *t, n) == n ? n : -1;   /* replaced in between: -1, ask again */
+}
+
+/* hybrid search into w->ids / w->sc: the vector when hv, the words t[0, tn) when tn > 0 */
+static i32 vs_hybrid_(VsWorker *w, i32 hv, const char *t, i32 tn, i32 k)
+{
+    return store_search_hybrid(vs_store, hv ? w->vec : (const f32 *)0, t, tn, k, w->ids, w->sc);
+}
+
 /* ---- binary protocol: little-endian frames, nothing to parse ----
  *   request  u8 0xB5 | u8 op | u16 k | u32 nbytes | payload[nbytes]
  *   response u8 0xB5 | u8 status | u16 count | u32 nbytes | payload[nbytes]
@@ -60,7 +77,22 @@ static void vs_logsearch_(VsConn *c, i32 k, i32 got, double t0)
  *   op 4 build   op 5 save   op 6 stats              stats reply: i64 live, dim, pending, built
  *   op 7 snapshot      (in the background; status 4 while one runs)
  *   op 8 get           payload: i64 id               reply: dim x f32, the stored unit vector (status 1: no row)
- *   op 9 delete range  payload: i64 lo, i64 hi       reply: i64 rows removed (every id in [lo, hi]) */
+ *   op 9 delete range  payload: i64 lo, i64 hi       reply: i64 rows removed (every id in [lo, hi])
+ *   op 10 add with a text  payload: i64 id, dim x f32, then the text's bytes (the rest of the payload)
+ *   op 11 get the text     payload: i64 id           reply: the text's bytes (status 1: no row)
+ *   op 12 range            payload: i64 lo, i64 hi   reply: count x i64, the ids in [lo, hi] ascending (k at most)
+ *   op 13 hybrid search    payload: u32 1 (a vector follows) or 0, [dim x f32], then the words' bytes
+ *                          reply: count x { i64 id, f32 fused score } */
+
+/* a reply whose payload sits elsewhere (a text): the header, then the payload as it is */
+static void vs_bin_reply_at_(VsWorker *w, VsConn *c, u8 status, u16 count, const char *payload, u32 nbytes)
+{
+    char h[8];
+    h[0] = (char)VS_MAGIC; h[1] = (char)status; h[2] = (char)(count & 0xff); h[3] = (char)(count >> 8);
+    h[4] = (char)(nbytes & 0xff); h[5] = (char)((nbytes >> 8) & 0xff); h[6] = (char)((nbytes >> 16) & 0xff); h[7] = (char)(nbytes >> 24);
+    vs_send_(w, c, h, 8);
+    if (nbytes) vs_send_(w, c, payload, (i32)nbytes);
+}
 
 static void vs_bin_reply_(VsWorker *w, VsConn *c, u8 status, u16 count, const char *payload, u32 nbytes)
 {
@@ -94,7 +126,7 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
     i32 op, k, i, got;
     if (c->len < 8) return 0;
     op = b[1]; k = (i32)(b[2] | (b[3] << 8)); nb = vs_le32_(b + 4);
-    if (nb > (u32)vs_reqcap - 8) { vs_log_(c, 1, "binary frame of %lu bytes refused", (unsigned long)nb); return -1; }
+    if (nb > (u32)vs_reqmax - 8) { vs_log_(c, 1, "binary frame of %lu bytes refused", (unsigned long)nb); return -1; }
     if ((u32)c->len < 8 + nb) return 0;
     b += 8;
     switch (op) {
@@ -142,6 +174,42 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
             vs_put64_(p, (i64)vs_del_(c, vs_le64_(b), vs_le64_(b + 8)));
             vs_bin_reply_(w, c, 0, 0, p, 8); }
         break;
+    case 10:
+        if (nb < 8 + (u32)vs_dim * 4) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
+        vs_getf_(w->vec, b + 8, vs_dim);
+        vs_bin_reply_(w, c, vs_put_text_(c, w->vec, vs_le64_(b), (const char *)b + 8 + vs_dim * 4, (i32)(nb - 8 - (u32)vs_dim * 4)) == 0 ? 0 : 1,
+                      0, (const char *)0, 0);
+        break;
+    case 11:
+        if (nb != 8) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
+        {   char *t;
+            i32 n = vs_get_text_(w, vs_le64_(b), &t);
+            if (n < 0) vs_bin_reply_(w, c, 1, 0, (const char *)0, 0);
+            else vs_bin_reply_at_(w, c, 0, 0, t, (u32)n); }
+        break;
+    case 12:
+        if (nb != 16) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
+        if (k < 1) k = 100;
+        if (k > VS_MAXK) k = VS_MAXK;
+        got = store_range(vs_store, vs_le64_(b), vs_le64_(b + 8), w->ids, k);
+        if (got < 0) { vs_bin_reply_(w, c, 1, 0, (const char *)0, 0); break; }
+        {   char *o = w->out + 8;
+            for (i = 0; i < got; ++i) vs_put64_(o + 8 * i, w->ids[i]);
+            vs_bin_reply_(w, c, 0, (u16)got, o, (u32)got * 8u); }
+        break;
+    case 13: {
+        u32 hv = nb >= 4 ? vs_le32_(b) : 2u, at = 4u + (hv == 1 ? (u32)vs_dim * 4u : 0u);
+        double t0 = vs_now_();
+        if (hv > 1 || nb < at) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
+        if (hv) vs_getf_(w->vec, b + 4, vs_dim);
+        if (k < 1) k = 10;
+        if (k > VS_MAXK) k = VS_MAXK;
+        got = vs_hybrid_(w, (i32)hv, (const char *)b + at, (i32)(nb - at), k);
+        {   char *o = w->out + 8;
+            for (i = 0; i < got; ++i) { vs_put64_(o, w->ids[i]); vs_put32_(o + 8, vs_fbits_(w->sc[i])); o += 12; }
+            vs_bin_reply_(w, c, 0, (u16)got, w->out + 8, (u32)got * 12u); }
+        vs_logsearch_(c, k, got, t0);
+        break; }
     default: vs_bin_reply_(w, c, 3, 0, (const char *)0, 0); break;
     }
     return (i32)(8 + nb);
@@ -158,6 +226,12 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
  *   del ID                    ok REMOVED
  *   del LO HI                 ok REMOVED                   (every id in [LO, HI])
  *   build | save | snapshot   ok, or err busy (a snapshot already runs)
+ *   addt ID X1 .. XD TEXT     ok                           (add with a text: the rest of the line, \n \r \t \0 \\
+ *                                                          escaped; replaces the row with the same id)
+ *   text ID                   ok LEN TEXT                  (LEN bytes, escaped the same way; LEN 0: no text)
+ *   range LO HI [MAX]         ok N ID ...                  (the ids in [LO, HI], ascending, at most MAX = 100)
+ *   hybrid K X1 .. XD WORDS   ok N ID SCORE ...            (the vector and the words against the texts, fused)
+ *   words K WORDS             ok N ID SCORE ...            (the words alone)
  *   help                      ok COMMANDS...
  *   quit                      ok bye, and the server closes the connection */
 
@@ -176,18 +250,35 @@ static const char *vs_wint_(const char *p, i64 *v)
     return e;
 }
 
-/* exactly vs_dim numbers into w->vec, and nothing after them; 0 or -1 */
-static i32 vs_wvec_(VsWorker *w, const char *p)
+/* vs_dim numbers into w->vec; just past the last one, or NULL */
+static const char *vs_wnums_(VsWorker *w, const char *p)
 {
     i32 d;
     for (d = 0; d < vs_dim; ++d) {
         char *e;
         p = vs_word_(p);
         w->vec[d] = (f32)strtod(p, &e);
-        if (e == p || (*e && *e != ' ' && *e != '\t')) return -1;
+        if (e == p || (*e && *e != ' ' && *e != '\t')) return (const char *)0;
         p = e;
     }
-    return *vs_word_(p) ? -1 : 0;
+    return p;
+}
+
+/* exactly vs_dim numbers into w->vec, and nothing after them; 0 or -1 */
+static i32 vs_wvec_(VsWorker *w, const char *p)
+{
+    return (p = vs_wnums_(w, p)) && !*vs_word_(p) ? 0 : -1;
+}
+
+/* a line's hits as "ok N ID SCORE ..." */
+static void vs_line_hits_(VsWorker *w, VsConn *c, i32 got)
+{
+    char *o = w->out, *p = vs_str_(o, "ok ");
+    i32 i;
+    p = vs_i64_(p, got);
+    for (i = 0; i < got; ++i) { *p++ = ' '; p = vs_i64_(p, w->ids[i]); *p++ = ' '; p = vs_f32_(p, w->sc[i]); }
+    *p++ = '\n';
+    vs_send_(w, c, o, (i32)(p - o));
 }
 
 static void vs_line_reply_(VsWorker *w, VsConn *c, char *o, char *p)
@@ -206,7 +297,7 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
     i32 used, i, got;
     i64 x, y;
     if (!nl) {
-        if (c->len >= vs_reqcap) { VS_LINE_ERR("line too long"); vs_log_(c, 1, "line too long, closed"); return -1; }
+        if (c->len >= vs_reqmax) { VS_LINE_ERR("line too long"); vs_log_(c, 1, "line too long, closed"); return -1; }
         return 0;
     }
     used = (i32)(nl - b) + 1;
@@ -259,8 +350,50 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         i32 r = vs_snapshot_(c);
         if (r == 0) vs_line_reply_(w, c, o, vs_str_(o, "ok started"));
         else VS_LINE_ERR(r == 1 ? "busy" : "snapshot failed");
+    } else if (VS_CMD("addt")) {
+        const char *t;
+        char *buf;
+        i32 n;
+        if (!(a = vs_wint_(a, &x)) || !(t = vs_wnums_(w, a)) || (*t != ' ' && *t != '\t')) VS_LINE_ERR("usage: addt ID X1 .. XD TEXT");
+        else if (!(buf = vs_txt_(w, (i32)(nl - t))) || (n = vs_unesc_(t + 1, nl, buf)) < 0) VS_LINE_ERR("bad escape in the text (\\n \\r \\t \\0 \\\\)");
+        else if (vs_put_text_(c, w->vec, x, buf, n) != 0) VS_LINE_ERR("vector has NaN or Inf, or the text is too long");
+        else vs_line_reply_(w, c, o, vs_str_(o, "ok"));
+    } else if (VS_CMD("text")) {
+        char *t, *r;
+        i32 n;
+        if (!(a = vs_wint_(a, &x)) || *vs_word_(a)) VS_LINE_ERR("usage: text ID");
+        else if ((n = vs_get_text_(w, x, &t)) < 0) VS_LINE_ERR(n == -1 ? "no such id" : "out of memory");
+        else if (!(r = (char *)malloc((size_t)n * 2 + 32))) VS_LINE_ERR("out of memory");
+        else {
+            p = vs_str_(r, "ok "); p = vs_i64_(p, n); *p++ = ' ';
+            p = vs_esc_(p, t, n); *p++ = '\n';
+            vs_send_(w, c, r, (i32)(p - r));
+            free(r);
+        }
+    } else if (VS_CMD("range")) {
+        i64 mx = 100;
+        if (!(a = vs_wint_(a, &x)) || !(a = vs_wint_(a, &y)) || y < x || (*vs_word_(a) && (!(a = vs_wint_(a, &mx)) || *vs_word_(a) || mx < 1)))
+            VS_LINE_ERR("usage: range LO HI [MAX]");
+        else if ((got = store_range(vs_store, x, y, w->ids, (i32)(mx > VS_MAXK ? VS_MAXK : mx))) < 0) VS_LINE_ERR("out of memory");
+        else {
+            p = vs_str_(o, "ok "); p = vs_i64_(p, got);
+            for (i = 0; i < got; ++i) { *p++ = ' '; p = vs_i64_(p, w->ids[i]); }
+            vs_line_reply_(w, c, o, p);
+        }
+    } else if (VS_CMD("hybrid") || VS_CMD("words")) {
+        i32 hv = b[0] == 'h', k;
+        const char *t = (const char *)0;
+        double t0 = vs_now_();
+        if (!(a = vs_wint_(a, &x)) || (hv && !(a = vs_wnums_(w, a)))) VS_LINE_ERR(hv ? "usage: hybrid K X1 .. XD WORDS" : "usage: words K WORDS");
+        else {
+            t = vs_word_(a);
+            k = x < 1 ? 1 : (x > VS_MAXK ? VS_MAXK : (i32)x);
+            got = vs_hybrid_(w, hv, t, (i32)(nl - t), k);
+            vs_line_hits_(w, c, got);
+            vs_logsearch_(c, k, got, t0);
+        }
     } else if (VS_CMD("ping")) vs_line_reply_(w, c, o, vs_str_(o, "ok pong"));
-    else if (VS_CMD("help")) vs_line_reply_(w, c, o, vs_str_(o, "ok ping stats search add get del build save snapshot help quit"));
+    else if (VS_CMD("help")) vs_line_reply_(w, c, o, vs_str_(o, "ok ping stats search add addt get text range hybrid words del build save snapshot help quit"));
     else if (VS_CMD("quit")) { vs_line_reply_(w, c, o, vs_str_(o, "ok bye")); c->closing = 1; }
     else { VS_LINE_ERR("unknown command (help lists them)"); vs_log_(c, 1, "unknown line command"); }
 #undef VS_CMD
@@ -391,7 +524,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         if (b + he - line > 15 && vs_ieq_(line, "content-length:", 15)) {
             const char *v = line + 15;
             while (*v == ' ') ++v;
-            for (clen = 0; *v >= '0' && *v <= '9'; ++v) { clen = clen * 10 + (*v - '0'); if (clen > vs_reqcap) break; }
+            for (clen = 0; *v >= '0' && *v <= '9'; ++v) { clen = clen * 10 + (*v - '0'); if (clen > vs_reqmax) break; }
         } else if (b + he - line > 13 && vs_ieq_(line, "content-type:", 13)) {
             const char *v = line + 13;
             while (*v == ' ') ++v;
@@ -403,7 +536,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
             if (b + he - v >= 10 && vs_ieq_(v, "keep-alive", 10)) keep = 1;
         }
     }
-    if (clen > vs_reqcap - he) {
+    if (clen > vs_reqmax - he) {
         VS_HTTP_LIT(w, c, "413 Content Too Large", "{\"error\":\"body too large\"}", 0);
         vs_log_(c, 1, "http body of %d bytes refused", clen);
         return -1;
@@ -447,12 +580,57 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         }
     } else if (VS_IS("POST", "/add")) {
         i64 id = vs_qparam_(t, tn, "id", -1);
-        if (id < 0 || (raw ? clen != vs_dim * 4 : vs_json_vec_(w, body, clen) != 0))
+        i32 hv = 1, txl = -1;
+        const char *tx = w->txt;
+        if (raw) { if (clen > vs_dim * 4) { tx = body + vs_dim * 4; txl = clen - vs_dim * 4; } }   /* f32[dim], then a text */
+        else if (vs_json_vec_(w, body, clen) != 0 && (vs_json_obj_(w, body, clen, &hv, &txl) != 0 || !hv)) hv = 0;
+        tx = raw ? tx : w->txt;
+        if (id < 0 || !hv || (raw && clen < vs_dim * 4))
             VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"need ?id=N and a vector of the store's dimension\"}", keep);
         else {
             if (raw) vs_getf_(w->vec, (const u8 *)body, vs_dim);
-            if (vs_put_(c, w->vec, id) == 0) VS_HTTP_LIT(w, c, "200 OK", "{\"ok\":true}", keep);
-            else VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"vector has NaN or Inf\"}", keep);
+            if ((txl > 0 ? vs_put_text_(c, w->vec, id, tx, txl) : vs_put_(c, w->vec, id)) == 0) VS_HTTP_LIT(w, c, "200 OK", "{\"ok\":true}", keep);
+            else VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"vector has NaN or Inf, or the text is too long\"}", keep);
+        }
+    } else if (VS_IS("GET", "/text")) {
+        char *tx, *r, *p;
+        i32 n = vs_get_text_(w, vs_qparam_(t, tn, "id", -1), &tx);
+        if (n == -1) VS_HTTP_LIT(w, c, "404 Not Found", "{\"error\":\"no such id\"}", keep);
+        else if (n < 0 || !(r = (char *)malloc((size_t)n * 6 + 16))) VS_HTTP_LIT(w, c, "500 Internal Server Error", "{\"error\":\"out of memory\"}", keep);
+        else {
+            p = vs_str_(r, "{\"text\":"); p = vs_jesc_(p, tx, n); *p++ = '}';
+            vs_http_reply_(w, c, "200 OK", r, (i32)(p - r), keep);
+            free(r);
+        }
+    } else if (VS_IS("GET", "/range")) {
+        char *p = o;
+        i64 mx = vs_qparam_(t, tn, "max", 100);
+        got = store_range(vs_store, vs_qparam_(t, tn, "lo", 0), vs_qparam_(t, tn, "hi", -1), w->ids, (i32)(mx < 1 ? 1 : (mx > VS_MAXK ? VS_MAXK : mx)));
+        if (got < 0) VS_HTTP_LIT(w, c, "500 Internal Server Error", "{\"error\":\"out of memory\"}", keep);
+        else {
+            p = vs_str_(p, "{\"ids\":[");
+            for (i = 0; i < got; ++i) { if (i) *p++ = ','; p = vs_i64_(p, w->ids[i]); }
+            p = vs_str_(p, "]}");
+            vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
+        }
+    } else if (VS_IS("POST", "/hybrid")) {
+        char *p = o;
+        i32 hv, txl;
+        double t0 = vs_now_();
+        if (vs_json_obj_(w, body, clen, &hv, &txl) != 0 || (!hv && txl <= 0))
+            VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"expected {\\\"vector\\\": [...], \\\"text\\\": \\\"...\\\"}\"}", keep);
+        else {
+            k = (i32)vs_qparam_(t, tn, "k", 10);
+            if (k < 1) k = 1;
+            if (k > VS_MAXK) k = VS_MAXK;
+            got = vs_hybrid_(w, hv, w->txt, txl > 0 ? txl : 0, k);
+            p = vs_str_(p, "{\"ids\":[");
+            for (i = 0; i < got; ++i) { if (i) *p++ = ','; p = vs_i64_(p, w->ids[i]); }
+            p = vs_str_(p, "],\"scores\":[");
+            for (i = 0; i < got; ++i) { if (i) *p++ = ','; p = vs_f32_(p, w->sc[i]); }
+            p = vs_str_(p, "]}");
+            vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
+            vs_logsearch_(c, k, got, t0);
         }
     } else if (VS_IS("GET", "/get")) {
         char *p = o;

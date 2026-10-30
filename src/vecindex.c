@@ -78,6 +78,19 @@ VI_API int vi_delete_range(vi_db *db, vi_i64 lo, vi_i64 hi) { return store_delet
 
 VI_API int vi_get(vi_db *db, vi_i64 id, float *out) { return store_get_vec(db->s, (i64)id, out); }
 
+static i32 vi_len_(const char *text, int len) { return len < 0 ? (text ? (i32)strlen(text) : 0) : (i32)len; }
+
+VI_API int vi_add_text(vi_db *db, vi_i64 id, const float *vec, const char *text, int len)
+{ return store_put_text(db->s, vec, (i64)id, 0, text, vi_len_(text, len)); }
+
+VI_API int vi_get_text(vi_db *db, vi_i64 id, char *buf, int cap) { return store_get_text(db->s, (i64)id, buf, (i32)cap); }
+
+VI_API int vi_range(vi_db *db, vi_i64 lo, vi_i64 hi, vi_i64 *ids, int max)
+{ return store_range(db->s, (i64)lo, (i64)hi, (i64 *)ids, (i32)max); }
+
+VI_API int vi_search_hybrid(vi_db *db, const float *query, const char *text, int tlen, int k, vi_i64 *ids, float *scores)
+{ return store_search_hybrid(db->s, query, text, vi_len_(text, tlen), (i32)k, (i64 *)ids, scores); }
+
 VI_API int vi_set_tag(vi_db *db, vi_i64 id, vi_i64 tag) { return store_set_meta(db->s, (i64)id, (i64)tag) >= 0 ? 0 : -1; }
 
 VI_API int vi_get_tag(vi_db *db, vi_i64 id, vi_i64 *tag)

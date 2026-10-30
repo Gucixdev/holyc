@@ -156,6 +156,53 @@ int main(void)
     sprintf(line, "%s.j", path); remove(line);
     sprintf(line, "%s.jn", path); remove(line);
 
+    /* texts: chunks of documents (ids doc << 20 | chunk), the chunks around a hit by id range, hybrid search */
+    db = vi_open(path, DIM, 0);
+    check(db != (vi_db *)0, "vi_open for texts");
+    for (i = 0; i < 40; ++i) {
+        vi_i64 id = ((vi_i64)(i / 8) << 20) | (i % 8);
+        char t[96];
+        sprintf(t, "document %d, chunk %d: the %s of the matter%s", i / 8, i % 8, i % 2 ? "heart" : "core", i == 21 ? " xylophone" : "");
+        vec_(i, v);
+        if (vi_add_text(db, id, v, t, -1) != 0) check(0, "vi_add_text");
+    }
+    {
+        char buf[96], small[8];
+        vi_i64 ids[16];
+        float s2[16];
+        int k;
+        n = vi_get_text(db, ((vi_i64)2 << 20) | 5, buf, (int)sizeof(buf));
+        check(n == (int)strlen("document 2, chunk 5: the heart of the matter xylophone") && memcmp(buf, "document 2, chunk 5: the heart of the matter xylophone", (size_t)n) == 0,
+              "vi_get_text: the bytes back");
+        check(vi_get_text(db, ((vi_i64)2 << 20) | 5, small, (int)sizeof(small)) == n && memcmp(small, "document", 8) == 0,
+              "vi_get_text with a small buffer: the full length, the first bytes");
+        check(vi_get_text(db, (vi_i64)99 << 20, buf, (int)sizeof(buf)) == -1, "vi_get_text of no such row: -1");
+        k = vi_range(db, (vi_i64)3 << 20, ((vi_i64)3 << 20) | 0xfffff, ids, 16);
+        check(k == 8 && ids[0] == ((vi_i64)3 << 20) && ids[7] == (((vi_i64)3 << 20) | 7), "vi_range: a document's 8 chunks, in order");
+        vec_(1000, v);
+        k = vi_search_hybrid(db, v, "xylophone", -1, 3, ids, s2);
+        check(k >= 1 && ids[0] == (((vi_i64)2 << 20) | 5), "vi_search_hybrid: a rare word wins over a vector pointing elsewhere");
+        k = vi_search_hybrid(db, (const float *)0, "xylophone", -1, 3, ids, s2);
+        check(k == 1 && ids[0] == (((vi_i64)2 << 20) | 5), "vi_search_hybrid with words only");
+        vec_(17, v);
+        k = vi_search_hybrid(db, v, (const char *)0, 0, 3, ids, s2);
+        check(k == 3 && ids[0] == (((vi_i64)2 << 20) | 1), "vi_search_hybrid with the vector only");
+        check(vi_add_text(db, ((vi_i64)2 << 20) | 5, v, "replaced text", -1) == 0 && vi_get_text(db, ((vi_i64)2 << 20) | 5, buf, (int)sizeof(buf)) == 13,
+              "vi_add_text replaces the text with the row");
+        vi_close(db);
+        db = vi_open(path, 0, 0);
+        check(db != (vi_db *)0 && vi_get_text(db, ((vi_i64)2 << 20) | 5, buf, (int)sizeof(buf)) == 13 && memcmp(buf, "replaced text", 13) == 0
+              && vi_get_text(db, ((vi_i64)4 << 20) | 7, buf, (int)sizeof(buf)) > 0, "texts come back from the journal");
+        check(vi_save(db, (const char *)0) == 0, "vi_save of a store with texts");
+        vi_close(db);
+        db = vi_open(path, 0, 0);
+        check(db != (vi_db *)0 && vi_get_text(db, ((vi_i64)1 << 20) | 3, buf, (int)sizeof(buf)) == (int)strlen("document 1, chunk 3: the heart of the matter")
+              && vi_search_hybrid(db, (const float *)0, "replaced", -1, 3, ids, s2) == 1, "texts come back from the file");
+        vi_close(db);
+    }
+    remove(path);
+    sprintf(line, "%s.j", path); remove(line);
+
     db = vi_open((const char *)0, 16, VI_LIVE);
     check(db != (vi_db *)0 && vi_set_layout(db, 2, 1) == 0, "an in-memory store, live, 2-bit codes + int8 rows");
     for (i = 0; i < 500; ++i) { vec_(i, v); vi_add(db, 1000 + i, v); }

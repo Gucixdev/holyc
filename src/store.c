@@ -92,6 +92,7 @@
 #include <sys/syscall.h>
 #include <errno.h>
 #include "hdict.c"
+#include "lex.c"
 #include "tq.c"
 
 #define STORE_HAS_SPILL 1
@@ -137,6 +138,9 @@ static void store_prefetch_row_(const f32 *row, i32 dim)
 #define STORE_VERSION_I8 6          /* v6: v5 + a 16-byte extension after the header (int8 rows) and their scales */
 #define STORE_VERSION7 7            /* v7: the extension on every file - flags (bit 0: int8 rows), 0, and the 64-bit
                                      * stamp its journal carries too */
+#define STORE_VERSION8 8            /* v8: v7 + texts (flags bit 1): after the meta column, the heap's length (u64),
+                                     * each row's text offset | length << 40 (u64), then the heap; written only by a
+                                     * store that holds texts */
 
 /* ---- column chunks ---- */
 #define STORE_CSHIFT 16                           /* 65536 rows a chunk */
@@ -156,6 +160,14 @@ typedef struct {
 /* doc id -> row for rows added out of order: open addressing over row numbers (row + 1, 0 = empty) with a 32-bit
  * tag of the id's hash beside it, so a probe reads the id column only when the tags match */
 typedef struct { u32 *row, *tag; u32 cap, n, bits; } SIdx;
+
+/* the text heap: blocks of 1 MB, block i holding heap bytes [i << 20, (i + 1) << 20) */
+typedef struct {
+    u8     **b;             /* [n] block base pointers */
+    u8      *how;           /* [n] STORE_ANON / STORE_SPILL / STORE_MAPPED */
+    i32      n, cap;
+    i64      used;          /* the next free byte */
+} STx;
 
 typedef struct {
     FILE    *jf;            /* write-ahead journal of adds/deletes since the last full save (store_sync) */
@@ -237,6 +249,16 @@ typedef struct {
     i64      col_bytes;     /* bytes of column chunks allocated so far */
     i32      pf_cold;       /* re-scoring missed the page cache lately: prefetch candidates with MADV_WILLNEED */
     u32      pf_tick;
+
+    /* texts (store_put_text): a row's text sits in a byte heap of 1 MB blocks (block i holds heap bytes [i << 20,
+     * (i + 1) << 20)); the txo column holds offset | length << 40, 0 = none. Replaced and deleted texts stay in the
+     * heap until store_save rewrites it. */
+    SCol     txo;
+    i32      has_text;      /* the txo column exists (the first text added or loaded) */
+    STx      tx;            /* the heap */
+    i64      txlive;        /* bytes of the live rows' texts */
+    Lex     *lex;           /* BM25 over the live rows' texts: built by the first hybrid search, kept up to date after */
+    pthread_mutex_t lex_mu; /* that first build */
 } RagStore;
 
 /* row accessors (also for tests and tools) */
@@ -247,6 +269,12 @@ typedef struct {
 #define STORE_META(s, r) (*(i64 *)(void *)SCOL_AT(&(s)->metac, r))
 #define STORE_DEAD(s, r) ((i32)(((s)->dead[(size_t)(r) >> 6] >> ((u32)(r) & 63u)) & 1u))
 #define STORE_KILL(s, r) ((s)->dead[(size_t)(r) >> 6] |= (u64)1 << ((u32)(r) & 63u))
+#define STORE_TXO(s, r)  (*(u64 *)(void *)SCOL_AT(&(s)->txo, r))     /* text rows only (has_text) */
+#define STORE_TXSHIFT    20                                          /* 1 MB heap blocks */
+#define STORE_TXB        ((i64)1 << STORE_TXSHIFT)
+#define STORE_TXMAX      ((1 << 24) - 1)                             /* bytes a text, at most */
+#define STORE_TXLEN(v)   ((i32)((v) >> 40))
+#define STORE_TXOFF(v)   ((i64)((v) & (((u64)1 << 40) - 1u)))
 
 static TqCol store_tqcol_(const SCol *c)
 {
@@ -339,6 +367,98 @@ static void scol_free_(SCol *c)
     c->chunk = (u8 **)0; c->how = (u8 *)0; c->foff = (i64 *)0; c->nchunk = c->ccap = 0;
 }
 
+/* ---- the text heap ---- */
+
+static i32 store_tx_push_(RagStore *s, STx *x)
+{
+    u8 *p, how;
+    i64 off;
+    if (x->n == x->cap) {
+        i32 nc = x->cap ? x->cap * 2 : 16;
+        u8 **nb = (u8 **)realloc(x->b, (size_t)nc * sizeof(u8 *));
+        u8 *nh;
+        if (!nb) return -1;
+        x->b = nb;
+        if (!(nh = (u8 *)realloc(x->how, (size_t)nc))) return -1;
+        x->how = nh; x->cap = nc;
+    }
+    p = store_chunk_alloc_(s, (size_t)STORE_TXB, &how, &off);
+    if (!p) return -1;
+    x->b[x->n] = p; x->how[x->n] = how; ++x->n;
+    return 0;
+}
+
+/* n bytes onto the end of heap x (blocks come from s's allocator): the row's txo value, or 0 (out of memory) */
+static u64 store_tx_put_(RagStore *s, STx *x, const char *t, i32 n)
+{
+    i64 off = x->used, done = 0;
+    if (n <= 0) return 0;
+    while ((off + n + STORE_TXB - 1) >> STORE_TXSHIFT > (i64)x->n) if (store_tx_push_(s, x)) return 0;
+    while (done < n) {
+        i64 at = off + done, room = STORE_TXB - (at & (STORE_TXB - 1)), take = n - done < room ? n - done : room;
+        memcpy(x->b[at >> STORE_TXSHIFT] + (at & (STORE_TXB - 1)), t + done, (size_t)take);
+        done += take;
+    }
+    x->used += n;
+    return (u64)off | ((u64)(u32)n << 40);
+}
+
+/* the first n bytes of text v into buf */
+static void store_tx_copy_(const STx *x, u64 v, char *buf, i64 n)
+{
+    i64 at = STORE_TXOFF(v), done = 0;
+    while (done < n) {
+        i64 p = at + done, room = STORE_TXB - (p & (STORE_TXB - 1)), take = n - done < room ? n - done : room;
+        memcpy(buf + done, x->b[p >> STORE_TXSHIFT] + (p & (STORE_TXB - 1)), (size_t)take);
+        done += take;
+    }
+}
+
+static void store_tx_release_(STx *x)
+{
+    i32 i;
+    for (i = 0; i < x->n; ++i) if (x->how[i] != STORE_MAPPED) munmap(x->b[i], (size_t)STORE_TXB);
+    free(x->b); free(x->how);
+    memset(x, 0, sizeof(*x));
+}
+
+/* row r is being tombstoned: its text no longer counts, and leaves the word index */
+static void store_tx_drop_(RagStore *s, i32 r)
+{
+    u64 v;
+    if (!s->has_text || !(v = STORE_TXO(s, r))) return;
+    s->txlive -= STORE_TXLEN(v);
+    if (s->lex) lex_delete(s->lex, STORE_ID(s, r));
+}
+
+static void store_tx_free_(RagStore *s) { store_tx_release_(&s->tx); s->txlive = 0; }
+
+/* Under the write lock with every row live (after store_compact_): when at least half the heap is garbage, copy
+ * the live texts into fresh blocks, in row order, and let the old ones go. Skipped when memory runs out. */
+static void store_tx_compact_(RagStore *s)
+{
+    STx nx;
+    i32 r;
+    u64 *nv;
+    char *buf;
+    if (!s->has_text || s->tx.used - s->txlive < s->txlive || s->tx.used - s->txlive < STORE_TXB) return;
+    memset(&nx, 0, sizeof(nx));
+    nv = (u64 *)malloc((size_t)(s->count > 0 ? s->count : 1) * sizeof(u64));
+    buf = (char *)malloc((size_t)STORE_TXMAX + 1);
+    for (r = 0; nv && buf && r < s->count; ++r) {
+        u64 v = STORE_TXO(s, r);
+        nv[r] = 0;
+        if (!v) continue;
+        store_tx_copy_(&s->tx, v, buf, STORE_TXLEN(v));
+        if (!(nv[r] = store_tx_put_(s, &nx, buf, STORE_TXLEN(v)))) break;
+    }
+    if (!nv || !buf || r < s->count) { store_tx_release_(&nx); free(nv); free(buf); return; }
+    for (r = 0; r < s->count; ++r) STORE_TXO(s, r) = nv[r];
+    store_tx_release_(&s->tx);
+    s->tx = nx;
+    free(nv); free(buf);
+}
+
 /* rows [0, need) addressable in every column, the bitset long enough. 0 ok, -1 out of memory */
 static i32 store_reserve_(RagStore *s, i64 need)
 {
@@ -348,11 +468,13 @@ static i32 store_reserve_(RagStore *s, i64 need)
     while (s->idc.nchunk < nch) if (scol_push_(s, &s->idc)) return -1;
     while (s->metac.nchunk < nch) if (scol_push_(s, &s->metac)) return -1;
     while (s->vbytes == 1 && s->vsc.nchunk < nch) if (scol_push_(s, &s->vsc)) return -1;
+    while (s->has_text && s->txo.nchunk < nch) if (scol_push_(s, &s->txo)) return -1;
     ci = (i32)((i64)s->count >> STORE_CSHIFT);                   /* the chunk the next row lands in */
     if (scol_unshare_(s, &s->vec, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
         || scol_unshare_(s, &s->idc, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
         || scol_unshare_(s, &s->metac, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
-        || (s->vbytes == 1 && scol_unshare_(s, &s->vsc, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT)))) return -1;
+        || (s->vbytes == 1 && scol_unshare_(s, &s->vsc, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT)))
+        || (s->has_text && scol_unshare_(s, &s->txo, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT)))) return -1;
     if (words > s->dead_words) {
         i64 nw = s->dead_words ? s->dead_words * 2 : 1024;
         u64 *d;
@@ -568,6 +690,8 @@ RagStore *store_new(Arena *a, i32 dim)
     s->addbuf = (f32 *)malloc((size_t)dim * sizeof(f32));
     s->idc.esz = sizeof(i64); s->idc.elem = sizeof(i64);
     s->metac.esz = sizeof(i64); s->metac.elem = sizeof(i64);
+    s->txo.esz = sizeof(u64); s->txo.elem = sizeof(u64);
+    pthread_mutex_init(&s->lex_mu, (const pthread_mutexattr_t *)0);
     h64_init(&s->dup, 8);
     s->tune_recall = -1.0f;
     s->qlog_rng = 0x9e3779b9u;
@@ -631,7 +755,10 @@ void store_destroy(RagStore *s)
     if (s->jf) fclose(s->jf);
     free(s->jpath); s->jpath = (char *)0;
     arena_free(&s->idx_arena);
-    scol_free_(&s->vec); scol_free_(&s->idc); scol_free_(&s->metac); scol_free_(&s->vsc);
+    scol_free_(&s->vec); scol_free_(&s->idc); scol_free_(&s->metac); scol_free_(&s->vsc); scol_free_(&s->txo);
+    store_tx_free_(s);
+    if (s->lex) { lex_free(s->lex); free(s->lex); s->lex = (Lex *)0; }
+    pthread_mutex_destroy(&s->lex_mu);
     free(s->addbuf); s->addbuf = (f32 *)0;
     free(s->dead); s->dead = (u64 *)0; s->dead_words = 0;
     if (s->map) { munmap(s->map, s->map_len); s->map = (void *)0; }
@@ -645,10 +772,10 @@ void store_mem(RagStore *s, i64 *ram, i64 *file)
 {
     i64 r = 0, f = 0;
     i32 c;
-    SCol *cols[4];
+    SCol *cols[5];
     pthread_rwlock_rdlock(&s->lock);
-    cols[0] = &s->vec; cols[1] = &s->idc; cols[2] = &s->metac; cols[3] = &s->vsc;
-    for (c = 0; c < 4; ++c) {
+    cols[0] = &s->vec; cols[1] = &s->idc; cols[2] = &s->metac; cols[3] = &s->vsc; cols[4] = &s->txo;
+    for (c = 0; c < 5; ++c) {
         i32 i;
         for (i = 0; i < cols[c]->nchunk; ++i) {
             i64 rows = (i64)s->count - ((i64)i << STORE_CSHIFT), b;
@@ -659,6 +786,12 @@ void store_mem(RagStore *s, i64 *ram, i64 *file)
         }
     }
     r += s->dead_words * 8 + (i64)s->ids_h.cap * 8 + (i64)s->dup.cap * 13;
+    for (c = 0; c < s->tx.n; ++c) {                                  /* the text heap (the last block may be partial) */
+        i64 b = s->tx.used - ((i64)c << STORE_TXSHIFT);
+        if (b > STORE_TXB) b = STORE_TXB;
+        if (b < 0) b = 0;
+        if (s->tx.how[c] == STORE_ANON) r += b; else f += b;
+    }
     if (s->tq) {
         r += tq_ram_(s->tq);
         if (s->tq->mapped) f += (i64)s->tq->nblk * s->tq->vd * 16 + (s->tq->slot_row ? (i64)s->tq->nblk * 128 : 0);
@@ -799,6 +932,7 @@ static void store_append_locked_(RagStore *s, const f32 *vec, i64 doc_id, i64 me
     store_put_row_(s, r, v);
     STORE_ID(s, r) = doc_id;
     STORE_META(s, r) = meta;
+    if (s->has_text) STORE_TXO(s, r) = 0;
     s->dead[r >> 6] &= ~((u64)1 << (r & 63));
     store_note_row_(s, r);
     s->live += 1;
@@ -813,7 +947,7 @@ static i32 store_kill_id_locked_(RagStore *s, i64 doc_id)
 {
     i32 r, hit = 0;
     for (r = store_find_(s, doc_id); r >= 0; r = store_prev_(s, r))
-        if (!STORE_DEAD(s, r)) { STORE_KILL(s, r); ++hit; --s->live; ++s->mods; }
+        if (!STORE_DEAD(s, r)) { STORE_KILL(s, r); ++hit; --s->live; ++s->mods; store_tx_drop_(s, r); }
     return hit;
 }
 
@@ -877,7 +1011,9 @@ i32 store_delete_range(RagStore *s, i64 lo, i64 hi)
     i32 r, hit = 0;
     pthread_rwlock_wrlock(&s->lock);
     for (r = 0; r < s->count; ++r)
-        if (!STORE_DEAD(s, r) && STORE_ID(s, r) >= lo && STORE_ID(s, r) <= hi) { STORE_KILL(s, r); ++hit; --s->live; ++s->mods; }
+        if (!STORE_DEAD(s, r) && STORE_ID(s, r) >= lo && STORE_ID(s, r) <= hi) {
+            STORE_KILL(s, r); ++hit; --s->live; ++s->mods; store_tx_drop_(s, r);
+        }
     store_jrec_(s, 'R', lo, hi, (const f32 *)0);
     pthread_rwlock_unlock(&s->lock);
     return hit;
@@ -995,6 +1131,7 @@ static i32 store_compact_(RagStore *s)
             if (s->vbytes == 1) STORE_SC(s, w) = STORE_SC(s, i);
             STORE_ID(s, w) = STORE_ID(s, i);
             STORE_META(s, w) = STORE_META(s, i);
+            if (s->has_text) STORE_TXO(s, w) = STORE_TXO(s, i);
         }
         ++w;
     }
@@ -1054,5 +1191,7 @@ void store_build(RagStore *s)
 #include "store_live.c"
 
 #include "store_search.c"
+
+#include "store_text.c"
 
 #include "store_disk.c"

@@ -258,6 +258,84 @@ int main(int argc, char **argv)
         stop(p, SIGTERM);
     }
 
+    /* texts: a text per row over the three protocols, ids in a range (a document's chunks), hybrid search; a big text;
+     * the journal keeps them across a kill -9 */
+    {   char *big = (char *)malloc(400000), *bl = (char *)malloc(900000), *rr = (char *)malloc(900000);
+        long base = 7L << 20;
+        int d, m;
+        unsigned char pay[4096];
+        p = start(NULL, NULL, NULL);
+        fd = connect_unix();
+        vline(line, "addt", base, 1); line[strlen(line) - 1] = 0; strcat(line, " hello\\nworld \\\\ tab\\there\n");
+        check(ask(fd, line, r, sizeof(r)) > 0 && !strcmp(r, "ok"), "addt ID X1 .. X8 TEXT -> ok");
+        sprintf(line, "text %ld\n", base);
+        check(ask(fd, line, r, sizeof(r)) > 0 && !strcmp(r, "ok 22 hello\\nworld \\\\ tab\\there"), "text ID -> ok 22 and the text, escaped the same way");
+        for (i = 1; i < 3; ++i) {
+            vline(line, "addt", base | i, 10 + i); line[strlen(line) - 1] = 0;
+            strcat(line, i == 2 ? " a chunk about the zebrafish genome\n" : " a chunk about tea\n");
+            ask(fd, line, r, sizeof(r));
+        }
+        sprintf(line, "range %ld %ld\n", base, base | 0xfffff);
+        sprintf(what, "ok 3 %ld %ld %ld", base, base | 1, base | 2);
+        check(ask(fd, line, r, sizeof(r)) > 0 && !strcmp(r, what), "range LO HI -> the document's 3 chunks, in order");
+        sprintf(what, "ok 1 %ld ", base | 2);
+        check(ask(fd, "words 3 zebrafish\n", r, sizeof(r)) > 0 && !strncmp(r, what, strlen(what)), "words 3 zebrafish -> the one chunk that says it");
+        vline(line, "hybrid 3", 0, 1); line[strlen(line) - 1] = 0;
+        memmove(line + 9, line + 11, strlen(line + 11) + 1);       /* "hybrid 3 0 X1..." -> "hybrid 3 X1..." */
+        strcat(line, " zebrafish\n");
+        sprintf(what, "ok 3 %ld ", base | 2);
+        check(ask(fd, line, r, sizeof(r)) > 0 && !strncmp(r, what, strlen(what)), "hybrid 3 X1 .. X8 zebrafish -> the word wins over the vector of chunk 0");
+        sprintf(line, "text %ld\n", 99999L);
+        check(ask(fd, line, r, sizeof(r)) > 0 && !strcmp(r, "err no such id"), "text of an unknown id -> err");
+        vline(line, "addt", base | 9, 1); line[strlen(line) - 1] = 0; strcat(line, " bad \\q escape\n");
+        check(ask(fd, line, r, sizeof(r)) > 0 && !strncmp(r, "err bad escape", 14), "addt with a bad escape -> err");
+        for (i = 0; i < 400000 - 1; ++i) big[i] = (char)('a' + i % 26);  /* a 400 kB text: the request buffer grows */
+        big[399999] = 0;
+        vline(bl, "addt", base | 5, 5); m = (int)strlen(bl) - 1; bl[m] = ' '; strcpy(bl + m + 1, big); strcat(bl, "\n");
+        check(ask(fd, bl, r, sizeof(r)) > 0 && !strcmp(r, "ok"), "addt with a 400 kB text -> ok");
+        sprintf(line, "text %ld\n", base | 5);
+        check(ask(fd, line, rr, 900000) == 10 + 399999 && !strncmp(rr, "ok 399999 ", 10) && !memcmp(rr + 10, big, 399999), "text of it: all 399999 bytes back");
+        /* binary: add with a text (op 10), get it (op 11), a range (op 12), words-only hybrid (op 13) */
+        {   long long id = (long long)(8L << 20), lohi[2];
+            float v[DIM];
+            const char *bt = "binary text, caf\xc3\xa9 and zebrafish";
+            for (d = 0; d < DIM; ++d) v[d] = (float)(d + 1);
+            memcpy(pay, &id, 8); memcpy(pay + 8, v, sizeof(v)); memcpy(pay + 8 + sizeof(v), bt, strlen(bt));
+            check(bin_call(fd, 10, pay, (unsigned)(8 + sizeof(v) + strlen(bt)), &st, &rnb, rb) == 0 && st == 0, "binary add with a text (op 10)");
+            check(bin_call(fd, 11, &id, 8, &st, &rnb, rb) == 0 && st == 0 && rnb == strlen(bt) && !memcmp(rb, bt, rnb), "binary get text (op 11): the bytes back");
+            lohi[0] = base; lohi[1] = base | 0xfffff;
+            check(bin_call(fd, 12, lohi, 16, &st, &rnb, rb) == 0 && st == 0 && rnb == 4 * 8, "binary range (op 12): 4 ids (3 chunks + the big one)");
+            memset(pay, 0, 4); memcpy(pay + 4, "zebrafish", 9);
+            check(bin_call(fd, 13, pay, 13, &st, &rnb, rb) == 0 && st == 0 && rnb == 2 * 12, "binary hybrid with words only (op 13): 2 hits");
+        }
+        /* HTTP: add with a JSON text, get it back, a range, hybrid */
+        sprintf(line, "POST /add?id=%ld HTTP/1.1\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", 9L << 20,
+                (int)strlen("{\"vector\":[1,2,3,4,5,6,7,8],\"text\":\"json \\\"quoted\\\" caf\\u00e9\"}"));
+        strcat(line, "{\"vector\":[1,2,3,4,5,6,7,8],\"text\":\"json \\\"quoted\\\" caf\\u00e9\"}");
+        check(http(line, r, sizeof(r)) > 0 && strstr(r, "{\"ok\":true}"), "HTTP POST /add with {\"vector\": [...], \"text\": \"...\"}");
+        sprintf(line, "GET /text?id=%ld HTTP/1.1\r\nConnection: close\r\n\r\n", 9L << 20);
+        check(http(line, r, sizeof(r)) > 0 && strstr(r, "{\"text\":\"json \\\"quoted\\\" caf\xc3\xa9\"}"), "HTTP GET /text: the text as a JSON string");
+        sprintf(line, "GET /range?lo=%ld&hi=%ld HTTP/1.1\r\nConnection: close\r\n\r\n", base, base | 2);
+        sprintf(what, "{\"ids\":[%ld,%ld,%ld]}", base, base | 1, base | 2);
+        check(http(line, r, sizeof(r)) > 0 && strstr(r, what), "HTTP GET /range");
+        strcpy(line, "POST /hybrid?k=2 HTTP/1.1\r\nContent-Length: 20\r\nConnection: close\r\n\r\n{\"text\":\"zebrafish\"}");
+        sprintf(what, "{\"ids\":[%ld,", base | 2);
+        check(http(line, r, sizeof(r)) > 0 && strstr(r, "\"scores\":[") && (strstr(r, what) || strstr(r, "{\"ids\":[8388608,")), "HTTP POST /hybrid with words only");
+        /* the journal keeps the texts across a kill -9 */
+        msleep(1600);
+        close(fd);
+        stop(p, SIGKILL);
+        p = start(NULL, NULL, NULL);
+        fd = connect_unix();
+        sprintf(line, "text %ld\n", base | 2);
+        check(ask(fd, line, r, sizeof(r)) > 0 && !strcmp(r, "ok 34 a chunk about the zebrafish genome"), "kill -9, restart: the texts are back");
+        sprintf(line, "text %ld\n", base | 5);
+        check(ask(fd, line, rr, 900000) == 10 + 399999, "kill -9, restart: the 400 kB text too");
+        close(fd);
+        stop(p, SIGTERM);
+        free(big); free(bl); free(rr);
+    }
+
     /* mutual TLS: the name in the client's certificate goes into the log (needs openssl and curl; skipped without) */
     if (system("command -v openssl >/dev/null && command -v curl >/dev/null") == 0) {
         char cmd[2048], ports[16];

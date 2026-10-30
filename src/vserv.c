@@ -94,6 +94,7 @@
 #define VS_EVENTS    128
 #define VS_IDLE_S    60.0
 #define VS_OUT_CAP   (64 + VS_MAXK * 48)          /* the largest reply: JSON for VS_MAXK hits */
+#define VS_REQ_TEXT  (8 << 20)                   /* a request may carry this much text (escaped) beyond a vector */
 
 typedef struct VsTls VsTls;
 
@@ -120,6 +121,8 @@ typedef struct {
     f32 *vec;                                   /* dim floats: an aligned copy of the query */
     i64 *ids;
     f32 *sc;
+    char *txt;                                  /* a decoded or fetched text (vserv_text.c), grown as needed */
+    i32 txtcap;
 } VsWorker;
 
 #ifdef VSERV_TLS
@@ -197,7 +200,7 @@ static i32 vs_tls_on, vs_plain_ok, vs_unix_tls_only;
 
 static RagStore *vs_store;
 static const char *vs_path;
-static i32 vs_dim, vs_reqcap;
+static i32 vs_dim, vs_reqcap, vs_reqmax;          /* a request's buffer starts at reqcap, grows to reqmax for texts */
 static VsListen vs_ls[2];
 static i32 vs_nls;
 static volatile sig_atomic_t vs_stop;
@@ -430,6 +433,17 @@ static void vs_process_(VsWorker *w, VsConn *c)
         c->len -= used;
         if (c->len) memmove(c->buf, c->buf + used, (size_t)c->len);
     }
+    if (c->len == 0 && c->cap > vs_reqcap) { free(c->buf); c->buf = (char *)0; c->cap = 0; }   /* a big request went */
+}
+
+/* room for more of a request: the buffer doubles, up to vs_reqmax; 0, or -1 when it may not grow */
+static i32 vs_grow_(VsConn *c)
+{
+    i32 nc = c->cap > vs_reqmax / 2 ? vs_reqmax : c->cap * 2;
+    char *b;
+    if (c->cap >= vs_reqmax || !(b = (char *)realloc(c->buf, (size_t)nc))) return -1;
+    c->buf = b; c->cap = nc;
+    return 0;
 }
 
 #ifdef VSERV_TLS
@@ -492,8 +506,10 @@ static void vs_tls_readable_(VsWorker *w, VsConn *c)
         if ((st & BR_SSL_RECVAPP) && !c->out) {   /* requests wait while replies are queued */
             size_t len;
             unsigned char *b = br_ssl_engine_recvapp_buf(e, &len);
-            i32 room = c->cap - c->len;
-            if (room <= 0) { c->closing = 1; return; }
+            i32 room;
+            if (!c->buf) { if (!(c->buf = (char *)malloc((size_t)vs_reqcap))) { c->closing = 1; return; } c->cap = vs_reqcap; }
+            if (c->len == c->cap && vs_grow_(c)) { c->closing = 1; return; }
+            room = c->cap - c->len;
             if (len > (size_t)room) len = (size_t)room;
             memcpy(c->buf + c->len, b, len);
             br_ssl_engine_recvapp_ack(e, len);
@@ -550,7 +566,8 @@ static void vs_readable_(VsWorker *w, VsConn *c)
 #endif
     for (;;) {
         ssize_t k;
-        if (c->len == c->cap) { c->closing = 1; return; }  /* the parsers always make room or close */
+        if (!c->buf) { if (!(c->buf = (char *)malloc((size_t)vs_reqcap))) { c->closing = 1; return; } c->cap = vs_reqcap; }
+        if (c->len == c->cap && vs_grow_(c)) { c->closing = 1; return; }   /* the parsers refuse what is too big */
         k = read(c->fd, c->buf + c->len, (size_t)(c->cap - c->len));
         if (k > 0) {
             c->len += (i32)k;
@@ -782,6 +799,7 @@ int main(int argc, char **argv)
     /* one request: headers + a JSON vector (~24 bytes a number) or the binary frame */
     vs_reqcap = 2048 + vs_dim * 24;
     if (vs_reqcap < 4096) vs_reqcap = 4096;
+    vs_reqmax = vs_reqcap + VS_REQ_TEXT;
     outcap = (size_t)VS_OUT_CAP;                                 /* replies: VS_MAXK hits, or one vector as text */
     if (outcap < 512 + (size_t)vs_dim * 16) outcap = 512 + (size_t)vs_dim * 16;
 #ifdef VSERV_TLS
