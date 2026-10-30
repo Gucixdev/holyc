@@ -1,37 +1,49 @@
 /* vserv.c - vecindex over a socket: libc + pthreads + Linux epoll, and TLS through the vendored BearSSL
  * (third_party/bearssl, MIT, no malloc inside). Nothing else.
  *
- *   vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-d DIM] [-x] [-L] [-r RECALL] [-c CERT.pem -k KEY.pem [-a CA.pem] [-P] [-T]] STORE.vxi
+ *   vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-d DIM] [-x] [-L] [-r RECALL] [-f SECONDS] [-S SECONDS]
+ *         [-l syslog|-|FILE] [-A] [-c CERT.pem -k KEY.pem [-a CA.pem] [-P] [-T]] STORE.vxi
  *     -s PATH   Unix socket, created mode 0600 (default ./vecindex.sock when -p is not given)
  *     -p PORT   TCP port, bound to 127.0.0.1 unless -b gives another address
  *     -t N      worker threads (default: online CPUs)
- *     -d DIM    dimension of a new, empty store when STORE.vxi does not exist yet
+ *     -d DIM    dimension of a new, empty store when STORE.vxi does not exist yet (it is created at once, with its
+ *               journal, so every write is journaled from the start)
  *     -x        save the store to STORE.vxi on SIGINT / SIGTERM
  *     -L        live: added rows are indexed as they come and the index is rebuilt in the background as it ages
  *               (grown 2x, the data drifted, a quarter deleted) - no build calls needed (store_set_live)
  *     -r R      keep recall@10 at R (e.g. 0.95): the probes are tuned on the queries the server answers, after every
  *               build or rebuild (store_set_target_recall)
+ *     -f S      flush the journal to the disk every S seconds (default 1; 0: leave it to the kernel). A crash loses
+ *               at most the last S seconds of writes
+ *     -S S      a background snapshot every S seconds when something changed (default 0: only when the journal has
+ *               grown past the file, and at least 64 MB). Either way the journal is folded into the file without
+ *               stopping searches or writes
+ *     -l DEST   log connections, every write and every refusal, with who made it (vserv_log.c): syslog, - (stderr)
+ *               or a file
+ *     -A        log every search as well
  *     -c, -k    TLS: certificate chain and private key (PEM, EC or RSA). The TCP port then takes only TLS: HTTPS,
  *               or the binary protocol inside TLS (-P lets plaintext in too). The Unix socket takes TLS as well and
  *               still accepts plaintext from local clients, unless -T
  *     -a FILE   mutual TLS: a client must present a certificate that chains to one of the CA certificates in FILE
- *               (or is one of them), else the handshake fails
+ *               (or is one of them), else the handshake fails; its name goes into the log
  *
- * The store is opened with store_load (mmap: ready in milliseconds whatever its size). Every socket speaks
- * two protocols, told apart by the first byte of a request:
+ * The store is opened with store_load (mmap: ready in milliseconds whatever its size). Every socket speaks three
+ * protocols, told apart by the first byte of a request (vserv_proto.c has the details):
  *
- *   binary (first byte 0xB5): fixed little-endian frames, nothing to parse
- *     request  u8 0xB5 | u8 op | u16 k | u32 nbytes | payload[nbytes]
- *     response u8 0xB5 | u8 status (0 ok) | u16 count | u32 nbytes | payload[nbytes]
- *     op 1 search  payload: dim x f32            reply: count x { i64 id, f32 score }
- *     op 2 add     payload: i64 id, dim x f32
- *     op 3 delete  payload: i64 id               reply count: rows removed
- *     op 4 build   op 5 save   op 6 stats        stats reply: i64 live, dim, pending, built
- *
+ *   binary (first byte 0xB5): fixed little-endian frames, nothing to parse - search, add, delete, delete a range
+ *     of ids, get, build, save, snapshot, stats
+ *   lines (a lowercase letter): "search 10 0.1 0.2 ..." -> "ok 3 42 -0.01 17 -0.12 9 -0.31", one line each way,
+ *     for nc, socat and a readline in any language
  *   HTTP/1.1 (anything else), for curl and friends; keep-alive, Content-Length bodies:
- *     GET /health | GET /stats | POST /search?k=10 | POST /add?id=N | POST /delete?id=N | POST /build | POST /save
- *     vectors as a JSON array ([0.1, -0.2, ...]) or raw little-endian f32 with
- *     Content-Type: application/octet-stream; replies are JSON.
+ *     GET /health | GET /stats | GET /get?id=N | POST /search?k=10 | POST /add?id=N | POST /delete?id=N (or
+ *     ?lo=A&hi=B) | POST /build | POST /save | POST /snapshot; vectors as a JSON array ([0.1, -0.2, ...]) or raw
+ *     little-endian f32 with Content-Type: application/octet-stream; replies are JSON.
+ * An add replaces the row with the same id in every protocol: one row per id.
+ *
+ * Who may connect is the operating system's business (the socket file's mode and group, the address the port is
+ * bound to) and TLS client certificates'; what each connection did goes to the log. Durability: the journal of
+ * changes is flushed every second (-f) and folded into the file by background snapshots (store_snapshot), so a
+ * restart replays at most what came in since the last snapshot. Replication is a copy of the file and its journal.
  *
  * TLS (when -c/-k are given): a connection is TLS when its first byte is a handshake record (0x16). TLS 1.2 only,
  * ECDHE key exchange (forward secrecy), AEAD suites only (AES-GCM - AES-NI when the CPU has it - and
@@ -46,7 +58,7 @@
  * 16 KB record in each direction, which the protocol requires.
  *
  *   ./run builds it (BearSSL first, into .build/libbearssl.a); by hand:
- *   gcc -std=c89 -pedantic -Wall -Wextra -O2 -march=native -I. -isystem third_party/bearssl/inc vserv.c \
+ *   gcc -std=c89 -pedantic -Wall -Wextra -O2 -march=native -Isrc -isystem third_party/bearssl/inc src/vserv.c \
  *       .build/libbearssl.a -lm -lpthread -o vserv          (-DVSERV_NO_TLS: plaintext only, no BearSSL)
  */
 #ifndef _GNU_SOURCE
@@ -55,6 +67,8 @@
 #include "store.c"
 #include <errno.h>
 #include <signal.h>
+#include <stdarg.h>
+#include <syslog.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -91,6 +105,9 @@ typedef struct VsConn {
     double last;
     VsTls *tls;                                 /* NULL: plaintext */
     struct VsConn *prev, *next;                 /* the worker's list, for the idle sweep */
+    unsigned long id, nreq;                     /* for the log: its number, requests answered */
+    u8 named;                                   /* TLS: its certificate's name is in peer */
+    char peer[112];                             /* who is on the other end (vserv_log.c) */
 } VsConn;
 
 typedef struct { i32 fd, tcp; } VsListen;       /* epoll data for a listening socket */
@@ -99,7 +116,7 @@ typedef struct {
     i32 ep;
     pthread_t th;
     VsConn *conns;
-    char *out;                                  /* VS_OUT_CAP reply scratch */
+    char *out;                                  /* reply scratch: VS_OUT_CAP, or one vector as text if that is more */
     f32 *vec;                                   /* dim floats: an aligned copy of the query */
     i64 *ids;
     f32 *sc;
@@ -107,8 +124,11 @@ typedef struct {
 
 #ifdef VSERV_TLS
 struct VsTls {
-    br_ssl_server_context sc;
+    br_ssl_server_context sc;                   /* first: the session cache gets this pointer and finds the rest */
     br_x509_minimal_context xc;                 /* validates client certificates (-a) */
+    br_name_element cn;                         /* the client certificate's common name, for the log */
+    char cnbuf[64];
+    i32 resumed;                                /* the session came from the cache (no certificate this time) */
     unsigned char io[BR_SSL_BUFSIZE_BIDI];      /* one full record each way */
 };
 static br_x509_certificate *vs_chain;
@@ -130,19 +150,42 @@ typedef struct {
 static VsCache vs_cache;
 static unsigned char *vs_cache_mem;
 
+/* A resumed session shows no certificate, so the name of the one that opened it is kept with its id: a ring of the
+ * latest VS_NAMES sessions, searched on resumption, under the cache's mutex */
+#define VS_NAMES 2048
+typedef struct { unsigned char id[32]; u8 idlen; char cn[64]; } VsName;
+static VsName *vs_names;
+static i32 vs_names_next;
+
 static void vs_cache_save_(const br_ssl_session_cache_class **ctx, br_ssl_server_context *sc, const br_ssl_session_parameters *p)
 {
     VsCache *c = (VsCache *)(void *)ctx;
+    VsTls *t = (VsTls *)(void *)sc;
     pthread_mutex_lock(&c->mu);
     c->lru.vtable->save(&c->lru.vtable, sc, p);
+    if (vs_names && t->cn.status > 0 && p->session_id_len <= 32) {
+        VsName *n = &vs_names[vs_names_next];
+        vs_names_next = (vs_names_next + 1) % VS_NAMES;
+        memcpy(n->id, p->session_id, p->session_id_len); n->idlen = (u8)p->session_id_len;
+        strncpy(n->cn, t->cnbuf, sizeof(n->cn) - 1); n->cn[sizeof(n->cn) - 1] = 0;
+    }
     pthread_mutex_unlock(&c->mu);
 }
 static int vs_cache_load_(const br_ssl_session_cache_class **ctx, br_ssl_server_context *sc, br_ssl_session_parameters *p)
 {
     VsCache *c = (VsCache *)(void *)ctx;
-    int r;
+    VsTls *t = (VsTls *)(void *)sc;
+    int r, i;
     pthread_mutex_lock(&c->mu);
     r = c->lru.vtable->load(&c->lru.vtable, sc, p);
+    if (r) {
+        t->resumed = 1;
+        for (i = 0; vs_names && i < VS_NAMES; ++i)
+            if (vs_names[i].idlen == p->session_id_len && !memcmp(vs_names[i].id, p->session_id, p->session_id_len)) {
+                strcpy(t->cnbuf, vs_names[i].cn); t->cn.status = 1;
+                break;
+            }
+    }
     pthread_mutex_unlock(&c->mu);
     return r;
 }
@@ -161,6 +204,8 @@ static volatile sig_atomic_t vs_stop;
 
 static double vs_now_(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (double)t.tv_sec + 1e-9 * (double)t.tv_nsec; }
 static void vs_on_signal_(int sig) { (void)sig; vs_stop = 1; }
+
+#include "vserv_log.c"
 
 /* ---- small formatting helpers (no printf on the hot path) ---- */
 
@@ -350,6 +395,7 @@ static void vs_stats_(i64 *v)
 
 static void vs_close_(VsWorker *w, VsConn *c)
 {
+    vs_log_(c, 0, "close requests=%lu", c->nreq);
 #ifdef VSERV_TLS
     if (c->tls) {
         br_ssl_engine_context *e = &c->tls->sc.eng;
@@ -376,9 +422,11 @@ static void vs_close_(VsWorker *w, VsConn *c)
 static void vs_process_(VsWorker *w, VsConn *c)
 {
     while (c->len > 0 && !c->closing && !c->out) {
-        i32 used = (u8)c->buf[0] == VS_MAGIC ? vs_binary_(w, c) : vs_http_(w, c);
+        u8 b0 = (u8)c->buf[0];
+        i32 used = b0 == VS_MAGIC ? vs_binary_(w, c) : (b0 >= 'a' && b0 <= 'z' ? vs_line_(w, c) : vs_http_(w, c));
         if (used < 0) { c->closing = 1; break; }
         if (used == 0) break;
+        ++c->nreq;
         c->len -= used;
         if (c->len) memmove(c->buf, c->buf + used, (size_t)c->len);
     }
@@ -401,8 +449,12 @@ static VsTls *vs_tls_new_(VsWorker *w)
         br_ssl_engine_set_suites(&t->sc.eng, rsa_suites, 3);
     }
     br_ssl_engine_set_versions(&t->sc.eng, BR_TLS12, BR_TLS12);
+    t->cnbuf[0] = 0; t->cn.status = 0; t->resumed = 0;
     if (vs_ntas) {                                 /* mutual TLS: the client's chain must end at one of our CAs */
+        static const unsigned char oid_cn[] = { 3, 0x55, 0x04, 0x03 };   /* 2.5.4.3, commonName */
         br_x509_minimal_init_full(&t->xc, vs_tas, vs_ntas);
+        t->cn.oid = oid_cn; t->cn.buf = t->cnbuf; t->cn.len = sizeof(t->cnbuf);
+        br_x509_minimal_set_name_elements(&t->xc, &t->cn, 1);
         br_ssl_engine_set_default_rsavrfy(&t->sc.eng);
         br_ssl_engine_set_default_ecdsa(&t->sc.eng);
         br_ssl_server_set_trust_anchor_names_alt(&t->sc, vs_tas, vs_ntas);
@@ -421,7 +473,17 @@ static void vs_tls_readable_(VsWorker *w, VsConn *c)
     br_ssl_engine_context *e = &c->tls->sc.eng;
     for (;;) {
         unsigned st = br_ssl_engine_current_state(e);
-        if (st & BR_SSL_CLOSED) { c->closing = 1; return; }
+        if (st & BR_SSL_CLOSED) {
+            i32 err = br_ssl_engine_last_error(e);
+            if (err != BR_ERR_OK && !c->named) vs_log_(c, 1, "tls handshake failed err=%d", err);   /* never got in */
+            c->closing = 1;
+            return;
+        }
+        if ((st & (BR_SSL_SENDAPP | BR_SSL_RECVAPP)) && !c->named) {   /* the handshake is done: say who it is */
+            c->named = 1;
+            if (vs_ntas && c->tls->cn.status > 0) vs_peer_name_(c, c->tls->cnbuf, c->tls->resumed);
+            else vs_log_(c, 0, "tls %s", c->tls->resumed ? "resumed" : "established");
+        }
         if (st & BR_SSL_SENDREC) {                /* handshake messages and replies */
             i32 r = vs_tls_tx_(c);
             if (r < 0) { c->closing = 1; return; }
@@ -515,6 +577,12 @@ static void vs_accept_(VsWorker *w, const VsListen *l)
         c = (VsConn *)calloc(1, sizeof(VsConn));
         if (!c) { close(fd); continue; }
         c->fd = fd; c->last = vs_now_(); c->tcp = (u8)l->tcp;
+#if defined(__GNUC__)
+        c->id = __atomic_add_fetch(&vs_conn_seq, 1UL, __ATOMIC_RELAXED);
+#else
+        c->id = ++vs_conn_seq;
+#endif
+        if (vs_logging_()) { vs_peer_(c, l); vs_log_(c, 0, "open"); }
         c->next = w->conns; if (w->conns) w->conns->prev = c; w->conns = c;
         e.events = EPOLLIN | EPOLLRDHUP | EPOLLET; e.data.ptr = c;
         if (epoll_ctl(w->ep, EPOLL_CTL_ADD, fd, &e) != 0) { vs_close_(w, c); continue; }
@@ -600,12 +668,55 @@ static i32 vs_ntas_(void)
 
 #include "vserv_pem.c"
 
+static i64 vs_fsize_(const char *path) { struct stat st; return stat(path, &st) == 0 ? (i64)st.st_size : 0; }
+
+/* The main thread, while the workers serve: reaps finished snapshots (and logs them), flushes the journal every
+ * sync_s seconds, and starts a background snapshot every snap_s seconds when something changed, or whenever the
+ * journal has outgrown the file (and 64 MB): the file stays the bulk of the data, a restart replays little. */
+static void vs_housekeep_(f64 sync_s, f64 snap_s)
+{
+    f64 last_sync = vs_now_(), last_snap = last_sync;
+    i64 mods_snap = store_changes(vs_store), us, done = store_snapshots_done(vs_store);
+    i32 run, last;
+    while (!vs_stop) {
+        struct timespec ts;
+        ts.tv_sec = 0; ts.tv_nsec = 100000000L;
+        nanosleep(&ts, (struct timespec *)0);
+        store_snapshot_info(vs_store, &run, &last, &us);
+        if (run) store_snapshot_poll(vs_store, 0);               /* reaps it once the child is done */
+        store_snapshot_info(vs_store, &run, &last, &us);
+        if (store_snapshots_done(vs_store) != done) {            /* finished since the last look, whoever reaped it */
+            done = store_snapshots_done(vs_store);
+            vs_log_((const VsConn *)0, last != 0, "snapshot %s file=%s ms=%ld", last == 0 ? "ok" : "failed", vs_path, (long)(us / 1000));
+        }
+        if (sync_s > 0 && vs_now_() - last_sync >= sync_s) {
+            if (store_journal_bytes(vs_store, vs_path) >= 0 && store_sync(vs_store, vs_path) != 0) vs_log_((const VsConn *)0, 1, "journal flush failed");
+            last_sync = vs_now_();
+        }
+        if (!run) {
+            i64 jb = store_journal_bytes(vs_store, vs_path), m = store_changes(vs_store);
+            i32 by_time = snap_s > 0 && vs_now_() - last_snap >= snap_s && m != mods_snap;
+            i32 by_size = jb > ((i64)64 << 20) && jb > vs_fsize_(vs_path);
+            if (by_time || by_size) {
+                if (store_snapshot(vs_store, vs_path) == 0) {
+                    mods_snap = m;
+                    vs_log_((const VsConn *)0, 0, "snapshot started file=%s (%s)", vs_path, by_size ? "the journal outgrew the file" : "timer");
+                }
+                last_snap = vs_now_();
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     static Arena arena;
     const char *sock = (const char *)0, *bind_addr = "127.0.0.1", *cert = (const char *)0, *key = (const char *)0, *ca = (const char *)0;
-    i32 port = 0, nth = 0, dim = 0, save_on_exit = 0, live = 0, i, j;
+    const char *logdest = (const char *)0;
+    i32 port = 0, nth = 0, dim = 0, save_on_exit = 0, live = 0, created = 0, i, j;
     f32 recall = 0.0f;
+    f64 sync_s = 1.0, snap_s = 0.0;
+    size_t outcap;
     VsWorker *ws;
     struct sigaction sa;
     double t0;
@@ -624,9 +735,18 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-a") && i + 1 < argc) ca = argv[++i];
         else if (!strcmp(argv[i], "-P")) vs_plain_ok = 1;
         else if (!strcmp(argv[i], "-T")) vs_unix_tls_only = 1;
+        else if (!strcmp(argv[i], "-f") && i + 1 < argc) sync_s = atof(argv[++i]);
+        else if (!strcmp(argv[i], "-S") && i + 1 < argc) snap_s = atof(argv[++i]);
+        else if (!strcmp(argv[i], "-l") && i + 1 < argc) logdest = argv[++i];
+        else if (!strcmp(argv[i], "-A")) vs_log_all = 1;
         else if (argv[i][0] != '-' && !vs_path) vs_path = argv[i];
-        else { fprintf(stderr, "usage: vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-d DIM] [-x] [-L] [-r RECALL] [-c CERT -k KEY [-a CA] [-P] [-T]] STORE.vxi\n"); return 2; }
+        else {
+            fprintf(stderr, "usage: vserv [-s SOCK] [-p PORT] [-b ADDR] [-t THREADS] [-d DIM] [-x] [-L] [-r RECALL] [-f SECONDS] [-S SECONDS]\n"
+                            "             [-l syslog|-|FILE] [-A] [-c CERT -k KEY [-a CA] [-P] [-T]] STORE.vxi\n");
+            return 2;
+        }
     }
+    if (logdest && vs_log_open_(logdest) != 0) { fprintf(stderr, "vserv: cannot open the log %s: %s\n", logdest, strerror(errno)); return 1; }
     if (!vs_path) { fprintf(stderr, "vserv: no store file given\n"); return 2; }
     if ((cert || key || ca || vs_unix_tls_only) && !(cert && key)) { fprintf(stderr, "vserv: TLS needs both -c CERT and -k KEY\n"); return 2; }
 #ifdef VSERV_TLS
@@ -648,8 +768,12 @@ int main(int argc, char **argv)
     t0 = vs_now_();
     vs_store = store_load(&arena, vs_path);
     if (!vs_store) {
+        struct stat st;
+        if (stat(vs_path, &st) == 0) { fprintf(stderr, "vserv: %s exists but cannot be read as a store\n", vs_path); return 1; }
         if (dim <= 0) { fprintf(stderr, "vserv: cannot load %s (give -d DIM to start a new store)\n", vs_path); return 1; }
         vs_store = store_new(&arena, dim);
+        if (store_save(vs_store, vs_path) != 0) { fprintf(stderr, "vserv: cannot create %s: %s\n", vs_path, strerror(errno)); return 1; }
+        created = 1;                                             /* the file and its journal exist from the first write on */
     }
     vs_dim = vs_store->dim;
     store_set_threads(vs_store, 1);              /* one query per thread: the workers are the parallelism */
@@ -658,6 +782,11 @@ int main(int argc, char **argv)
     /* one request: headers + a JSON vector (~24 bytes a number) or the binary frame */
     vs_reqcap = 2048 + vs_dim * 24;
     if (vs_reqcap < 4096) vs_reqcap = 4096;
+    outcap = (size_t)VS_OUT_CAP;                                 /* replies: VS_MAXK hits, or one vector as text */
+    if (outcap < 512 + (size_t)vs_dim * 16) outcap = 512 + (size_t)vs_dim * 16;
+#ifdef VSERV_TLS
+    if (vs_ntas_()) vs_names = (VsName *)calloc(VS_NAMES, sizeof(VsName));
+#endif
 
     if (sock) { vs_ls[vs_nls].fd = vs_listen_unix_(sock); if (vs_ls[vs_nls].fd < 0) { fprintf(stderr, "vserv: cannot listen on %s: %s\n", sock, strerror(errno)); return 1; } ++vs_nls; }
     if (port) { vs_ls[vs_nls].tcp = 1; vs_ls[vs_nls].fd = vs_listen_tcp_(bind_addr, port); if (vs_ls[vs_nls].fd < 0) { fprintf(stderr, "vserv: cannot listen on %s:%d: %s\n", bind_addr, port, strerror(errno)); return 1; } ++vs_nls; }
@@ -670,7 +799,7 @@ int main(int argc, char **argv)
     for (i = 0; i < nth; ++i) {
         VsWorker *w = &ws[i];
         w->ep = epoll_create1(EPOLL_CLOEXEC);
-        w->out = (char *)malloc(VS_OUT_CAP);
+        w->out = (char *)malloc(outcap);
         w->vec = (f32 *)malloc((size_t)vs_dim * sizeof(f32));
         w->ids = (i64 *)malloc(VS_MAXK * sizeof(i64));
         w->sc = (f32 *)malloc(VS_MAXK * sizeof(f32));
@@ -684,7 +813,12 @@ int main(int argc, char **argv)
             (vs_now_() - t0) * 1e3, nth, live ? " live;" : "", sock ? " unix " : "", sock ? sock : "", port ? " tcp " : "", port ? bind_addr : "",
             vs_tls_on ? (vs_ntas_() ? " (TLS, client certificates required)" : " (TLS)") : "",
             vs_tls_on ? (vs_plain_ok ? " + plaintext on tcp" : (vs_unix_tls_only ? "" : "; plaintext on unix only")) : "");
+    vs_log_((const VsConn *)0, 0, "start file=%s rows=%d dim=%d threads=%d%s%s%s journal=%s", vs_path, store_count(vs_store), vs_dim, nth,
+            created ? " created" : "", live ? " live" : "", vs_tls_on ? " tls" : "", store_journal_bytes(vs_store, vs_path) >= 0 ? "on" : "off");
+    if (store_journal_bytes(vs_store, vs_path) < 0)
+        fprintf(stderr, "vserv: no journal for %s: writes are durable only once saved or snapshotted\n", vs_path);
     for (i = 0; i < nth; ++i) pthread_create(&ws[i].th, (const pthread_attr_t *)0, vs_worker_, &ws[i]);
+    vs_housekeep_(sync_s, snap_s);
     for (i = 0; i < nth; ++i) pthread_join(ws[i].th, (void **)0);
 
     for (j = 0; j < vs_nls; ++j) close(vs_ls[j].fd);
@@ -692,7 +826,10 @@ int main(int argc, char **argv)
     if (save_on_exit) {
         if (store_save(vs_store, vs_path) == 0) fprintf(stderr, "vserv: saved %s\n", vs_path);
         else fprintf(stderr, "vserv: saving %s failed\n", vs_path);
-    }
+    } else if (store_journal_bytes(vs_store, vs_path) >= 0)
+        store_sync(vs_store, vs_path);                           /* everything written so far is on the disk */
+    store_snapshot_poll(vs_store, 1);
+    vs_log_((const VsConn *)0, 0, "stop rows=%d", store_count(vs_store));
     for (i = 0; i < nth; ++i) {
         close(ws[i].ep); free(ws[i].out); free(ws[i].vec); free(ws[i].ids); free(ws[i].sc);
     }

@@ -6,33 +6,107 @@ The store is opened with `store_load` (mmap), so a 100M-row file is ready in mil
 
 ```sh
 ./run                                    # builds .build/vserv (BearSSL into .build/libbearssl.a first)
-.build/vserv -s /run/vx.sock -p 8077 -t 2 -x docs.vxi            # Unix socket (0600) + TCP on 127.0.0.1
-.build/vserv -p 8077 -L -r 0.95 -x docs.vxi                      # live: adds indexed as they come, no /build
+.build/vserv -s /run/vx.sock -p 8077 -t 2 -d 384 docs.vxi        # Unix socket (0600) + TCP on 127.0.0.1; a new store
+.build/vserv -p 8077 -L -r 0.95 -l syslog docs.vxi               # live: adds indexed as they come; log to syslog
 .build/vserv -p 8443 -c cert.pem -k key.pem [-a clients-ca.pem] [-T] docs.vxi   # TLS, optional mutual TLS
 curl -s localhost:8077/stats
 curl -s -X POST 'localhost:8077/search?k=5' -d '[0.1, 0.2, ...]'
 ```
 
-Every socket speaks two protocols, told apart by the first byte: HTTP/1.1 (`GET /health`, `GET /stats`,
-`POST /search?k=`, `/add?id=`, `/delete?id=`, `/build`, `/save`; vectors as a JSON array or raw little-endian
-f32, keep-alive, pipelining) and a binary protocol (`0xB5`, op, k, length; search/add/delete/build/save/stats)
-with nothing to parse. The HTTP header scan looks for the blank line 16 bytes at a time with SSE2 (the
-picohttpparser idea, cut down to what this server needs).
+## Three protocols on every socket
 
-TLS (`-c`/`-k`): TLS 1.2 through the vendored [BearSSL](https://bearssl.org) 0.6 (MIT, unmodified, no crypto
-code of our own): ECDHE only (forward secrecy), AEAD suites only (AES-GCM with AES-NI, ChaCha20-Poly1305), EC or
-RSA keys, sessions resumed from one cache shared by every worker, keys wiped when a connection closes. `-a CA`
-requires client certificates (mutual TLS). TLS is sniffed per connection (`0x16`): the TCP port takes only TLS
-(`-P` lets plaintext in too); the Unix socket takes TLS or, for local tools, plaintext (`-T`: TLS only).
+They are told apart by the first byte of a request, so one connection can mix them.
 
-Measured: 2.4 MB idle RSS; 4.2 KB per open plaintext connection, 20.7 KB per TLS connection (300 open). From
-Python clients on 2 cores: ~15-19k searches/s plaintext, ~10.7k over TLS on the first 2-core host; 8.9-10.6k and
-5.7-7.5k on the Cascade Lake host of [benchmarks.md](benchmarks.md) (2k rows; the Python clients are the bottleneck).
-`-L` puts the store in live mode (added rows are indexed by the server's own thread and the index is rebuilt in the
-background as it ages - no `/build` calls) and `-r 0.95` keeps recall@10 at 0.95 (the probes tuned on the queries it
-answers); see "Live ingest" in [vecdb.md](vecdb.md). `py/vserv_test.py` (29 checks: both protocols, both sockets, pipelining, a
-request trickled byte by byte, oversized and malformed input, 8 concurrent clients, SIGTERM saves, restart, live mode:
-3000 adds over the socket and no build call, indexed by the server in 0.19 s) and `py/vserv_tls_test.py` (22
-checks: resumption on every reconnect, multi-record replies, plaintext refused, untrusted CA, mTLS accept/reject,
-RSA key, curl, TLS on the Unix socket) run in `./run`.
+**Lines** (a lowercase letter first): one line in, one line out, for `nc`, `socat` and a readline in any language.
+A session over TCP, word for word:
 
+```
+add 1 1 0 0 0                 ok
+add 2 0 1 0 0                 ok
+search 2 0.9 0.1 0 0          ok 2 1 -0.012233 2 -1.779137
+stats                         ok count=2 dim=4 pending=2 built=0 snapshot=idle last=none
+del 1 2                       ok 2
+quit                          ok bye
+```
+
+The commands: `ping`, `stats`, `search K X1 .. XD`, `add ID X1 .. XD`, `get ID`, `del ID`, `del LO HI` (every id in
+the range), `build`, `save`, `snapshot`, `help`, `quit`. A reply is `ok ...` or `err WHAT`; scores are `-|q - v|^2`
+of the unit vectors, with 6 decimals.
+
+**Binary** (`0xB5` first): little-endian frames, nothing to parse - `u8 0xB5, u8 op, u16 k, u32 nbytes, payload`.
+Ops: 1 search, 2 add, 3 delete, 4 build, 5 save, 6 stats, 7 snapshot, 8 get, 9 delete a range of ids.
+
+**HTTP/1.1** (anything else): `GET /health`, `GET /stats`, `GET /get?id=N`, `POST /search?k=`, `/add?id=`,
+`/delete?id=` or `/delete?lo=&hi=`, `/build`, `/save`, `/snapshot`; vectors as a JSON array or raw little-endian f32,
+keep-alive, pipelining. The header scan looks for the blank line 16 bytes at a time with SSE2 (the picohttpparser
+idea, cut down to what this server needs).
+
+In all three an add replaces the row with the same id: one row per id. The full reference is the comment at the top
+of `src/vserv_proto.c`.
+
+## Durability: a journal and background snapshots, no replication
+
+Every write goes into the journal next to the file (`docs.vxi.j`), which is flushed to the disk every second (`-f
+SECONDS`; 0 leaves it to the kernel), so a crash loses at most that second. A new store's file is created at start,
+so the journal covers it from the first write. A background snapshot folds the journal into the file: a child process
+writes a copy-on-write image of the store while the server keeps answering and taking writes; the writes made
+meanwhile go to both journals, and the new one takes over when the file is complete. One starts whenever the journal
+has outgrown the file (and 64 MB), every `-S SECONDS` when something changed, and on `snapshot` from a client.
+`tests/vserv_test.c` kills the server with `kill -9` a second after a burst of adds and finds every one of them after
+the restart; `tests/scrash.c` does the same to the store at random moments, with snapshots running.
+
+There is no replication inside the server. A copy of the store is the file plus its journal, both written atomically
+(`rename`), so `rsync` or `cp` of the two at any moment is a consistent backup; a standby machine that replays them
+starts in milliseconds (mmap). A snapshot to another path (`store_snapshot` / `vi_snapshot` with a path) writes a
+point-in-time copy without touching the live journal.
+
+## Access and accountability: the operating system and the log, no users and roles
+
+Who may connect is decided outside the server: the Unix socket is created mode 0600 (owner only; change its group and
+mode to share it), the TCP port binds to 127.0.0.1 unless `-b` says otherwise, and `-a CA` lets in only clients with a
+certificate from that CA. What each connection did goes to the log, one line per event (`-l syslog`, `-l -` for
+stderr, `-l FILE`), with the peer of every line: `uid`, `gid` and `pid` on the Unix socket (`SO_PEERCRED`), address
+and port on TCP, and the certificate's name under mutual TLS - kept across session resumptions. From the session
+above, with `-l - -A`:
+
+```
+2026-10-30T00:05:54Z vserv[21369] start file=/tmp/demo.vxi rows=0 dim=4 threads=2 created journal=on
+2026-10-30T00:05:55Z vserv[21369] conn=1 peer=tcp:127.0.0.1:52036 open
+2026-10-30T00:05:55Z vserv[21369] conn=1 peer=tcp:127.0.0.1:52036 add id=1 ok
+2026-10-30T00:05:55Z vserv[21369] conn=1 peer=tcp:127.0.0.1:52036 add id=2 ok
+2026-10-30T00:05:55Z vserv[21369] conn=1 peer=tcp:127.0.0.1:52036 search k=2 hits=2 us=7
+2026-10-30T00:05:55Z vserv[21369] conn=1 peer=tcp:127.0.0.1:52036 del lo=1 hi=2 removed=2
+2026-10-30T00:05:55Z vserv[21369] conn=1 peer=tcp:127.0.0.1:52036 close requests=6
+2026-10-30T00:05:56Z vserv[21369] stop rows=0
+```
+
+Writes, connections, refused requests, failed TLS handshakes and snapshots are logged once `-l` is given; searches
+only with `-A`. A bulk load logs one line per row: for millions of rows prefer `-l FILE` to syslog, which journald
+rate-limits.
+
+## TLS
+
+`-c`/`-k`: TLS 1.2 through the vendored [BearSSL](https://bearssl.org) 0.6 (MIT, unmodified, no crypto code of our
+own): ECDHE only (forward secrecy), AEAD suites only (AES-GCM with AES-NI, ChaCha20-Poly1305), EC or RSA keys,
+sessions resumed from one cache shared by every worker, keys wiped when a connection closes. `-a CA` requires client
+certificates (mutual TLS). TLS is sniffed per connection (`0x16`): the TCP port takes only TLS (`-P` lets plaintext in
+too); the Unix socket takes TLS or, for local tools, plaintext (`-T`: TLS only).
+
+## Measured
+
+2.4 MB idle RSS; 4.2 KB per open plaintext connection, 20.7 KB per TLS connection (300 open). From Python clients on
+2 cores: ~15-19k searches/s plaintext, ~10.7k over TLS on the first 2-core host; 8.9-10.6k and 5.7-7.5k on the Cascade
+Lake host of [benchmarks.md](benchmarks.md) (2k rows; the Python clients are the bottleneck). `-L` puts the store in
+live mode (added rows are indexed by the server's own thread and the index is rebuilt in the background as it ages -
+no `/build` calls) and `-r 0.95` keeps recall@10 at 0.95 (the probes tuned on the queries it answers); see "Live
+ingest" in [vecdb.md](vecdb.md).
+
+## Tests
+
+`py/vserv_test.py` (29 checks: the binary protocol and HTTP, both sockets, pipelining, a request trickled byte by
+byte, oversized and malformed input, 8 concurrent clients, SIGTERM saves, restart, live mode: 3000 adds over the
+socket and no build call) and `py/vserv_tls_test.py` (22 checks: resumption on every reconnect, multi-record replies,
+plaintext refused, untrusted CA, mTLS accept/reject, RSA key, curl, TLS on the Unix socket), and `tests/vserv_test.c`
+(the line protocol and its errors, the binary and HTTP snapshot, get and range-delete calls, replace-on-add, the log
+and its peers, kill -9 against the journal, timed snapshots, and the certificate name of a curl client under mutual
+TLS in the log) run in `./run`.

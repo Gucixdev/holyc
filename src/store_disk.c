@@ -426,8 +426,10 @@ static i32 store_snap_reap_(RagStore *s, i32 block)
     s->snap_took_us = store_now_us_() - s->snap_t0_us;
 #if defined(__GNUC__)
     __atomic_store_n(&s->snap_run, 0, __ATOMIC_RELEASE);
+    __atomic_add_fetch(&s->snap_done, 1, __ATOMIC_RELEASE);
 #else
     s->snap_run = 0;
+    ++s->snap_done;
 #endif
     return s->snap_last;
 }
@@ -496,6 +498,37 @@ i32 store_snapshot_poll(RagStore *s, i32 block)
     r = store_snap_reap_(s, block);
     pthread_mutex_unlock(&s->snap_mu);
     return r;
+}
+
+/* Bytes in the journal of the file at path (what a snapshot would fold into the file), or -1 when the store keeps
+ * no journal for that file */
+i64 store_journal_bytes(RagStore *s, const char *path)
+{
+    i64 n = -1;
+    pthread_rwlock_rdlock(&s->lock);                             /* a save or a snapshot swaps the journal under the write lock */
+    if (s->jf && s->jpath && strcmp(s->jpath, path) == 0) n = (i64)ftell(s->jf);
+    pthread_rwlock_unlock(&s->lock);
+    return n;
+}
+
+/* Changes made so far (adds, replaces, deletes): a snapshot is due only once this has moved */
+i64 store_changes(RagStore *s)
+{
+    i64 m;
+    pthread_rwlock_rdlock(&s->lock);
+    m = s->mods;
+    pthread_rwlock_unlock(&s->lock);
+    return m;
+}
+
+/* Snapshots finished so far, ok or not: one more means store_snapshot_info has a new outcome to tell */
+i64 store_snapshots_done(RagStore *s)
+{
+#if defined(__GNUC__)
+    return __atomic_load_n(&s->snap_done, __ATOMIC_ACQUIRE);
+#else
+    return s->snap_done;
+#endif
 }
 
 /* For stats, without waiting: whether a snapshot runs, how the last one ended (0 ok, -1 failed, 2 none yet) and how

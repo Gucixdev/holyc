@@ -185,6 +185,9 @@ if command -v python3 >/dev/null; then
 else
     echo "  (python3 unavailable - built, end-to-end tests skipped)"
 fi
+# ---- the line protocol, the log, the journal under kill -9, timed snapshots, mTLS names in the log ----
+"$CC" -std=gnu99 -O2 -Wall -Wextra tests/vserv_test.c -o "$OUT/vserv_line_test" \
+    && "$OUT/vserv_line_test" "$OUT/vserv" 2>/dev/null || { echo "  ^ vserv line protocol FAILED"; fail=1; }
 
 # ---- mem.c timings (mirrors bench.c one layer up): ingest/search/touch/archive/recall/save/load,
 # ---- and the mem_consolidate cost-vs-N sweep that is the one gap README calls out ----

@@ -81,7 +81,8 @@ cc -Iinclude demo.c -L.build -lvecindex -lm -lpthread -o demo && LD_LIBRARY_PATH
 The same from Python (ctypes), Go (cgo) and Rust (`extern "C"`), every function, and how durability works:
 [docs/api.md](docs/api.md). Inside a C program the library can also be one more file of the build (`src/vecindex.c`,
 or `store.c` itself for the internal API). Over a socket, `vserv` serves one store file to anything that can open a
-socket ([docs/server.md](docs/server.md)).
+socket, in one-line commands (`search 10 0.1 0.2 ...` -> `ok 3 42 -0.01 ...`), binary frames or HTTP
+([docs/server.md](docs/server.md)).
 
 ## Results
 
@@ -114,11 +115,11 @@ measured: the older rows on a GTX 1050 Ti box (7.8 GB RAM, 12 cores), the scale,
 | Adversarial stress | invariant checks, not just "doesn't crash" | `tests/stress.c`/`tests/mstress.c` - found and fixed 5 bugs this way |
 | Static analysis | clang analyzer + clang-tidy across the core, findings triaged by hand | 2 real (unreachable) issues fixed, the rest traced and confirmed false positives |
 | Scale | measured to the breaking point | store: 100M vectors (d=96, 2-bit + int8) ingested, built and searched in a 5.84 GiB cgroup on 2 cores; the old store was OOM-killed between 7M and 8M. vecdb: 8M notes end to end where the old code died at ~4M |
-| Server | `src/vserv.c`: epoll, Unix + TCP, HTTP/1.1 + binary, TLS 1.2 (BearSSL), mutual TLS | `py/vserv_test.py` (29 checks) and `py/vserv_tls_test.py` (22 checks) in `./run` |
+| Server | `src/vserv.c`: epoll, Unix + TCP, a line protocol + binary + HTTP/1.1, TLS 1.2 (BearSSL), mutual TLS; the journal flushed every second, background snapshots; a log of every write with its peer (uid/pid, address, certificate name) instead of users and roles | `py/vserv_test.py` (29 checks), `py/vserv_tls_test.py` (22 checks) and `tests/vserv_test.c` (kill -9 against the journal, timed snapshots, the log, mTLS names) in `./run` |
 | Retrieval quality | a SQuAD-based benchmark, not hand-labeled questions | `bench/real_val.c`: gold@10 up to 85.6%, against an 87.1% ceiling for this embedder |
 | Reranking | a cross-encoder second pass with a measured effect | `src/rerank.c`: MRR 0.751 -> 0.887, gold@1 62.1% -> 81.5% on the subset where it has room to help |
 | Independent review | **not done** | every test here was written and run by the author of the code |
-| Multi-tenancy / auth / replication / HA | **not present** | out of scope for a library |
+| Multi-tenancy / users and roles / replication | **not present, on purpose** | access is the socket's file mode, the bound address and client certificates; accountability is the log; a backup or a standby is a copy of the file and its journal ([docs/server.md](docs/server.md)) |
 
 ## Documentation
 

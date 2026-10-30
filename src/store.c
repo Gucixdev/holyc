@@ -169,6 +169,7 @@ typedef struct {
     i32      snap_last;     /* the last finished one: 0 ok, -1 failed, 2 none yet */
     i64      snap_t0_us;    /* when the running one started (CLOCK_MONOTONIC) */
     i64      snap_took_us;  /* how long the last finished one took */
+    i64      snap_done;     /* snapshots finished so far, ok or not (read atomically) */
     i32      tq_probe;      /* IVF: clusters scanned per query (0 = the index default) */
     i32      tq_threads;    /* threads one query's scan may use (0 = auto: up to 4 on big stores) */
     i32      tq_rerank;     /* candidates re-scored exactly per query (0 = auto: max(20 k, 256)) */

@@ -1,7 +1,66 @@
-/* vserv_proto.c - the two request protocols: binary frames (first byte 0xB5) and HTTP/1.1.
+/* vserv_proto.c - the three request protocols, told apart by the first byte of a request: binary frames (0xB5), a
+ * line protocol (a lowercase letter) and HTTP/1.1 (anything else).
  * Part of vserv.c, which includes it at this point; not compiled on its own. */
 
-/* ---- binary protocol ---- */
+/* ---- what the protocols share: the store operations, and the log lines for writes ---- */
+
+/* the replace-or-add every protocol's add means (one row per id) */
+static i32 vs_put_(VsConn *c, const f32 *v, i64 id)
+{
+    i32 r = store_put(vs_store, v, id, 0);
+    if (vs_logging_()) vs_log_(c, r != 0, "add id=%ld %s", (long)id, r == 0 ? "ok" : "refused (NaN or Inf)");
+    return r;
+}
+
+static i32 vs_del_(VsConn *c, i64 lo, i64 hi)
+{
+    i32 n = lo == hi ? store_delete(vs_store, lo) : store_delete_range(vs_store, lo, hi);
+    if (vs_logging_()) {
+        if (lo == hi) vs_log_(c, 0, "del id=%ld removed=%d", (long)lo, n);
+        else vs_log_(c, 0, "del lo=%ld hi=%ld removed=%d", (long)lo, (long)hi, n);
+    }
+    return n;
+}
+
+static void vs_build_(VsConn *c)
+{
+    double t0 = vs_now_();
+    store_build(vs_store);
+    vs_log_(c, 0, "build ok ms=%.0f", (vs_now_() - t0) * 1e3);
+}
+
+static i32 vs_save_(VsConn *c)
+{
+    double t0 = vs_now_();
+    i32 r = vs_path ? store_save(vs_store, vs_path) : -1;
+    vs_log_(c, r != 0, "save %s ms=%.0f", r == 0 ? "ok" : "failed", (vs_now_() - t0) * 1e3);
+    return r;
+}
+
+/* 0 started, 1 one runs already (or a build or save holds the store), -1 failed */
+static i32 vs_snapshot_(VsConn *c)
+{
+    i32 r = store_snapshot(vs_store, vs_path);
+    vs_log_(c, r < 0, "snapshot %s", r == 0 ? "started" : (r == 1 ? "busy" : "failed"));
+    return r;
+}
+
+static void vs_logsearch_(VsConn *c, i32 k, i32 got, double t0)
+{
+    if (vs_log_all) vs_log_(c, 0, "search k=%d hits=%d us=%.0f", k, got, (vs_now_() - t0) * 1e6);
+}
+
+/* ---- binary protocol: little-endian frames, nothing to parse ----
+ *   request  u8 0xB5 | u8 op | u16 k | u32 nbytes | payload[nbytes]
+ *   response u8 0xB5 | u8 status | u16 count | u32 nbytes | payload[nbytes]
+ *   status 0 ok, 1 refused or failed, 2 bad request, 3 unknown op, 4 busy
+ *   op 1 search        payload: dim x f32            reply: count x { i64 id, f32 score }
+ *   op 2 add           payload: i64 id, dim x f32    (replaces a row with the same id)
+ *   op 3 delete        payload: i64 id               reply count: rows removed
+ *   op 4 build   op 5 save   op 6 stats              stats reply: i64 live, dim, pending, built
+ *   op 7 snapshot      (in the background; status 4 while one runs)
+ *   op 8 get           payload: i64 id               reply: dim x f32, the stored unit vector (status 1: no row)
+ *   op 9 delete range  payload: i64 lo, i64 hi       reply: i64 rows removed (every id in [lo, hi]) */
 
 static void vs_bin_reply_(VsWorker *w, VsConn *c, u8 status, u16 count, const char *payload, u32 nbytes)
 {
@@ -15,6 +74,17 @@ static void vs_bin_reply_(VsWorker *w, VsConn *c, u8 status, u16 count, const ch
 
 static u32 vs_le32_(const u8 *p) { return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) | ((u32)p[3] << 24); }
 static i64 vs_le64_(const u8 *p) { return (i64)((u64)vs_le32_(p) | ((u64)vs_le32_(p + 4) << 32)); }
+static void vs_put32_(char *o, u32 v) { o[0] = (char)(v & 0xff); o[1] = (char)((v >> 8) & 0xff); o[2] = (char)((v >> 16) & 0xff); o[3] = (char)(v >> 24); }
+static void vs_put64_(char *o, i64 v) { vs_put32_(o, (u32)((u64)v & 0xffffffffu)); vs_put32_(o + 4, (u32)((u64)v >> 32)); }
+static u32 vs_fbits_(f32 f) { u32 u; memcpy(&u, &f, 4); return u; }
+
+/* n little-endian f32 from p into v (a copy, whatever the alignment and the host's byte order) */
+static void vs_getf_(f32 *v, const u8 *p, i32 n)
+{
+    i32 i;
+    if (!eng_host_be_()) { memcpy(v, p, (size_t)n * 4); return; }
+    for (i = 0; i < n; ++i) { u32 u = vs_le32_(p + 4 * i); memcpy(&v[i], &u, 4); }
+}
 
 /* returns bytes consumed, 0 if the frame is incomplete, -1 to close */
 static i32 vs_binary_(VsWorker *w, VsConn *c)
@@ -24,36 +94,179 @@ static i32 vs_binary_(VsWorker *w, VsConn *c)
     i32 op, k, i, got;
     if (c->len < 8) return 0;
     op = b[1]; k = (i32)(b[2] | (b[3] << 8)); nb = vs_le32_(b + 4);
-    if (nb > (u32)vs_reqcap - 8) return -1;
+    if (nb > (u32)vs_reqcap - 8) { vs_log_(c, 1, "binary frame of %lu bytes refused", (unsigned long)nb); return -1; }
     if ((u32)c->len < 8 + nb) return 0;
     b += 8;
     switch (op) {
-    case 1:
+    case 1: {
+        double t0 = vs_now_();
         if (nb != (u32)vs_dim * 4) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
-        memcpy(w->vec, b, nb);
+        vs_getf_(w->vec, b, vs_dim);
         if (k < 1) k = 10;
         if (k > VS_MAXK) k = VS_MAXK;
         got = vs_search_(w, w->vec, k);
         {   char *o = w->out + 8;
-            for (i = 0; i < got; ++i) { memcpy(o, &w->ids[i], 8); memcpy(o + 8, &w->sc[i], 4); o += 12; }
+            for (i = 0; i < got; ++i) { vs_put64_(o, w->ids[i]); vs_put32_(o + 8, vs_fbits_(w->sc[i])); o += 12; }
             vs_bin_reply_(w, c, 0, (u16)got, w->out + 8, (u32)got * 12u); }
-        break;
+        vs_logsearch_(c, k, got, t0);
+        break; }
     case 2:
         if (nb != 8 + (u32)vs_dim * 4) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
-        memcpy(w->vec, b + 8, (size_t)vs_dim * 4);
-        vs_bin_reply_(w, c, store_add(vs_store, w->vec, vs_le64_(b)) == 0 ? 0 : 1, 0, (const char *)0, 0);
+        vs_getf_(w->vec, b + 8, vs_dim);
+        vs_bin_reply_(w, c, vs_put_(c, w->vec, vs_le64_(b)) == 0 ? 0 : 1, 0, (const char *)0, 0);
         break;
     case 3:
         if (nb != 8) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
-        vs_bin_reply_(w, c, 0, (u16)store_delete(vs_store, vs_le64_(b)), (const char *)0, 0);
+        {   i64 id = vs_le64_(b);
+            vs_bin_reply_(w, c, 0, (u16)vs_del_(c, id, id), (const char *)0, 0); }
         break;
-    case 4: store_build(vs_store); vs_bin_reply_(w, c, 0, 0, (const char *)0, 0); break;
-    case 5: vs_bin_reply_(w, c, (u8)(vs_path && store_save(vs_store, vs_path) == 0 ? 0 : 1), 0, (const char *)0, 0); break;
-    case 6: { i64 v[4]; vs_stats_(v); vs_bin_reply_(w, c, 0, 4, (const char *)v, sizeof(v)); } break;
+    case 4: vs_build_(c); vs_bin_reply_(w, c, 0, 0, (const char *)0, 0); break;
+    case 5: vs_bin_reply_(w, c, (u8)(vs_save_(c) == 0 ? 0 : 1), 0, (const char *)0, 0); break;
+    case 6: {
+        i64 v[4]; char p[32];
+        vs_stats_(v);
+        for (i = 0; i < 4; ++i) vs_put64_(p + 8 * i, v[i]);
+        vs_bin_reply_(w, c, 0, 4, p, sizeof(p));
+        break; }
+    case 7: { i32 r = vs_snapshot_(c); vs_bin_reply_(w, c, (u8)(r == 0 ? 0 : (r == 1 ? 4 : 1)), 0, (const char *)0, 0); } break;
+    case 8:
+        if (nb != 8) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
+        if (store_get_vec(vs_store, vs_le64_(b), w->vec) != 0) { vs_bin_reply_(w, c, 1, 0, (const char *)0, 0); break; }
+        {   char *o = w->out + 8;
+            for (i = 0; i < vs_dim; ++i) vs_put32_(o + 4 * i, vs_fbits_(w->vec[i]));
+            vs_bin_reply_(w, c, 0, 0, o, (u32)vs_dim * 4u); }
+        break;
+    case 9:
+        if (nb != 16) { vs_bin_reply_(w, c, 2, 0, (const char *)0, 0); break; }
+        {   char p[8];
+            vs_put64_(p, (i64)vs_del_(c, vs_le64_(b), vs_le64_(b + 8)));
+            vs_bin_reply_(w, c, 0, 0, p, 8); }
+        break;
     default: vs_bin_reply_(w, c, 3, 0, (const char *)0, 0); break;
     }
     return (i32)(8 + nb);
 }
+
+/* ---- the line protocol: one line in, one line out ----
+ * A request is words separated by spaces or tabs, ending in \n (or \r\n); the reply is one line, "ok ..." or
+ * "err ...", so any language - or nc, socat, a shell - can speak it with a readline:
+ *   ping                      ok pong
+ *   stats                     ok count=N dim=D pending=P built=0|1 snapshot=idle|running last=ok|failed|none
+ *   search K X1 .. XD         ok N ID SCORE ID SCORE ...   (N <= K hits, best first; SCORE = -|q - v|^2)
+ *   add ID X1 .. XD           ok                           (replaces the row with the same id)
+ *   get ID                    ok X1 .. XD                  (the stored unit vector)
+ *   del ID                    ok REMOVED
+ *   del LO HI                 ok REMOVED                   (every id in [LO, HI])
+ *   build | save | snapshot   ok, or err busy (a snapshot already runs)
+ *   help                      ok COMMANDS...
+ *   quit                      ok bye, and the server closes the connection */
+
+static const char *vs_word_(const char *p) { while (*p == ' ' || *p == '\t') ++p; return p; }
+
+/* an integer word; NULL when there is none */
+static const char *vs_wint_(const char *p, i64 *v)
+{
+    char *e;
+    long x;
+    p = vs_word_(p);
+    errno = 0;
+    x = strtol(p, &e, 10);
+    if (e == p || errno || (*e && *e != ' ' && *e != '\t')) return (const char *)0;
+    *v = (i64)x;
+    return e;
+}
+
+/* exactly vs_dim numbers into w->vec, and nothing after them; 0 or -1 */
+static i32 vs_wvec_(VsWorker *w, const char *p)
+{
+    i32 d;
+    for (d = 0; d < vs_dim; ++d) {
+        char *e;
+        p = vs_word_(p);
+        w->vec[d] = (f32)strtod(p, &e);
+        if (e == p || (*e && *e != ' ' && *e != '\t')) return -1;
+        p = e;
+    }
+    return *vs_word_(p) ? -1 : 0;
+}
+
+static void vs_line_reply_(VsWorker *w, VsConn *c, char *o, char *p)
+{
+    *p++ = '\n';
+    vs_send_(w, c, o, (i32)(p - o));
+}
+
+#define VS_LINE_ERR(msg) do { char *p_ = vs_str_(o, "err "); p_ = vs_str_(p_, msg); vs_line_reply_(w, c, o, p_); } while (0)
+
+/* returns bytes consumed, 0 if the line is not complete yet, -1 to close */
+static i32 vs_line_(VsWorker *w, VsConn *c)
+{
+    char *b = c->buf, *nl = (char *)memchr(b, '\n', (size_t)c->len), *o = w->out, *p;
+    const char *a;
+    i32 used, i, got;
+    i64 x, y;
+    if (!nl) {
+        if (c->len >= vs_reqcap) { VS_LINE_ERR("line too long"); vs_log_(c, 1, "line too long, closed"); return -1; }
+        return 0;
+    }
+    used = (i32)(nl - b) + 1;
+    *nl = 0;
+    if (nl > b && nl[-1] == '\r') nl[-1] = 0;
+#define VS_CMD(word) (!strncmp(b, word, sizeof(word) - 1) && (b[sizeof(word) - 1] == 0 || b[sizeof(word) - 1] == ' ' || b[sizeof(word) - 1] == '\t'))
+    a = b;
+    while (*a && *a != ' ' && *a != '\t') ++a;                   /* a: just past the command */
+    if (VS_CMD("search")) {
+        double t0 = vs_now_();
+        if (!(a = vs_wint_(a, &x)) || vs_wvec_(w, a) != 0) VS_LINE_ERR("usage: search K X1 .. XD (D numbers)");
+        else {
+            i32 k = x < 1 ? 1 : (x > VS_MAXK ? VS_MAXK : (i32)x);
+            got = vs_search_(w, w->vec, k);
+            p = vs_str_(o, "ok "); p = vs_i64_(p, got);
+            for (i = 0; i < got; ++i) { *p++ = ' '; p = vs_i64_(p, w->ids[i]); *p++ = ' '; p = vs_f32_(p, w->sc[i]); }
+            vs_line_reply_(w, c, o, p);
+            vs_logsearch_(c, k, got, t0);
+        }
+    } else if (VS_CMD("add")) {
+        if (!(a = vs_wint_(a, &x)) || vs_wvec_(w, a) != 0) VS_LINE_ERR("usage: add ID X1 .. XD (D numbers)");
+        else if (vs_put_(c, w->vec, x) != 0) VS_LINE_ERR("vector has NaN or Inf");
+        else vs_line_reply_(w, c, o, vs_str_(o, "ok"));
+    } else if (VS_CMD("get")) {
+        if (!(a = vs_wint_(a, &x)) || *vs_word_(a)) VS_LINE_ERR("usage: get ID");
+        else if (store_get_vec(vs_store, x, w->vec) != 0) VS_LINE_ERR("no such id");
+        else {
+            p = vs_str_(o, "ok");
+            for (i = 0; i < vs_dim; ++i) { *p++ = ' '; p = vs_f32_(p, w->vec[i]); }
+            vs_line_reply_(w, c, o, p);
+        }
+    } else if (VS_CMD("del") || VS_CMD("delete")) {
+        if (!(a = vs_wint_(a, &x))) VS_LINE_ERR("usage: del ID | del LO HI");
+        else if (!*vs_word_(a)) { p = vs_str_(o, "ok "); p = vs_i64_(p, vs_del_(c, x, x)); vs_line_reply_(w, c, o, p); }
+        else if (!(a = vs_wint_(a, &y)) || *vs_word_(a) || y < x) VS_LINE_ERR("usage: del ID | del LO HI");
+        else { p = vs_str_(o, "ok "); p = vs_i64_(p, vs_del_(c, x, y)); vs_line_reply_(w, c, o, p); }
+    } else if (VS_CMD("stats")) {
+        i64 v[4], us;
+        i32 run, last;
+        vs_stats_(v);
+        store_snapshot_info(vs_store, &run, &last, &us);
+        p = vs_str_(o, "ok count="); p = vs_i64_(p, v[0]); p = vs_str_(p, " dim="); p = vs_i64_(p, v[1]);
+        p = vs_str_(p, " pending="); p = vs_i64_(p, v[2]); p = vs_str_(p, " built="); p = vs_i64_(p, v[3]);
+        p = vs_str_(p, run ? " snapshot=running" : " snapshot=idle");
+        p = vs_str_(p, last == 0 ? " last=ok" : (last == -1 ? " last=failed" : " last=none"));
+        vs_line_reply_(w, c, o, p);
+    } else if (VS_CMD("build")) { vs_build_(c); vs_line_reply_(w, c, o, vs_str_(o, "ok")); }
+    else if (VS_CMD("save")) { if (vs_save_(c) == 0) vs_line_reply_(w, c, o, vs_str_(o, "ok")); else VS_LINE_ERR("save failed"); }
+    else if (VS_CMD("snapshot")) {
+        i32 r = vs_snapshot_(c);
+        if (r == 0) vs_line_reply_(w, c, o, vs_str_(o, "ok started"));
+        else VS_LINE_ERR(r == 1 ? "busy" : "snapshot failed");
+    } else if (VS_CMD("ping")) vs_line_reply_(w, c, o, vs_str_(o, "ok pong"));
+    else if (VS_CMD("help")) vs_line_reply_(w, c, o, vs_str_(o, "ok ping stats search add get del build save snapshot help quit"));
+    else if (VS_CMD("quit")) { vs_line_reply_(w, c, o, vs_str_(o, "ok bye")); c->closing = 1; }
+    else { VS_LINE_ERR("unknown command (help lists them)"); vs_log_(c, 1, "unknown line command"); }
+#undef VS_CMD
+    return used;
+}
+#undef VS_LINE_ERR
 
 /* ---- HTTP/1.1 ---- */
 
@@ -133,16 +346,13 @@ static i32 vs_json_vec_(VsWorker *w, const char *p, i32 n)
 
 static void vs_http_reply_(VsWorker *w, VsConn *c, const char *status, const char *body, i32 blen, i32 keep)
 {
-    char *o = w->out + VS_OUT_CAP - 256, *p = o;   /* headers go in front of the body, built in place */
-    char head[256];
+    char head[256], *p = head;
     i32 hn;
-    p = head;
     p = vs_str_(p, "HTTP/1.1 "); p = vs_str_(p, status);
     p = vs_str_(p, "\r\nContent-Type: application/json\r\nContent-Length: ");
     p = vs_i64_(p, blen);
     p = vs_str_(p, keep ? "\r\n\r\n" : "\r\nConnection: close\r\n\r\n");
     hn = (i32)(p - head);
-    (void)o;
     if (body == w->out + 256) {                  /* body already sits after a 256-byte gap: prepend in place */
         memcpy(w->out + 256 - hn, head, (size_t)hn);
         vs_send_(w, c, w->out + 256 - hn, hn + blen);
@@ -172,11 +382,8 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
     /* headers */
     for (line = b; ; ) {
         const char *nl = (const char *)memchr(line, '\n', (size_t)(b + he - line));
-        i32 ll;
         if (!nl) break;
         line = nl + 1;
-        ll = (i32)((const char *)memchr(line, '\n', (size_t)(b + he - line + 1)) ? 0 : 0);
-        (void)ll;
         if (line >= b + he - 2) break;
         if (b + he - line > 15 && vs_ieq_(line, "content-length:", 15)) {
             const char *v = line + 15;
@@ -193,7 +400,11 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
             if (b + he - v >= 10 && vs_ieq_(v, "keep-alive", 10)) keep = 1;
         }
     }
-    if (clen > vs_reqcap - he) { vs_http_reply_(w, c, "413 Content Too Large", "{\"error\":\"body too large\"}", 26, 0); return -1; }
+    if (clen > vs_reqcap - he) {
+        vs_http_reply_(w, c, "413 Content Too Large", "{\"error\":\"body too large\"}", 26, 0);
+        vs_log_(c, 1, "http body of %d bytes refused", clen);
+        return -1;
+    }
     if (c->len < he + clen) return 0;
     body = b + he;
     o = w->out + 256;                             /* bodies are written here; vs_http_reply_ prepends headers */
@@ -203,17 +414,22 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
     if (VS_IS("GET", "/health")) {
         vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
     } else if (VS_IS("GET", "/stats")) {
-        i64 v[4]; char *p = o;
+        i64 v[4], us; i32 run, last; char *p = o;
         vs_stats_(v);
+        store_snapshot_info(vs_store, &run, &last, &us);
         p = vs_str_(p, "{\"count\":"); p = vs_i64_(p, v[0]); p = vs_str_(p, ",\"dim\":"); p = vs_i64_(p, v[1]);
-        p = vs_str_(p, ",\"pending\":"); p = vs_i64_(p, v[2]); p = vs_str_(p, ",\"built\":"); p = vs_str_(p, v[3] ? "true}" : "false}");
+        p = vs_str_(p, ",\"pending\":"); p = vs_i64_(p, v[2]); p = vs_str_(p, ",\"built\":"); p = vs_str_(p, v[3] ? "true" : "false");
+        p = vs_str_(p, ",\"snapshot\":"); p = vs_str_(p, run ? "\"running\"" : "\"idle\"");
+        p = vs_str_(p, ",\"last_snapshot\":"); p = vs_str_(p, last == 0 ? "\"ok\"" : (last == -1 ? "\"failed\"" : "\"none\""));
+        p = vs_str_(p, ",\"last_snapshot_ms\":"); p = vs_i64_(p, us / 1000); *p++ = '}';
         vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
     } else if (VS_IS("POST", "/search")) {
         char *p = o;
+        double t0 = vs_now_();
         if (raw ? clen != vs_dim * 4 : vs_json_vec_(w, body, clen) != 0) {
             vs_http_reply_(w, c, "400 Bad Request", "{\"error\":\"expected a vector of the store's dimension\"}", 54, keep);
         } else {
-            if (raw) memcpy(w->vec, body, (size_t)vs_dim * 4);
+            if (raw) vs_getf_(w->vec, (const u8 *)body, vs_dim);
             k = (i32)vs_qparam_(t, tn, "k", 10);
             if (k < 1) k = 1;
             if (k > VS_MAXK) k = VS_MAXK;
@@ -224,26 +440,45 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
             for (i = 0; i < got; ++i) { if (i) *p++ = ','; p = vs_f32_(p, w->sc[i]); }
             p = vs_str_(p, "]}");
             vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
+            vs_logsearch_(c, k, got, t0);
         }
     } else if (VS_IS("POST", "/add")) {
         i64 id = vs_qparam_(t, tn, "id", -1);
         if (id < 0 || (raw ? clen != vs_dim * 4 : vs_json_vec_(w, body, clen) != 0))
             vs_http_reply_(w, c, "400 Bad Request", "{\"error\":\"need ?id=N and a vector of the store's dimension\"}", 60, keep);
         else {
-            if (raw) memcpy(w->vec, body, (size_t)vs_dim * 4);
-            if (store_add(vs_store, w->vec, id) == 0) vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
+            if (raw) vs_getf_(w->vec, (const u8 *)body, vs_dim);
+            if (vs_put_(c, w->vec, id) == 0) vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
             else vs_http_reply_(w, c, "400 Bad Request", "{\"error\":\"vector has NaN or Inf\"}", 33, keep);
+        }
+    } else if (VS_IS("GET", "/get")) {
+        char *p = o;
+        if (store_get_vec(vs_store, vs_qparam_(t, tn, "id", -1), w->vec) != 0)
+            vs_http_reply_(w, c, "404 Not Found", "{\"error\":\"no such id\"}", 22, keep);
+        else {
+            p = vs_str_(p, "{\"vector\":[");
+            for (i = 0; i < vs_dim; ++i) { if (i) *p++ = ','; p = vs_f32_(p, w->vec[i]); }
+            p = vs_str_(p, "]}");
+            vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
         }
     } else if (VS_IS("POST", "/delete")) {
         char *p = o;
-        p = vs_str_(p, "{\"removed\":"); p = vs_i64_(p, store_delete(vs_store, vs_qparam_(t, tn, "id", -1))); *p++ = '}';
+        i64 lo = vs_qparam_(t, tn, "lo", -1), hi = vs_qparam_(t, tn, "hi", -1), id = vs_qparam_(t, tn, "id", -1);
+        p = vs_str_(p, "{\"removed\":");
+        p = vs_i64_(p, lo >= 0 && hi >= lo ? vs_del_(c, lo, hi) : vs_del_(c, id, id));
+        *p++ = '}';
         vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
     } else if (VS_IS("POST", "/build")) {
-        store_build(vs_store);
+        vs_build_(c);
         vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
     } else if (VS_IS("POST", "/save")) {
-        if (vs_path && store_save(vs_store, vs_path) == 0) vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
+        if (vs_save_(c) == 0) vs_http_reply_(w, c, "200 OK", "{\"ok\":true}", 11, keep);
         else vs_http_reply_(w, c, "500 Internal Server Error", "{\"error\":\"save failed\"}", 23, keep);
+    } else if (VS_IS("POST", "/snapshot")) {
+        i32 r = vs_snapshot_(c);
+        if (r == 0) vs_http_reply_(w, c, "202 Accepted", "{\"ok\":true,\"snapshot\":\"started\"}", 33, keep);
+        else if (r == 1) vs_http_reply_(w, c, "409 Conflict", "{\"error\":\"busy\"}", 16, keep);
+        else vs_http_reply_(w, c, "500 Internal Server Error", "{\"error\":\"snapshot failed\"}", 27, keep);
     } else {
         vs_http_reply_(w, c, "404 Not Found", "{\"error\":\"not found\"}", 21, keep);
     }
