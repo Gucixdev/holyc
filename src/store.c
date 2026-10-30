@@ -69,7 +69,10 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE     /* pthread_rwlockattr_setkind_np, sync_file_range, RUSAGE_THREAD */
 #endif
-#define ARENA_FLAT_RESERVE_BYTES ((size_t)16 << 30)
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64    /* 64-bit file offsets on 32-bit CPUs too: the journal and the spill file can grow past 2 GB */
+#endif
+#define ARENA_FLAT_RESERVE_BYTES ((size_t)1 << (sizeof(size_t) > 4 ? 34 : 28))  /* 16 GB of address space; 256 MB on 32-bit */
 #define ENGINE_THREADS
 #define ENGINE_SERIALIZE
 #define PRINT_IMPLEMENTATION

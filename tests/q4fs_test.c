@@ -54,7 +54,8 @@ int main(void)
            t_plain, t_fast, t_plain / t_fast);
     printf("  top-%d agreement fast-scan vs plain q4 = %.1f%%\n",
            k, 100.0 * agree / tot);
+    if (!Q4FS_SIMD) printf("  (no AVX2 here: the fast-scan runs its scalar fallback, so the speed is not checked)\n");
     print_flush();
     arena_free(a);
-    return (agree * 100 / tot >= 95 && t_fast < t_plain) ? 0 : 1;
+    return (agree * 100 / tot >= 95 && (!Q4FS_SIMD || t_fast < t_plain)) ? 0 : 1;
 }

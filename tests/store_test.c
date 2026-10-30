@@ -527,6 +527,12 @@ int main(void)
                                                                   * live thread and the adder */
         }
         pthread_join(th, (void **)0);
+        while (looks < 100) {                    /* a slow machine (an emulator) can add every row before 100 lookups */
+            i64 r1[1]; f32 c1[1];
+            i32 row = (i32)(sd_rng_(&s5) % (u32)n4);
+            if (store_search(lv, x4 + (size_t)row * d4, 1, r1, c1) < 1 || r1[0] != 600000 + row) ++miss;
+            ++looks;
+        }
         if (store_snapshot_poll(lv, 1) != 0) ok = 0;
         {   RagStore *ls = store_load(a, "/tmp/store_demo_live_snap.vxi");
             i32 have = ls ? store_count(ls) : 0, fnd = 0, tr = 0;

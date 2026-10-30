@@ -63,7 +63,9 @@ static i64 print_sys_write_(i32 fd, const void *buf, size_t n)
     return (i64)ret;
 }
 #else
-#error "print.h's raw write() syscall is only implemented for x86_64/i386 Linux"
+#include <unistd.h>
+/* other CPUs: the libc wrapper */
+static i64 print_sys_write_(i32 fd, const void *buf, size_t n) { return (i64)write(fd, buf, n); }
 #endif
 
 static char print_buffer_[PRINT_BUF_SIZE];

@@ -117,12 +117,12 @@ static void store_journal_reset_(RagStore *s, const char *path)
 
 /* Replays the journal file jn onto a freshly loaded store when it belongs to the file at path. Returns the length of
  * its good part (a torn last record is not in it), or -1 when it belongs to another file or cannot be read. */
-static long store_journal_play_(RagStore *s, const char *path, const char *jn)
+static i64 store_journal_play_(RagStore *s, const char *path, const char *jn)
 {
     FILE *f = fopen(jn, "rb");
     u32 magic;
     i32 match = 0;
-    long good;
+    i64 good;
     f32 *vec;
     if (!f) return -1;
     if (fread(&magic, 4, 1, f) == 1) {
@@ -137,7 +137,7 @@ static long store_journal_play_(RagStore *s, const char *path, const char *jn)
     }
     if (!match) { fclose(f); return -1; }
     vec = (f32 *)malloc((size_t)s->dim * sizeof(f32));
-    good = ftell(f);
+    good = (i64)ftello(f);
     for (;;) {
         u8 op; i64 id, meta;
         if (fread(&op, 1, 1, f) != 1) break;
@@ -151,7 +151,7 @@ static long store_journal_play_(RagStore *s, const char *path, const char *jn)
             if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1) break;
             if (op == 'M') store_set_meta(s, id, meta); else store_delete_range(s, id, meta);
         } else break;
-        good = ftell(f);
+        good = (i64)ftello(f);
     }
     fclose(f);
     free(vec);
@@ -165,7 +165,7 @@ static void store_journal_replay_(RagStore *s, const char *path)
 {
     char *jn = store_jname_(path, ".j"), *jn2 = store_jname_(path, ".jn");
     const char *use = jn;
-    long good = store_journal_play_(s, path, jn);
+    i64 good = store_journal_play_(s, path, jn);
     if (good < 0 && s->stamp && (good = store_journal_play_(s, path, jn2)) >= 0) {
         if (rename(jn2, jn) == 0) store_fsync_dir_(path);
         else use = jn2;                                          /* append where it is: the next load finds it there too */
@@ -190,7 +190,7 @@ static void store_journal_replay_(RagStore *s, const char *path)
 static int store_pad_(FILE *f)
 {
     static const u8 z[64];
-    long pos = ftell(f);
+    i64 pos = (i64)ftello(f);
     size_t pad;
     if (pos < 0) return -1;
     pad = STORE_AL(pos) - (size_t)pos;
@@ -506,7 +506,7 @@ i64 store_journal_bytes(RagStore *s, const char *path)
 {
     i64 n = -1;
     pthread_rwlock_rdlock(&s->lock);                             /* a save or a snapshot swaps the journal under the write lock */
-    if (s->jf && s->jpath && strcmp(s->jpath, path) == 0) n = (i64)ftell(s->jf);
+    if (s->jf && s->jpath && strcmp(s->jpath, path) == 0) n = (i64)ftello(s->jf);
     pthread_rwlock_unlock(&s->lock);
     return n;
 }
@@ -561,7 +561,7 @@ static void *store_take_(u8 *map, size_t len, FILE *f, size_t off, size_t esz, s
     if (map) return (void *)(map + off);
     p = malloc(esz * (n ? n : 1));
     if (!p) return (void *)0;
-    if (fseek(f, (long)off, SEEK_SET) != 0 || (n && engs_rle_(f, p, esz, n))) { free(p); return (void *)0; }
+    if (fseeko(f, (off_t)off, SEEK_SET) != 0 || (n && engs_rle_(f, p, esz, n))) { free(p); return (void *)0; }
     return p;
 }
 
@@ -585,7 +585,7 @@ static i32 store_col_r_(RagStore *s, SCol *c, u8 *map, size_t len, FILE *f, size
             ++c->nchunk;
         } else {
             if (scol_push_(s, c)) return -1;
-            if (fseek(f, (long)(off + (size_t)i * (size_t)STORE_CROWS * c->esz), SEEK_SET) != 0
+            if (fseeko(f, (off_t)(off + (size_t)i * (size_t)STORE_CROWS * c->esz), SEEK_SET) != 0
                 || engs_rle_(f, c->chunk[i], per, (size_t)n * (c->esz / per))) return -1;
         }
     }
@@ -676,10 +676,10 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     s->live = live;
     s->idmap_ok = live == 0;
     if (map) kind = map[o_kind];
-    else if (fseek(f, (long)o_kind, SEEK_SET) != 0 || fread(&kind, 1, 1, f) != 1) { fclose(f); store_destroy(s); return (RagStore *)0; }
+    else if (fseeko(f, (off_t)o_kind, SEEK_SET) != 0 || fread(&kind, 1, 1, f) != 1) { fclose(f); store_destroy(s); return (RagStore *)0; }
 
     if (kind == 1) {
-        if (fseek(f, (long)(o_kind + 1), SEEK_SET) != 0) { fclose(f); store_destroy(s); return (RagStore *)0; }
+        if (fseeko(f, (off_t)(o_kind + 1), SEEK_SET) != 0) { fclose(f); store_destroy(s); return (RagStore *)0; }
         s->idx = engine_load(&s->idx_arena, f);
         fclose(f);
         if (!s->idx) { store_destroy(s); return (RagStore *)0; }

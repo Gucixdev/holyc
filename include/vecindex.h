@@ -31,8 +31,8 @@ extern "C" {
 #define VI_API
 #endif
 
-#if defined(__INT64_TYPE__)
-typedef __INT64_TYPE__ vi_i64;
+#if defined(__INT64_TYPE__) && defined(__GNUC__)
+__extension__ typedef __INT64_TYPE__ vi_i64;   /* long long on 32-bit targets, fine under -std=c89 -pedantic */
 #elif defined(_MSC_VER)
 typedef __int64 vi_i64;
 #else

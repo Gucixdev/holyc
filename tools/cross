@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# cross - build the core tests for other CPUs and run them under qemu user-mode emulation: aarch64 (NEON, the
+# Raspberry Pi 3/4/5 and ARM servers), armv7 (32-bit ARM, NEON), riscv64, and s390x (big-endian, which checks that
+# every file is written and read little-endian). The binaries are static, so no target sysroot is needed to run them.
+#
+#   tools/cross              every target whose compiler and qemu are installed
+#   tools/cross aarch64 ...  the targets named (aarch64 armv7 riscv64 s390x)
+#   TESTS="q1 store" tools/cross   a subset of the tests (default: all of them below)
+#
+# Needs: TARGET-linux-gnu-gcc and qemu-TARGET-static on PATH (Debian/Ubuntu: gcc-aarch64-linux-gnu,
+# gcc-arm-linux-gnueabihf, gcc-riscv64-linux-gnu, gcc-s390x-linux-gnu, qemu-user-static). A missing target is
+# skipped. Exits non-zero when a test fails on any target that was run. Emulation is 10-50x slower than native:
+# expect minutes for the store test.
+set -uo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+
+declare -A CC=([aarch64]=aarch64-linux-gnu-gcc [armv7]=arm-linux-gnueabihf-gcc [riscv64]=riscv64-linux-gnu-gcc [s390x]=s390x-linux-gnu-gcc)
+declare -A QEMU=([aarch64]=qemu-aarch64-static [armv7]=qemu-arm-static [riscv64]=qemu-riscv64-static [s390x]=qemu-s390x-static)
+declare -A ARCH=([aarch64]="-march=armv8-a" [armv7]="-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard" [riscv64]="" [s390x]="")
+TESTS=${TESTS:-"hdict lex q1 q3 q4fs ivf hnsw engine store api"}
+CFLAGS=(-std=c89 -pedantic -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -O2 -static -Isrc -Iinclude)
+
+targets=("$@")
+(( ${#targets[@]} )) || targets=(aarch64 armv7 riscv64 s390x)
+fail=0
+for t in "${targets[@]}"; do
+    cc=${CC[$t]:-}
+    qemu=${QEMU[$t]:-}
+    if [[ -z $cc ]]; then echo "cross: unknown target '$t'" >&2; exit 2; fi
+    if ! command -v "$cc" >/dev/null || ! command -v "$qemu" >/dev/null; then echo "$t: $cc or $qemu not installed - skipped"; continue; fi
+    out=.build/cross/$t
+    mkdir -p "$out"
+    echo "== $t ($cc, $qemu)"
+    for name in $TESTS; do
+        src=tests/${name}_test.c
+        extra=()
+        [[ $name == engine ]] && extra=(-DENGINE_SERIALIZE)
+        [[ $name == api ]] && extra=(src/vecindex.c)
+        # shellcheck disable=SC2086
+        if ! "$cc" "${CFLAGS[@]}" ${ARCH[$t]} "$src" "${extra[@]}" -lm -lpthread -o "$out/$name" 2> "$out/$name.build.log"; then
+            echo "  FAIL $name: does not build ($(grep -m1 -E 'error|warning' "$out/$name.build.log" | cut -c1-150))"
+            fail=1; continue
+        fi
+        t0=$(date +%s)
+        if (cd "$out" && timeout 3600 "$qemu" "./$name" > "$name.log" 2>&1); then
+            echo "  ok   $name ($(( $(date +%s) - t0 )) s)"
+        else
+            echo "  FAIL $name: $(grep -m1 -E 'FAIL|Assert|assert|error|Segmentation' "$out/$name.log" | cut -c1-150)"
+            fail=1
+        fi
+    done
+done
+exit $fail
