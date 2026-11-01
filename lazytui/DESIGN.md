@@ -168,7 +168,7 @@ time. `lt_panel_ex(..., LT_PANEL_HUD)`: heavy corners, `[ TITLE ]`, status pips.
 
 ## Demo
 
-`examples/demo` (now written as an app spec + handlers: two tabs main / extras, a dmenu-style button bar on top, purple frames like gtop): three pages (F1..F3, tabs are clickable), every widget in its own titled panel. Values never stand still:
+`examples/demo` (now written as an app spec + handlers: two tabs basic (the useful widgets) / extras (the fancy ones), a dmenu-style button bar on top, purple frames like gtop): two pages (F1/F2, tabs are clickable), every widget in its own titled panel. Values never stand still:
 every refresh interval new targets are drawn and springs carry the widgets; `+`/`-` change the interval. Page 3 has tree, list,
 dropdown (it switches the theme), searchbar (filters the list). `demo --snapshot W H PAGE` prints a frame without a tty.
 

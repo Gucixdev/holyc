@@ -64,7 +64,13 @@ typedef struct kind_ops {
 	void (*draw)(lt_app *a, anode *n, lt_canvas *c, const lt_theme *t, lt_rect w, bool focused);   /* w: the widget's own area; set n->inner to what events should see */
 	lt_wres (*event)(lt_app *a, anode *n, const lt_event *ev);
 	void (*report)(lt_app *a, anode *n, lt_wres r);                                                 /* CHANGED / ACTIVATE / ...: turn them into model writes + events */
+	/* containers (kids laid out by the kind itself): draw runs first, then the kids are drawn, then over (rules, labels) */
+	bool container;
+	bool (*build)(lt_app *a, anode *n, lt_layout *lay, lt_node *ln, anode *scroll, char *err, size_t errn);   /* make the layout nodes of the kids; call app_build for each kid */
+	void (*over)(lt_app *a, anode *n, lt_canvas *c, const lt_theme *t, lt_rect view);
 } kind_ops;
+extern const kind_ops kind_table;                          /* widgets/basic/table.c */
+bool app_build(lt_app *a, anode *n, lt_layout *lay, lt_node *ln, anode *scroll, char *err, size_t errn);   /* lay out the subtree under n, whose layout node is ln */
 const kind_ops *app_kind_ops(const char *name);
 
 const char *app_attr(const anode *n, const char *key);

@@ -1,5 +1,5 @@
 /* demo.c - the gallery, written as DATA + EVENTS: the screen is one indented spec (SPEC below), the values live in the app's model, and the
- * program is a set of handlers for named events. Two tabs (main, extras), a dmenu-style button bar on top, every widget in its own titled
+ * program is a set of handlers for named events. Two tabs (basic = the useful widgets, extras = the fancy ones: maps, globes, editors, pickers), a dmenu-style button bar on top, every widget in its own titled
  * panel, scrolling pages, mouse everywhere. `demo --snapshot [W H [tab]]` prints one frame as plain text (no tty needed). */
 #include "lazytui.h"
 #include <math.h>
@@ -13,7 +13,6 @@
 #define GHIST 200
 #define NBLIP 7
 #define NDOCS 320
-enum { DT_TIMER, DT_DATE, DT_TIMEF, DT_DATEC, DT_TIME12, DT_TIMESP, DT_N };   /* which datetime.c control the keyboard reaches, in the combined panel */
 
 typedef struct { const char *name; double cpu, mem, net, hist[HIST]; int nh; } proc;
 
@@ -51,8 +50,6 @@ typedef struct {
 	lt_timepicker *timepick_h12;
 	lt_timepicker *timepick_spin;
 	lt_sequencer *seq;
-	int dt_focus;
-	lt_rect dt_rect[DT_N];
 	double tagw[12];
 	double heat[20 * 7];                       /* a GitHub-contributions-style grid, HCOLS x HROWS */
 	double histsample[300];
@@ -67,10 +64,10 @@ static const char *TAGWORDS[] = {"net", "system", "ui", "shell", "hardware", "lo
 static const char *SPEC =
 	"col\n"
 	"  row size=1\n"
-	"    buttonbar id=tabs group=top items=\"main,extras,new\" active=tab size=26\n"
+	"    buttonbar id=tabs group=top items=\"basic,extras\" active=tab size=18\n"
 	"    buttonbar id=actions group=top items=\"Refresh,Theme,Pause,Quit\" prompt=\"lazytui\" size=fill\n"
 	"  pages bind=tab\n"
-	"    scroll id=page_main\n"
+	"    scroll id=page_basic\n"
 	"      panel title=\"bars\" size=11\n"
 	"        progressbar name=progressbar namew=14 bind=progress size=1\n"
 	"        ringbar name=ringbar namew=14 bind=ringtext size=1\n"
@@ -94,6 +91,28 @@ static const char *SPEC =
 	"          text bind=info\n"
 	"      panel title=\"breadcrumbs\" size=3\n"
 	"        breadcrumbs id=bc bind=bc_node\n"
+	"      row size=14\n"
+	"        panel title=\"line chart\"\n"
+	"          custom type=linechart nofocus=1\n"
+	"        panel title=\"bar chart\"\n"
+	"          custom type=barchart nofocus=1\n"
+	"      row size=14\n"
+	"        panel title=\"histogram\"\n"
+	"          custom type=histogram nofocus=1\n"
+	"        panel title=\"pie chart\"\n"
+	"          custom type=piechart nofocus=1\n"
+	"      panel title=\"gauges\" size=10\n"
+	"        custom type=gauges nofocus=1\n"
+	"      table title=\"date & time (a table: x=3 columns, rows 5,9,3; Tab moves between the cells)\" x=3 rows=\"5,9,3\" size=24\n"
+	"        custom id=dt_clock type=dtcell label=\"clock: digital\" animated=1\n"
+	"        custom id=dt_big type=dtcell label=\"clock: big\" animated=1\n"
+	"        custom id=dt_analog type=dtcell label=\"clock: analog\" animated=1\n"
+	"        custom id=dt_timer type=dtcell label=\"timer\" animated=1\n"
+	"        custom id=dt_date type=dtcell label=\"date picker\" animated=1\n"
+	"        custom id=dt_timef type=dtcell label=\"time picker (24h)\" animated=1\n"
+	"        custom id=dt_datec type=dtcell label=\"date (compact)\" animated=1\n"
+	"        custom id=dt_time12 type=dtcell label=\"time (12h)\" animated=1\n"
+	"        custom id=dt_timesp type=dtcell label=\"time (spinner)\" animated=1\n"
 	"    scroll id=page_extras\n"
 	"      panel title=\"world map (wheel zoom, drag, click a country)\" size=36\n"
 	"        custom id=map type=map\n"
@@ -122,26 +141,16 @@ static const char *SPEC =
 	"          custom type=trichart nofocus=1\n"
 	"        panel title=\"pentachart (webchart, n=5)\"\n"
 	"          custom type=pentachart nofocus=1\n"
-	"    scroll id=page_new\n"
 	"      panel title=\"spinners\" size=7\n"
 	"        custom type=spinners nofocus=1 animated=1\n"
-	"      panel title=\"pie chart\" size=12\n"
-	"        custom type=piechart nofocus=1\n"
-	"      panel title=\"gauges\" size=10\n"
-	"        custom type=gauges nofocus=1\n"
-	"      row size=14\n"
-	"        panel title=\"line chart\"\n"
-	"          custom type=linechart nofocus=1\n"
-	"        panel title=\"bar chart\"\n"
-	"          custom type=barchart nofocus=1\n"
-	"      row size=14\n"
-	"        panel title=\"histogram\"\n"
-	"          custom type=histogram nofocus=1\n"
+	"      row size=11\n"
 	"        panel title=\"heatgrid\"\n"
 	"          custom type=heatgrid nofocus=1\n"
+	"        panel title=\"heatgrid (dithered)\"\n"
+	"          custom type=heatgrid_dither nofocus=1\n"
 	"      panel title=\"tag cloud\" size=6\n"
 	"        custom type=tagcloud nofocus=1\n"
-	"      panel title=\"minimap\" size=8\n"
+	"      panel title=\"minimap (the 320-doc search corpus: a bar per doc as long as its text, the lit band is the viewport)\" size=12\n"
 	"        custom type=minimap nofocus=1 animated=1\n"
 	"      row size=16\n"
 	"        panel title=\"pixel editor\"\n"
@@ -153,11 +162,9 @@ static const char *SPEC =
 	"          custom id=gradpick type=gradpick\n"
 	"        panel title=\"colour picker (feeds the gradient stop above, r resets)\"\n"
 	"          custom id=colorpick type=colorpick\n"
-	"      panel title=\"date & time (every widget from datetime.c, one panel: Tab/S-Tab cycles which control the keyboard reaches)\" size=28\n"
-	"        custom id=dtall type=dtall animated=1\n"
 	"      panel title=\"step sequencer (click a step, or arrows+Enter; r clears it)\" size=7\n"
 	"        custom id=seq type=seq animated=1\n"
-	"  keybar hints=\"wheel:scroll;Tab:mode/focus;S-Tab:focus;f1/f2/f3:tab;+/-:refresh rate;ctrl-t:theme;esc:quit\" size=2\n";
+	"  keybar hints=\"wheel:scroll;Tab:mode/focus;S-Tab:focus;f1/f2:tab;+/-:refresh rate;ctrl-t:theme;esc:quit\" size=2\n";
 
 /* ------------------------------------------------------------------ data */
 static double frand(void) { return (double)rand() / RAND_MAX; }
@@ -496,6 +503,13 @@ static void draw_heatgrid(lt_app *a, const char *id, lt_canvas *c, lt_rect r, co
 	static const char *const dow[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
 	lt_heatgrid(c, r, t, s->heat, HCOLS, HROWS, 0, 8, 2, dow);
 }
+static void draw_heatgrid_dither(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool f, void *ctx)
+{
+	(void)a; (void)id; (void)f;
+	S *s = ctx;
+	static const char *const dow[7] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+	lt_heatgrid_dither(c, r, t, s->heat, HCOLS, HROWS, 0, 8, 2, dow);
+}
 static void draw_tagcloud(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool f, void *ctx)
 { (void)a; (void)id; (void)f; S *s = ctx; lt_tagcloud(c, r, t, TAGWORDS, s->tagw, NTAGWORDS); }
 static void draw_minimap(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool f, void *ctx)
@@ -510,7 +524,7 @@ static void draw_minimap(lt_app *a, const char *id, lt_canvas *c, lt_rect r, con
 	for (int i = 0; i < s->ndocs; i++) { int len = (int)strlen(s->doctext[i]); if (len < lo) lo = len; if (len > hi) hi = len; }
 	for (int i = 0; i < s->ndocs; i++) {
 		int len = (int)strlen(s->doctext[i]);
-		density[i] = hi > lo ? (uint8_t)(60 + (len - lo) * 195 / (hi - lo)) : 128;
+		density[i] = hi > lo ? (uint8_t)(20 + (len - lo) * 235 / (hi - lo)) : 128;
 	}
 	int marks[NDOCS], nm = 0;
 	for (int i = 0; i < s->ndocs; i++) if (strstr(s->doctags[i], "net")) marks[nm++] = i;
@@ -553,67 +567,40 @@ static lt_wres event_colorpick(lt_app *a, const char *id, lt_rect r, const lt_ev
 	if (res == LT_W_CHANGED) lt_gradientpicker_set_color(s->gp, lt_colorpicker_color(s->cpk));            /* the picker feeds whichever gradient stop is selected */
 	return res;
 }
-/* every datetime.c widget, in the one panel the demo gives them: this custom widget lays out clock/timer/date/time itself and runs its
- * own tiny Tab-cycled focus among the interactive pieces (dt_focus), since the app layer only ever focuses this whole node as one unit. */
-static bool pt_in(lt_rect r, int x, int y) { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
 
-static void draw_dtall(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool focused, void *ctx)
+/* the date & time table: one `custom type=dtcell` per cell; the app layer focuses each (Tab), the id says which widget it is */
+static int dt_index(const char *id) { static const char *const ids[] = {"dt_clock", "dt_big", "dt_analog", "dt_timer", "dt_date", "dt_timef", "dt_datec", "dt_time12", "dt_timesp"}; for (int i = 0; i < 9; i++) if (!strcmp(id, ids[i])) return i; return -1; }
+static void draw_dtcell(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool focused, void *ctx)
 {
-	(void)a; (void)id;
+	(void)a;
 	S *s = ctx;
-	lt_rect all = {0, 0, lt_canvas_w(c), lt_canvas_h(c)};
 	time_t nowsecs = time(NULL);
 	struct tm when = *localtime(&nowsecs);
-	int y = r.y;
-
-	int digw = r.w / 6, bigw = r.w * 2 / 6;                    /* the big font needs the most room; give it the least-cramped share */
-	lt_clock_draw(c, (lt_rect){r.x, y, digw, 1}, t, LT_CLOCK_DIGITAL, when, true);
-	lt_clock_draw(c, (lt_rect){r.x + digw, y, bigw, 5}, t, LT_CLOCK_BIG, when, false);
-	lt_clock_draw(c, (lt_rect){r.x + digw + bigw + 1, y, r.w - digw - bigw - 1, 5}, t, LT_CLOCK_ANALOG, when, false);
-	y += 6;
-
-	s->dt_rect[DT_TIMER] = (lt_rect){r.x, y, r.w, 1};
-	lt_timer_draw(s->timer, c, s->dt_rect[DT_TIMER], t, focused && s->dt_focus == DT_TIMER, s->time);
-	y += 2;
-
-	int halfw = r.w / 2;
-	s->dt_rect[DT_DATE] = (lt_rect){r.x, y, halfw - 1, 9};
-	lt_datepicker_draw(s->datepick, c, s->dt_rect[DT_DATE], t, focused && s->dt_focus == DT_DATE);
-	s->dt_rect[DT_TIMEF] = (lt_rect){r.x + halfw, y, r.w - halfw, 1};
-	lt_timepicker_draw(s->timepick, c, s->dt_rect[DT_TIMEF], t, focused && s->dt_focus == DT_TIMEF);
-	y += 10;
-
-	int thirdw = r.w / 3;
-	s->dt_rect[DT_DATEC] = (lt_rect){r.x, y, thirdw - 1, 1};
-	lt_datepicker_draw(s->datepick_compact, c, s->dt_rect[DT_DATEC], t, focused && s->dt_focus == DT_DATEC);
-	s->dt_rect[DT_TIME12] = (lt_rect){r.x + thirdw, y, thirdw - 1, 1};
-	lt_timepicker_draw(s->timepick_h12, c, s->dt_rect[DT_TIME12], t, focused && s->dt_focus == DT_TIME12);
-	s->dt_rect[DT_TIMESP] = (lt_rect){r.x + 2 * thirdw, y, r.w - 2 * thirdw, 3};
-	lt_timepicker_draw(s->timepick_spin, c, s->dt_rect[DT_TIMESP], t, focused && s->dt_focus == DT_TIMESP);
-	y += 4;
-
-	if (focused && y < r.y + r.h) lt_text(c, all, r.x, y, "Tab/S-Tab: cycle which control below responds to the keyboard", t->s[LT_T_DIM], r.w);
-}
-
-static lt_wres event_dtall(lt_app *a, const char *id, lt_rect r, const lt_event *ev, void *ctx)
-{
-	(void)a; (void)id; (void)r;
-	S *s = ctx;
-	int base = ev->key & 0xFFFFFF;
-	if (ev->kind == LT_EV_KEY && !(ev->key & (LT_MOD_CTRL | LT_MOD_ALT))) {
-		if (base == LT_K_TAB) { s->dt_focus = (s->dt_focus + 1) % DT_N; return LT_W_HANDLED; }
-		if (base == LT_K_BTAB) { s->dt_focus = (s->dt_focus + DT_N - 1) % DT_N; return LT_W_HANDLED; }
+	lt_rect one = {r.x, r.y, r.w, 1};
+	switch (dt_index(id)) {
+	case 0: lt_clock_draw(c, one, t, LT_CLOCK_DIGITAL, when, true); break;
+	case 1: lt_clock_draw(c, r, t, LT_CLOCK_BIG, when, false); break;
+	case 2: lt_clock_draw(c, r, t, LT_CLOCK_ANALOG, when, false); break;
+	case 3: lt_timer_draw(s->timer, c, one, t, focused, s->time); break;
+	case 4: lt_datepicker_draw(s->datepick, c, (lt_rect){r.x, r.y, r.w, 9}, t, focused); break;
+	case 5: lt_timepicker_draw(s->timepick, c, one, t, focused); break;
+	case 6: lt_datepicker_draw(s->datepick_compact, c, one, t, focused); break;
+	case 7: lt_timepicker_draw(s->timepick_h12, c, one, t, focused); break;
+	case 8: lt_timepicker_draw(s->timepick_spin, c, (lt_rect){r.x, r.y, r.w, 3}, t, focused); break;
 	}
-	if (ev->kind == LT_EV_MOUSE && base == LT_K_CLICK)
-		for (int i = 0; i < DT_N; i++) if (pt_in(s->dt_rect[i], ev->x, ev->y)) { s->dt_focus = i; break; }
-	lt_rect target = s->dt_rect[s->dt_focus];
-	switch (s->dt_focus) {
-	case DT_TIMER: return lt_timer_event(s->timer, target, ev, s->time);
-	case DT_DATE: return lt_datepicker_event(s->datepick, target, ev);
-	case DT_TIMEF: return lt_timepicker_event(s->timepick, target, ev);
-	case DT_DATEC: return lt_datepicker_event(s->datepick_compact, target, ev);
-	case DT_TIME12: return lt_timepicker_event(s->timepick_h12, target, ev);
-	case DT_TIMESP: return lt_timepicker_event(s->timepick_spin, target, ev);
+}
+static lt_wres event_dtcell(lt_app *a, const char *id, lt_rect r, const lt_event *ev, void *ctx)
+{
+	(void)a;
+	S *s = ctx;
+	lt_rect one = {r.x, r.y, r.w, 1};
+	switch (dt_index(id)) {
+	case 3: return lt_timer_event(s->timer, one, ev, s->time);
+	case 4: return lt_datepicker_event(s->datepick, (lt_rect){r.x, r.y, r.w, 9}, ev);
+	case 5: return lt_timepicker_event(s->timepick, one, ev);
+	case 6: return lt_datepicker_event(s->datepick_compact, one, ev);
+	case 7: return lt_timepicker_event(s->timepick_h12, one, ev);
+	case 8: return lt_timepicker_event(s->timepick_spin, (lt_rect){r.x, r.y, r.w, 3}, ev);
 	}
 	return LT_W_IGNORED;
 }
@@ -664,7 +651,6 @@ static void on_app(lt_app *a, const lt_appevent *ev, void *ctx)
 	else if (!strcmp(k, "slower")) { s->interval = fmin(5.0, s->interval * 1.4); }
 	else if (!strcmp(k, "page0")) lt_app_set(a, "tab", 0);
 	else if (!strcmp(k, "page1")) lt_app_set(a, "tab", 1);
-	else if (!strcmp(k, "page2")) lt_app_set(a, "tab", 2);
 	else if (!strcmp(k, "escape")) { if (*lt_app_focused(a)) lt_app_focus(a, ""); else lt_app_quit(a); }
 	else if (!strcmp(k, "quit")) lt_app_quit(a);
 }
@@ -783,20 +769,21 @@ static void register_all(S *s)
 	lt_app_custom(a, "barchart", draw_barchart, NULL, s);
 	lt_app_custom(a, "histogram", draw_histogram, NULL, s);
 	lt_app_custom(a, "heatgrid", draw_heatgrid, NULL, s);
+	lt_app_custom(a, "heatgrid_dither", draw_heatgrid_dither, NULL, s);
 	lt_app_custom(a, "tagcloud", draw_tagcloud, NULL, s);
 	lt_app_custom(a, "minimap", draw_minimap, NULL, s);
 	lt_app_custom(a, "pixedit", draw_pixedit, event_pixedit, s);
 	lt_app_custom(a, "nodedit", draw_nodedit, event_nodedit, s);
 	lt_app_custom(a, "gradpick", draw_gradpick, event_gradpick, s);
 	lt_app_custom(a, "colorpick", draw_colorpick, event_colorpick, s);
-	lt_app_custom(a, "dtall", draw_dtall, event_dtall, s);
+	lt_app_custom(a, "dtcell", draw_dtcell, event_dtcell, s);
 	lt_app_custom(a, "seq", draw_seq, event_seq, s);
 	lt_app_on(a, "app", "*", on_app, s);
 	lt_app_on(a, "*", "change", on_widget, s);
 	lt_app_on(a, "*", "activate", on_widget, s);
 	lt_app_key(a, "ctrl-t", "theme"); lt_app_key(a, "ctrl-p", "pause"); lt_app_key(a, "ctrl-r", "refresh"); lt_app_key(a, "enter", "refresh");
 	lt_app_key(a, "+", "faster"); lt_app_key(a, "=", "faster"); lt_app_key(a, "-", "slower"); lt_app_key(a, "_", "slower");
-	lt_app_key(a, "f1", "page0"); lt_app_key(a, "f2", "page1"); lt_app_key(a, "f3", "page2"); lt_app_key(a, "alt-1", "page0"); lt_app_key(a, "alt-2", "page1"); lt_app_key(a, "alt-3", "page2");
+	lt_app_key(a, "f1", "page0"); lt_app_key(a, "f2", "page1"); lt_app_key(a, "alt-1", "page0"); lt_app_key(a, "alt-2", "page1");
 	lt_app_key(a, "esc", "escape"); lt_app_key(a, "ctrl-q", "quit");
 }
 

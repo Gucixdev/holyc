@@ -315,6 +315,8 @@ void lt_linechart(lt_canvas *c, lt_rect r, const lt_theme *t, const lt_series *s
 void lt_barchart(lt_canvas *c, lt_rect r, const lt_theme *t, const char *const *labels, const double *values, int n, const lt_chart_opts *o);
 void lt_histogram(lt_canvas *c, lt_rect r, const lt_theme *t, const double *values, int n, int bins, double lo, double hi, const lt_chart_opts *o);   /* lo >= hi: from the data */
 void lt_heatgrid(lt_canvas *c, lt_rect r, const lt_theme *t, const double *v, int cols, int rows, double lo, double hi, int cell_w, const char *const *row_labels);
+/* the same grid with every cell an ordered-dither patch of braille dots (ink density = value); ascii falls back to a ' .:-=+*#%@' ramp */
+void lt_heatgrid_dither(lt_canvas *c, lt_rect r, const lt_theme *t, const double *v, int cols, int rows, double lo, double hi, int cell_w, const char *const *row_labels);
 void lt_tagcloud(lt_canvas *c, lt_rect r, const lt_theme *t, const char *const *words, const double *weights, int n);
 void lt_minimap(lt_canvas *c, lt_rect r, const lt_theme *t, const uint8_t *density, int n, int offset, int page, const int *marks, int nmarks);
 

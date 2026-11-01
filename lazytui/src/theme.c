@@ -282,3 +282,16 @@ lt_theme lt_theme_parse(const char *spec)
 	free(c);
 	return t;
 }
+
+
+/* ================================================================== lt_theme_cat (the categorical palette), a segmented bar (piebar) and a circle/donut of sectors (piechart), both with a legend */
+/* the i-th colour of a categorical palette (slices, series), harmonised with the theme; greys on themes without colour */
+lt_color lt_theme_cat(const lt_theme *t, int i)
+{
+	static const unsigned pal[10] = {0x4cc9f0, 0x81c784, 0xffd54f, 0xff8a65, 0xf06292, 0xba68c8, 0x7986cb, 0x4db6ac, 0xa1887f, 0x90a4ae};
+	i = ((i % 10) + 10) % 10;
+	if (t->ngrad == 0 && (t->s[LT_T_TEXT].fg >> 24) == 2) { int g = 30 + (i * 17) % 170; return LT_RGB(g, g, g); }
+	lt_color c = LT_RGB((pal[i] >> 16) & 255, (pal[i] >> 8) & 255, pal[i] & 255);
+	lt_color acc = t->s[LT_T_ACCENT].fg;
+	return acc != LT_DEFAULT && (acc >> 24) == 2 ? lt_color_mix(c, acc, 0.15) : c;
+}

@@ -89,12 +89,13 @@ static void bc_report(lt_app *a, anode *n, lt_wres r)
 
 /* ================================================================== the table */
 static const kind_ops OPS[] = {
-	{"treeview", true, tv_init, tv_destroy, tv_draw, tv_event, tv_report},
-	{"breadcrumbs", true, bc_init, bc_destroy, bc_draw, bc_event, bc_report},
+	{"treeview", true, tv_init, tv_destroy, tv_draw, tv_event, tv_report, false, NULL, NULL},
+	{"breadcrumbs", true, bc_init, bc_destroy, bc_draw, bc_event, bc_report, false, NULL, NULL},
 };
 
 const kind_ops *app_kind_ops(const char *name)
 {
 	for (size_t i = 0; i < sizeof OPS / sizeof OPS[0]; i++) if (!strcmp(OPS[i].name, name)) return &OPS[i];
+	if (!strcmp(kind_table.name, name)) return &kind_table;
 	return NULL;
 }

@@ -117,6 +117,15 @@ int main(void)
 	lt_minimap(c, (lt_rect){0, 0, 8, 10}, &th, density, 100, 0, 10, marks, 1);
 	CHECK(has_glyph(c, 0, 0), "the minimap draws its density");
 
+	/* dithered heat grid: a full cell is denser than a low one, an empty cell stays blank braille */
+	double dv[3] = {0, 2, 8};
+	lt_canvas_clear(c, th.s[LT_T_TEXT]);
+	lt_heatgrid_dither(c, (lt_rect){0, 0, 12, 1}, &th, dv, 3, 1, 0, 8, 1, NULL);
+	uint32_t full = lt_canvas_char(c, 4, 0), mid = lt_canvas_char(c, 2, 0), none = lt_canvas_char(c, 0, 0);
+	CHECK(full == 0x28FF || full == '@', "the top value is a fully inked cell");
+	CHECK(mid != full && mid != none, "a middle value is a partial dither between empty and full");
+	CHECK(none == 0x2800 || none == ' ', "an empty value inks nothing");
+
 	/* the fuzz: every widget above, many small/odd rectangles, NaN sprinkled in, must never crash */
 	rng_state = 7;
 	for (int it = 0; it < 4000; it++) {

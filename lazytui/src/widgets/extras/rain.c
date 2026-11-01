@@ -1,5 +1,5 @@
-/* fx.c - time driven effects. Both are pure functions of (position, time): no state to keep, so they can be drawn on any
- * frame and tested exactly. The matrix look: a falling column has a bright head, then a trail that fades into the ground. */
+/* rain.c - the matrix look: falling columns with a bright head and a fading trail; a pure function of (position, time).
+ * Needs: lazytui.h (the lib core). One widget, one file: copy it into any project that links the core. */
 #include "lazytui.h"
 #include <math.h>
 #include <string.h>
@@ -52,28 +52,5 @@ void lt_rain(lt_canvas *c, lt_rect r, const lt_theme *t, double time, uint32_t s
 			}
 			lt_put(c, all, r.x + x, r.y + y, glyph(g, uni), st);
 		}
-	}
-}
-
-void lt_scramble(lt_canvas *c, lt_rect r, const lt_theme *t, const char *text, double progress, double time)
-{
-	if (r.w < 1 || r.h < 1 || !text) return;
-	lt_rect all = {0, 0, lt_canvas_w(c), lt_canvas_h(c)};
-	bool uni = lt_canvas_caps(c)->unicode;
-	if (!(progress > 0)) progress = 0;
-	if (progress > 1) progress = 1;
-	int total = 0;
-	for (const char *s = text; *s;) { uint32_t q; s += lt_utf8_decode(s, &q); total++; }
-	int done = (int)floor(progress * total + 1e-9);
-	int i = 0, x = 0;
-	for (const char *s = text; *s && x < r.w; i++) {
-		uint32_t q;
-		s += lt_utf8_decode(s, &q);
-		if (i < done) lt_put(c, all, r.x + x, r.y, q, t->s[LT_T_TITLE]);
-		else if (i == done && progress < 1) {
-			lt_style cur = t->s[LT_T_ACCENT]; cur.attr |= LT_REVERSE;
-			lt_put(c, all, r.x + x, r.y, glyph(hash32((uint32_t)i * 977U + tick(time * 20.0)), uni), cur);
-		} else if (q != ' ') lt_put(c, all, r.x + x, r.y, glyph(hash32((uint32_t)i * 977U + tick(time * 12.0)), uni), t->s[LT_T_DIM]);
-		x++;
 	}
 }

@@ -107,7 +107,7 @@ static void add_kid(anode *p, anode *k)
 
 static const char *KINDS[] = {"row", "col", "stack", "panel", "scroll", "pages", "spacer", "text", "textbar", "progressbar", "ringbar", "zonebar", "pacmanbar",
                               "searchbar", "buttonbar", "dropdown", "list", "tree", "keybar", "rain", "custom", NULL};
-static bool is_container(const char *k) { return !strcmp(k, "row") || !strcmp(k, "col") || !strcmp(k, "stack") || !strcmp(k, "panel") || !strcmp(k, "pages") || !strcmp(k, "scroll"); }
+static bool is_container(const char *k) { return !strcmp(k, "row") || !strcmp(k, "col") || !strcmp(k, "stack") || !strcmp(k, "panel") || !strcmp(k, "pages") || !strcmp(k, "scroll") || (app_kind_ops(k) && app_kind_ops(k)->container); }
 
 static bool parse_line(const char *p, anode *n, char *err, size_t errn, int line)
 {
@@ -189,6 +189,8 @@ static bool build(lt_app *a, anode *n, lt_layout *lay, lt_node *ln, anode *scrol
 		(void)lay; (void)in_scroll_root;
 		return true;
 	}
+	const kind_ops *ko = app_kind_ops(n->kind);          /* n->ops is only set later, by instantiate */
+	if (ko && ko->build) return ko->build(a, n, lay, ln, scroll, err, errn);
 	for (int i = 0; i < n->nkid; i++) {
 		anode *k = n->kid[i];
 		lt_size sz;
@@ -201,6 +203,8 @@ static bool build(lt_app *a, anode *n, lt_layout *lay, lt_node *ln, anode *scrol
 	}
 	return true;
 }
+
+bool app_build(lt_app *a, anode *n, lt_layout *lay, lt_node *ln, anode *scroll, char *err, size_t errn) { return build(a, n, lay, ln, scroll, err, errn, false); }
 
 static void collect(lt_app *a, anode *n)
 {
@@ -468,6 +472,7 @@ static void draw_node(lt_app *a, anode *n, lt_canvas *c, const lt_theme *t, fram
 	if (n->ops) {
 		if (n->ops->draw) n->ops->draw(a, n, c, t, w, focused);
 		if (n->ops->focusable) mark(a, n);
+		if (n->ops->container) { draw_children(a, n, c, t, f); if (n->ops->over) n->ops->over(a, n, c, t, f.view); }
 	} else if (!strcmp(k, "row") || !strcmp(k, "col") || !strcmp(k, "stack")) draw_children(a, n, c, t, f);
 	else if (!strcmp(k, "panel")) {
 		lt_theme tt = *t;

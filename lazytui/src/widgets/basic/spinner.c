@@ -1,10 +1,9 @@
 /* spinner.c - six looks for "something is happening": LINE/DOTS/ARC rotate one glyph, WAVE breathes five bars, BOUNCE runs a ball with a
  * fading trail, PARALLAX slides layers of dots at different speeds (near = big + fast). All keep no state; feed them the time. */
 #include "lazytui.h"
-#include "displayutil.h"
+#include "util.h"
 #include <math.h>
 
-static double fin(double v, double d) { return isfinite(v) ? v : d; }
 
 void lt_spinner(lt_canvas *c, lt_rect r, const lt_theme *t, lt_spin_kind kind, double time, const char *label)
 {
@@ -48,13 +47,12 @@ void lt_spinner(lt_canvas *c, lt_rect r, const lt_theme *t, lt_spin_kind kind, d
 		used = r.w < 5 ? r.w : 5;
 		break;
 	}
-	case LT_SPIN_BOUNCE: {                                            /* a ball ping-ponging along a track, with a fading trail */
+	case LT_SPIN_BOUNCE: {                                            /* a ball ping-ponging with a fading trail (no track drawn under it) */
 		int lw = label && *label ? lt_utf8_width(label) + 1 : 0;
 		int w = r.w - lw;
 		if (w > 12) w = 12;
 		if (w < 4) w = r.w < 4 ? r.w : 4;
 		double span = w - 1, ph = fmod(time * 1.6, 2.0), pos = (ph < 1 ? ph : 2 - ph) * span;
-		for (int i = 0; i < w; i++) lt_put(c, all, r.x + i, r.y, uni ? 0x2500 : '-', dim);
 		for (int k = 3; k >= 0; k--) {                                 /* trail: where the ball was a moment ago */
 			double pt = fmod(time * 1.6 - k * 0.05 + 4.0, 2.0), pp = (pt < 1 ? pt : 2 - pt) * span;
 			int x = (int)floor(pp + 0.5);
