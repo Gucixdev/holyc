@@ -95,7 +95,7 @@ static i32 store_batch_row_(StoreWb *b, u8 op, const f32 *vec, i64 id, i64 meta,
     if (!store_finite_(vec, b->s->dim)) { b->bad = 1; return -1; }
     if (store_batch_room_(b, 17 + vb + extra) != 0) return -1;
     memcpy(b->tmp, vec, vb);
-    store_normalise_(b->tmp, b->s->dim);
+    if (!b->s->metric) store_normalise_(b->tmp, b->s->dim);     /* dot and L2 stores keep the length: commit takes it */
     store_batch_w_(b, &op, 1); store_batch_w_(b, &id, 8); store_batch_w_(b, &meta, 8); store_batch_w_(b, b->tmp, vb);
     ++b->n; ++b->nput;
     return 0;

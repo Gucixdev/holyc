@@ -239,6 +239,8 @@ typedef struct {
     SCol     vec, idc, metac;   /* the rows: unit vectors, caller doc ids, caller i64 tags (0 = none) */
     SCol     vsc;           /* int8 rows only: the f32 scale of each row */
     SCol     rck;           /* a 32-bit check of each row (its vector, id and tag), tested whenever a search uses it */
+    SCol     nrm;           /* dot and L2 stores only: each row's length before it was normalised */
+    i32      metric;        /* 0 cosine, 1 inner product, 2 L2 distance (store_set_metric; saved in the file) */
     i32      vbytes;        /* 4: f32 rows; 1: int8 rows (each row times its scale) */
     i32      codebits;      /* 4, 2 or 1: the scan index's code width (store_set_codes) */
     i32      cascade;       /* 4-bit index with 1-bit codes beside: scan those, re-score a shortlist (store_set_cascade) */
@@ -293,6 +295,7 @@ typedef struct {
 #define STORE_ID(s, r)   (*(i64 *)(void *)SCOL_AT(&(s)->idc, r))
 #define STORE_META(s, r) (*(i64 *)(void *)SCOL_AT(&(s)->metac, r))
 #define STORE_RCK(s, r)  (*(u32 *)(void *)SCOL_AT(&(s)->rck, r))
+#define STORE_NRM(s, r)  (*(f32 *)(void *)SCOL_AT(&(s)->nrm, r))
 #define STORE_DEAD(s, r) ((i32)(((s)->dead[(size_t)(r) >> 6] >> ((u32)(r) & 63u)) & 1u))
 #define STORE_KILL(s, r) ((s)->dead[(size_t)(r) >> 6] |= (u64)1 << ((u32)(r) & 63u))
 #define STORE_TXO(s, r)  (*(u64 *)(void *)SCOL_AT(&(s)->txo, r))     /* text rows only (has_text) */
@@ -497,6 +500,7 @@ static i32 store_reserve_(RagStore *s, i64 need)
     while (s->idc.nchunk < nch) if (scol_push_(s, &s->idc)) return -1;
     while (s->metac.nchunk < nch) if (scol_push_(s, &s->metac)) return -1;
     while (s->rck.nchunk < nch) if (scol_push_(s, &s->rck)) return -1;
+    while (s->metric && s->nrm.nchunk < nch) if (scol_push_(s, &s->nrm)) return -1;
     while (s->vbytes == 1 && s->vsc.nchunk < nch) if (scol_push_(s, &s->vsc)) return -1;
     while (s->has_text && s->txo.nchunk < nch) if (scol_push_(s, &s->txo)) return -1;
     ci = (i32)((i64)s->count >> STORE_CSHIFT);                   /* the chunk the next row lands in */
@@ -504,6 +508,7 @@ static i32 store_reserve_(RagStore *s, i64 need)
         || scol_unshare_(s, &s->idc, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
         || scol_unshare_(s, &s->metac, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
         || scol_unshare_(s, &s->rck, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
+        || (s->metric && scol_unshare_(s, &s->nrm, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT)))
         || (s->vbytes == 1 && scol_unshare_(s, &s->vsc, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT)))
         || (s->has_text && scol_unshare_(s, &s->txo, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT)))) return -1;
     if (words > s->dead_words) {
@@ -592,10 +597,10 @@ static i32 store_tq_pin_(const RagStore *s, const Tq *t, i32 hot, i32 warm)
 /* (un)pin the rows, their int8 scales, ids and tags that live in a file (the loaded .vxi, the spill file) */
 static i32 store_rows_pin_(const RagStore *s, i32 on)
 {
-    const SCol *cols[5];
+    const SCol *cols[6];
     i32 c, i, rc = 0;
-    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac; cols[4] = &s->rck;
-    for (c = 0; c < 5; ++c)
+    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac; cols[4] = &s->rck; cols[5] = &s->nrm;
+    for (c = 0; c < 6; ++c)
         for (i = 0; i < cols[c]->nchunk; ++i) {
             i64 rows = (i64)s->count - ((i64)i << STORE_CSHIFT);
             if (rows > STORE_CROWS) rows = STORE_CROWS;
@@ -783,6 +788,7 @@ RagStore *store_new(Arena *a, i32 dim)
     s->idc.esz = sizeof(i64); s->idc.elem = sizeof(i64);
     s->metac.esz = sizeof(i64); s->metac.elem = sizeof(i64);
     s->rck.esz = sizeof(u32); s->rck.elem = sizeof(u32);
+    s->nrm.esz = sizeof(f32); s->nrm.elem = sizeof(f32);
     s->txo.esz = sizeof(u64); s->txo.elem = sizeof(u64);
     pthread_mutex_init(&s->lex_mu, (const pthread_mutexattr_t *)0);
     h64_init(&s->dup, 8);
@@ -855,7 +861,7 @@ void store_destroy(RagStore *s)
     if (s->jf) fclose(s->jf);
     free(s->jpath); s->jpath = (char *)0;
     arena_free(&s->idx_arena);
-    scol_free_(&s->vec); scol_free_(&s->idc); scol_free_(&s->metac); scol_free_(&s->vsc); scol_free_(&s->txo); scol_free_(&s->rck);
+    scol_free_(&s->vec); scol_free_(&s->idc); scol_free_(&s->metac); scol_free_(&s->vsc); scol_free_(&s->txo); scol_free_(&s->rck); scol_free_(&s->nrm);
     if (s->msum) { store_msum_free_(s->msum); s->msum = (void *)0; }
     if (s->mfd >= 0) { close(s->mfd); s->mfd = -1; }
     store_tx_free_(s);
@@ -874,10 +880,10 @@ void store_mem(RagStore *s, i64 *ram, i64 *file)
 {
     i64 r = 0, f = 0;
     i32 c;
-    SCol *cols[6];
+    SCol *cols[7];
     pthread_rwlock_rdlock(&s->lock);
-    cols[0] = &s->vec; cols[1] = &s->idc; cols[2] = &s->metac; cols[3] = &s->vsc; cols[4] = &s->txo; cols[5] = &s->rck;
-    for (c = 0; c < 6; ++c) {
+    cols[0] = &s->vec; cols[1] = &s->idc; cols[2] = &s->metac; cols[3] = &s->vsc; cols[4] = &s->txo; cols[5] = &s->rck; cols[6] = &s->nrm;
+    for (c = 0; c < 7; ++c) {
         i32 i;
         for (i = 0; i < cols[c]->nchunk; ++i) {
             i64 rows = (i64)s->count - ((i64)i << STORE_CSHIFT), b;
@@ -922,8 +928,8 @@ void store_tiers(RagStore *s, i64 *hot, i64 *cold)
         if (t->nc > 1) h += (i64)t->nc * t->dim * 8 + ((i64)t->nc + 1) * 4;  /* the centroids, and transposed */
     }
     h += (((i64)s->count + 63) >> 6) * 8;                         /* the dead-row bits of the rows there are */
-    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac; cols[4] = &s->txo; cols[5] = &s->rck;
-    for (i = 0; i < 6; ++i) if (cols[i]->nchunk) c += (i64)s->count * (i64)cols[i]->esz;
+    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac; cols[4] = &s->txo; cols[5] = &s->rck; cols[6] = &s->nrm;
+    for (i = 0; i < 7; ++i) if (cols[i]->nchunk) c += (i64)s->count * (i64)cols[i]->esz;
     c += s->tx.used;
     pthread_rwlock_unlock(&s->lock);
     if (hot) *hot = h;
@@ -1145,6 +1151,7 @@ static u32 store_rck_row_(const RagStore *s, i32 r)
     }
     h0 = (h0 ^ (u64)STORE_ID(s, r)) * K;
     h3 = (h3 ^ (u64)STORE_META(s, r)) * K;
+    if (s->metric) { u32 nb; memcpy(&nb, &STORE_NRM(s, r), 4); h1 = (h1 ^ (u64)nb) * K; }
     w = h0 ^ (h1 << 17 | h1 >> 47) ^ (h2 << 31 | h2 >> 33) ^ (h3 << 47 | h3 >> 17) ^ (u64)(u32)d;
     w ^= w >> 33; w *= K; w ^= w >> 29;
     return (u32)(w ^ (w >> 32));
@@ -1165,6 +1172,36 @@ static i32 store_row_bad_(RagStore *s, i32 r)
     if (healed) ++s->rot_healed; else ++s->rot_rows;
 #endif
     return !healed;
+}
+
+/* The score a search ranks by, bigger is better: cosine stores 2 cos - 2 (-|q - v|^2 of the unit vectors), dot
+ * stores the inner product of the vectors as they came, L2 stores minus their squared distance. qn: the unit query,
+ * qlen its length before. */
+static f32 store_score_(const RagStore *s, const f32 *qn, f32 qlen, i32 r)
+{
+    f32 c = store_dot_(s, qn, r), vl;
+    if (!s->metric) return 2.0f * c - 2.0f;
+    vl = STORE_NRM(s, r);
+    if (s->metric == 1) return qlen * vl * c;
+    return -(qlen * qlen + vl * vl - 2.0f * qlen * vl * c);
+}
+
+/* that score as callers see it: the cosine (1 same direction, -1 opposite), the inner product, or the L2 distance */
+static f32 store_score_out_(const RagStore *s, f32 x)
+{
+    if (!s->metric) return 1.0f + 0.5f * x;
+    if (s->metric == 1) return x;
+    return x < 0.0f ? (f32)eng_sqrt_((f64)-x) : 0.0f;
+}
+
+/* the metric of an empty store: 0 cosine, 1 inner product, 2 L2. 0, or -1 when it has rows or m is not one of these */
+i32 store_set_metric(RagStore *s, i32 m)
+{
+    i32 r = 0;
+    pthread_rwlock_wrlock(&s->lock);
+    if (m < 0 || m > 2 || s->count > 0 || s->vec.nchunk > 0) r = -1; else s->metric = m;
+    pthread_rwlock_unlock(&s->lock);
+    return r;
 }
 
 /* store a normalised f32 row into row r (int8: symmetric, scale = max |v| / 127) */
@@ -1223,12 +1260,17 @@ static void store_append_locked_(RagStore *s, const f32 *vec, i64 doc_id, i64 me
 {
     i32 r = s->count;
     f32 *v = s->addbuf;
+    f32 len = 0.0f;
+    i32 d;
     memcpy(v, vec, (size_t)s->dim * sizeof(f32));
+    if (s->metric) len = (f32)eng_sqrt_((f64)vs_dot(v, v, s->dim));   /* dot and L2 rank by the length too */
     store_normalise_(v, s->dim);
     store_put_row_(s, r, v);
     STORE_ID(s, r) = doc_id;
     STORE_META(s, r) = meta;
+    if (s->metric) STORE_NRM(s, r) = len;
     STORE_RCK(s, r) = store_rck_row_(s, r);
+    if (s->metric) for (d = 0; d < s->dim; ++d) v[d] *= len;     /* the journal gets the row as it came */
     if (s->has_text) STORE_TXO(s, r) = 0;
     s->dead[r >> 6] &= ~((u64)1 << (r & 63));
     store_note_row_(s, r);
@@ -1374,6 +1416,7 @@ i32 store_get_vec(RagStore *s, i64 doc_id, f32 *out)
     r = store_live_row_(s, doc_id);
     if (r >= 0 && store_row_bad_(s, r)) r = -1;                  /* damaged: not served */
     if (r >= 0) { const f32 *v = store_row_(s, r, out); if (v != out) memcpy(out, v, (size_t)s->dim * sizeof(f32)); }
+    if (r >= 0 && s->metric) { i32 d; f32 l = STORE_NRM(s, r); for (d = 0; d < s->dim; ++d) out[d] *= l; }   /* as it came */
     pthread_rwlock_unlock(&s->lock);
     return r >= 0 ? 0 : -1;
 }
@@ -1432,6 +1475,7 @@ static i32 store_compact_(RagStore *s)
             STORE_ID(s, w) = STORE_ID(s, i);
             STORE_META(s, w) = STORE_META(s, i);
             STORE_RCK(s, w) = STORE_RCK(s, i);
+            if (s->metric) STORE_NRM(s, w) = STORE_NRM(s, i);
             if (s->has_text) STORE_TXO(s, w) = STORE_TXO(s, i);
         }
         ++w;

@@ -301,6 +301,39 @@ int main(void)
         rmdir(dpath);
     }
 
+    /* metrics: dot and L2 rank by the vectors as they came and score in that metric; a file keeps its metric */
+    {
+        char fn[64], fn2[64], jn[72];
+        float a[DIM], b[DIM], q[DIM];
+        vi_i64 i2[2];
+        float s2[2];
+        sprintf(fn, "/tmp/vecindex_api_dot_%d.vxi", (int)getpid());
+        sprintf(fn2, "/tmp/vecindex_api_l2_%d.vxi", (int)getpid());
+        for (i = 0; i < DIM; ++i) { a[i] = 0.0f; b[i] = 0.0f; q[i] = 0.0f; }
+        a[0] = 1.0f;                                              /* q's own direction, length 1 */
+        b[0] = 3.0f; b[1] = 3.0f;                                 /* 45 degrees away, length 4.24: the larger inner product */
+        q[0] = 1.0f;
+        db = vi_open(fn, DIM, VI_DOT);
+        if (db) { vi_add(db, 1, a); vi_add(db, 2, b); n = vi_search(db, q, 2, i2, s2); } else n = -1;
+        check(n == 2 && i2[0] == 2 && s2[0] > 2.999f && s2[0] < 3.001f && i2[1] == 1 && s2[1] > 0.999f && s2[1] < 1.001f,
+              "VI_DOT: ranked by the inner product (3 before 1), scores the inner product");
+        check(db && vi_get(db, 2, v) == 0 && v[0] > 2.999f && v[0] < 3.001f, "VI_DOT: vi_get returns the vector as it came");
+        if (db) vi_close(db);
+        db = vi_open(fn, 0, 0);
+        check(db && vi_search(db, q, 1, i2, s2) == 1 && i2[0] == 2, "a dot store opened again is still a dot store");
+        if (db) vi_close(db);
+        check(vi_open(fn, 0, VI_L2) == (vi_db *)0 && strstr(vi_error(), "dot store, not L2") != 0, "asking a dot store for L2: NULL, and why");
+        q[0] = 2.5f; q[1] = 2.5f;                                 /* L2: b is 0.71 away, a 2.92 */
+        db = vi_open(fn2, DIM, VI_L2);
+        if (db) { vi_add(db, 1, a); vi_add(db, 2, b); n = vi_search(db, q, 2, i2, s2); } else n = -1;
+        check(n == 2 && i2[0] == 2 && s2[0] > 0.706f && s2[0] < 0.708f && i2[1] == 1 && s2[1] > 2.914f && s2[1] < 2.917f,
+              "VI_L2: nearest first, scores the Euclidean distance");
+        if (db) vi_close(db);
+        remove(fn); remove(fn2);
+        sprintf(jn, "%s.j", fn); remove(jn);
+        sprintf(jn, "%s.j", fn2); remove(jn);
+    }
+
     /* errors say why; a NULL handle is an error, not a crash */
     {
         char fn[64];

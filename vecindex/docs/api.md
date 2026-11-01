@@ -18,6 +18,13 @@ made from any thread on the same handle at once. A call that fails returns -1 (N
 crash. Rows are indexed as they come by a thread of the store's own (`VI_MANUAL` at `vi_open` turns it off, then
 `vi_build` indexes).
 
+A store compares by cosine unless it is made with `VI_DOT` (the inner product of the vectors as they came: scores
+bigger is better) or `VI_L2` (the Euclidean distance: scores are the distance, smaller is better, still best first).
+Such a store keeps each row's length beside its direction (4 bytes a row); the index finds candidates by direction
+and four times as many of them are re-scored exactly in the metric, so with lengths that vary a lot a true neighbour
+far off in direction can be missed - raise the re-scored count when recall matters there. `vi_get` returns a dot or
+L2 store's vectors as they came. A file keeps the metric it was made with; opening it with another flag is an error.
+
 ## Functions
 
 | function | what it does |

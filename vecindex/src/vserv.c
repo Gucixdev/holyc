@@ -18,6 +18,8 @@
  *               that large (ulimit -l, systemd's LimitMEMLOCK=); what it refuses is only read ahead
  *     -C        the cascade (store_set_cascade): 1-bit codes beside the 4-bit ones, scanned first, the 4-bit codes
  *               re-scoring a shortlist - a quarter of the code bytes a query reads; -m 1 then locks just those
+ *     -M METRIC the metric of a new store: cosine (default), dot (inner product of the vectors as they come) or l2
+ *               (Euclidean distance); scores come back in it. A store keeps the metric it was made with
  *     -d DIM    dimension of a new, empty store when STORE.vxi does not exist yet (it is created at once, with its
  *               journal, so every write is journaled from the start)
  *     -x        save the store to STORE.vxi on SIGINT / SIGTERM
@@ -238,7 +240,7 @@ static i32 vs_ntens, vs_ten_cn;                   /* -U: a client certificate's 
 static pthread_mutex_t vs_ten_mu = PTHREAD_MUTEX_INITIALIZER;
 static Arena vs_arena;
 static f32 vs_aggr = 1.0f, vs_recall;             /* applied to every store opened (-g, -r, -L, -m) */
-static i32 vs_live, vs_mem, vs_cascade;
+static i32 vs_live, vs_mem, vs_cascade, vs_metric;   /* vs_metric: of new stores, 0 cosine, 1 dot, 2 L2 */
 static i32 vs_dim, vs_reqcap, vs_reqmax;          /* a request's buffer starts at reqcap, grows to reqmax for texts */
 static VsListen vs_ls[2];
 static i32 vs_nls;
@@ -292,6 +294,7 @@ static VsTen *vs_ten_open_(const char *name, i32 n, const char **err)
     t->s = store_load(&vs_arena, t->path);
     if (!t->s && stat(t->path, &st) != 0) {                      /* none yet: a new, empty store, journaled at once */
         t->s = store_new(&vs_arena, vs_dim);
+        if (t->s) store_set_metric(t->s, vs_metric);
         if (t->s && store_save(t->s, t->path) != 0) { store_destroy(t->s); t->s = (RagStore *)0; }
         created = 1;
     }
@@ -519,11 +522,11 @@ static void vs_flush_(VsWorker *w, VsConn *c)
 
 /* ---- the store operations both protocols share ---- */
 
-/* the k nearest rows; their scores as the cosine (the store's -|q - v|^2 of unit vectors, turned), bigger is better */
+/* the k nearest rows; their scores as the store's metric gives them: the cosine, the inner product, the L2 distance */
 static i32 vs_search_(VsWorker *w, VsConn *c, const f32 *q, i32 k)
 {
     i32 n = store_search(c->t->s, q, k, w->ids, w->sc), i;
-    for (i = 0; i < n; ++i) w->sc[i] = 1.0f + 0.5f * w->sc[i];
+    for (i = 0; i < n; ++i) w->sc[i] = store_score_out_(c->t->s, w->sc[i]);
     return n;
 }
 
@@ -916,6 +919,11 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-x")) save_on_exit = 1;
         else if (!strcmp(argv[i], "-L")) vs_live = 1;
         else if (!strcmp(argv[i], "-C")) vs_cascade = 1;
+        else if (!strcmp(argv[i], "-M") && i + 1 < argc) {
+            const char *m = argv[++i];
+            if (!strcmp(m, "cosine")) vs_metric = 0; else if (!strcmp(m, "dot")) vs_metric = 1; else if (!strcmp(m, "l2")) vs_metric = 2;
+            else { fprintf(stderr, "vserv: -M is cosine, dot or l2, not %s\n", m); return 2; }
+        }
         else if (!strcmp(argv[i], "-U")) vs_ten_cn = 1;
         else if (!strcmp(argv[i], "-r") && i + 1 < argc) vs_recall = (f32)atof(argv[++i]);
         else if (!strcmp(argv[i], "-c") && i + 1 < argc) cert = argv[++i];
@@ -980,6 +988,7 @@ int main(int argc, char **argv)
             }
             if (dim <= 0) { fprintf(stderr, "vserv: cannot load %s (give -d DIM to start a new store)\n", path); return 1; }
             vs_one.s = store_new(&vs_arena, dim);
+            store_set_metric(vs_one.s, vs_metric);
             if (store_save(vs_one.s, path) != 0) { fprintf(stderr, "vserv: cannot create %s: %s\n", path, strerror(errno)); return 1; }
             created = 1;                                         /* the file and its journal exist from the first write on */
         }

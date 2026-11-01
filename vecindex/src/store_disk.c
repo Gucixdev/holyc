@@ -448,7 +448,7 @@ static i32 store_write_file_(RagStore *s, const char *path, const char *tmp, u64
     f = fopen(tmp, "w+b");                                       /* the old file stays intact until the new one is complete */
     if (!f) return -1;
     hdr[0] = (i32)STORE_MAGIC; hdr[1] = STORE_VERSION9; hdr[2] = s->dim; hdr[3] = live;
-    ext[0] = (s->vbytes == 1 ? 1 : 0) | (s->has_text ? 2 : 0); ext[1] = 0;
+    ext[0] = (s->vbytes == 1 ? 1 : 0) | (s->has_text ? 2 : 0); ext[1] = s->metric;   /* v9: 0 cosine, 1 dot, 2 L2 */
     ext[2] = (i32)(u32)(stamp & 0xffffffffu); ext[3] = (i32)(u32)(stamp >> 32);
     bad = STORE_W32(f, hdr, 4) || STORE_W32(f, ext, 4) || store_goal_w_(f, &s->goal)
        || store_pad_(f) || store_col_w_live_(f, &s->vec, s->count, dead)
@@ -456,6 +456,7 @@ static i32 store_write_file_(RagStore *s, const char *path, const char *tmp, u64
        || store_pad_(f) || store_col_w_live_(f, &s->idc, s->count, dead)
        || store_pad_(f) || store_col_w_live_(f, &s->metac, s->count, dead)
        || store_pad_(f) || store_col_w_live_(f, &s->rck, s->count, dead)
+       || (s->metric && (store_pad_(f) || store_col_w_live_(f, &s->nrm, s->count, dead)))
        || (s->has_text && store_text_w_(f, s, s->count, dead))
        || fwrite(&kind, 1, 1, f) != 1
        || (kind == 1 && engine_save(s->idx, f))
@@ -860,7 +861,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     i32 live = hdr[3], dim = hdr[2], ext[4], v7 = hdr[1] == STORE_VERSION7 || hdr[1] == STORE_VERSION8 || hdr[1] == STORE_VERSION9,
         i8rows = hdr[1] == STORE_VERSION_I8, texts = 0, drop_idx = 0;
     struct stat st;
-    size_t len, o_vecs, o_vsc = 0, o_ids, o_meta, o_kind, o_txo = 0, o_heap = 0, o_rck = 0;
+    size_t len, o_vecs, o_vsc = 0, o_ids, o_meta, o_kind, o_txo = 0, o_heap = 0, o_rck = 0, o_nrm = 0;
     u8 *map = (u8 *)0, kind = 0;
     u64 stamp = 0, hlen = 0;
 
@@ -880,6 +881,11 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     o_meta = STORE_AL(o_ids + (size_t)live * 8);
     o_kind = o_meta + (size_t)live * 8;
     if (hdr[1] == STORE_VERSION9) { o_rck = STORE_AL(o_kind); o_kind = o_rck + (size_t)live * 4; }   /* the rows' checks */
+    if (hdr[1] == STORE_VERSION9 && ext[1]) {                    /* a dot or L2 store: the rows' lengths */
+        if (ext[1] < 0 || ext[1] > 2) { fclose(f); store_destroy(s); return (RagStore *)0; }
+        s->metric = ext[1];
+        o_nrm = STORE_AL(o_kind); o_kind = o_nrm + (size_t)live * 4;
+    }
     if (texts) {                                                 /* v8: the heap's length, the offsets, the heap */
         size_t o_len = STORE_AL(o_kind);
         if (o_len + 8 > len || fseeko(f, (off_t)o_len, SEEK_SET) != 0 || STORE_R64(f, (i64 *)(void *)&hlen, 1)) {
@@ -909,7 +915,8 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
             || store_col_r_(s, &s->metac, map, len, f, o_meta, live)
             || (i8rows && store_col_r_(s, &s->vsc, map, len, f, o_vsc, live))
             || (texts && store_col_r_(s, &s->txo, map, len, f, o_txo, live))
-            || (o_rck && store_col_r_(s, &s->rck, map, len, f, o_rck, live))) { fclose(f); store_destroy(s); return (RagStore *)0; }
+            || (o_rck && store_col_r_(s, &s->rck, map, len, f, o_rck, live))
+            || (o_nrm && store_col_r_(s, &s->nrm, map, len, f, o_nrm, live))) { fclose(f); store_destroy(s); return (RagStore *)0; }
         s->dead_words = ((i64)live + 63) >> 6;
         s->dead = (u64 *)calloc((size_t)s->dead_words, sizeof(u64));
         if (map) {                                               /* re-scoring reads rows at random: no read-ahead */

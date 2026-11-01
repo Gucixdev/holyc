@@ -7,8 +7,9 @@
  *   ./run lib                      .build/libvecindex.so and .build/libvecindex.a, then tests/api_test.c against both
  *   cc -Iinclude app.c -L.build -lvecindex -lm -lpthread
  *
- * Vectors are float[dim], any length: they are stored unit-normalised and compared by cosine. A search's scores are
- * the cosine, bigger is better: 1 the same direction, 0 unrelated, -1 the opposite. Ids are yours, any 64-bit value.
+ * Vectors are float[dim], any length: compared by cosine unless the store was made with VI_DOT or VI_L2 (below). A
+ * search's scores are then the cosine, bigger is better: 1 the same direction, 0 unrelated, -1 the opposite. Ids are
+ * yours, any 64-bit value.
  *
  * Errors: a call that fails returns -1 (NULL for the ones that return a handle) and vi_error() says why, in words -
  * "the vector has a NaN or an infinity at index 3", "no row with id 42", "docs.vxi holds vectors of 384 dimensions,
@@ -53,6 +54,13 @@ typedef struct vi_db vi_db;
  * then the new rows are found by an exact scan). VI_LIVE, the default now, is still accepted. */
 #define VI_LIVE   1
 #define VI_MANUAL 2
+/* The metric of a new store (an existing one keeps its own; asking for another is an error). Default: cosine, scores
+ * 1 to -1. VI_DOT: the inner product of the vectors as they came, scores bigger is better. VI_L2: the Euclidean
+ * distance, scores are the distance, smaller is better - still best first. Rows keep their length beside the direction;
+ * the index finds candidates by direction and re-scores four times as many of them exactly in the metric. vi_get
+ * returns a dot or L2 store's vectors as they came, a cosine store's normalised. */
+#define VI_DOT    4
+#define VI_L2     8
 
 /* The library's version, VI_VERSION of the build. */
 VI_API const char *vi_version(void);
@@ -100,7 +108,8 @@ VI_API int vi_delete(vi_db *db, vi_i64 id);
  * returns how many. */
 VI_API int vi_delete_range(vi_db *db, vi_i64 lo, vi_i64 hi);
 
-/* The stored (unit-normalised) vector of id into out[dim]: 0, or -1 when there is no such row. */
+/* The stored vector of id into out[dim] (a cosine store's unit-normalised, a dot or L2 store's as it came): 0, or -1
+ * when there is no such row. */
 VI_API int vi_get(vi_db *db, vi_i64 id, float *out);
 
 /* vi_add with a text kept beside the row (a chunk of a document, a note: any bytes, len of them, at most 16 MB - 1;

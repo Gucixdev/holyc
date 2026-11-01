@@ -90,8 +90,8 @@ static int vi_norow_(vi_db *db, vi_i64 id)
     return vi_fail_(-1, "no row with id ", nb, (const char *)0);
 }
 
-/* scores as callers expect them: the store's -|q - v|^2 of unit vectors as the cosine, 1 same direction, -1 opposite */
-static void vi_cos_(float *sc, int n) { int i; for (i = 0; i < n; ++i) sc[i] = 1.0f + 0.5f * sc[i]; }
+/* scores as callers expect them: the cosine (1 same direction, -1 opposite), the inner product, or the L2 distance */
+static void vi_cos_(const vi_db *db, float *sc, int n) { int i; for (i = 0; i < n; ++i) sc[i] = store_score_out_(db->s, sc[i]); }
 
 static char *vi_strdup_(const char *p)
 {
@@ -136,6 +136,19 @@ VI_API vi_db *vi_open(const char *path, int dim, int flags)
         }
     } else
         db->s = store_new(&db->arena, (i32)dim);
+    {   int want = (flags & VI_DOT) ? 1 : ((flags & VI_L2) ? 2 : 0);   /* the metric: asked for, or the file's */
+        static const char *const mn[3] = { "cosine", "dot", "L2" };
+        if ((flags & VI_DOT) && (flags & VI_L2)) {
+            vi_fail_(0, "VI_DOT and VI_L2 together: a store has one metric", (const char *)0, (const char *)0);
+            store_destroy(db->s); arena_free(&db->arena); free(db->path); free(db); return (vi_db *)0;
+        }
+        if (exists && want && want != db->s->metric) {
+            vi_fail_(0, path, " is a ", mn[db->s->metric]);
+            {   char *e = vi_ebuf_(); if (e && strlen(e) + 40 < VI_EMAX) { strcat(e, " store, not "); strcat(e, mn[want]); } }
+            store_destroy(db->s); arena_free(&db->arena); free(db->path); free(db); return (vi_db *)0;
+        }
+        if (!exists && want) store_set_metric(db->s, want);
+    }
     if (path) {
         db->path = vi_strdup_(path);
         if (!db->path || (!db->s->jf && store_save(db->s, path) != 0)) {   /* a new file exists from the start, */
@@ -449,7 +462,7 @@ VI_API int vi_search(vi_db *db, const float *query, int k, vi_i64 *ids, float *s
     if (vi_search_ok_(db, query, k, ids, scores)) return -1;
     if (!query) return vi_fail_(-1, "the query is NULL", (const char *)0, (const char *)0);
     n = store_search(db->s, query, (i32)k, (i64 *)ids, scores);
-    vi_cos_(scores, n);
+    vi_cos_(db, scores, n);
     return n;
 }
 
@@ -459,7 +472,7 @@ VI_API int vi_search_tagged(vi_db *db, const float *query, int k, vi_i64 all, vi
     if (vi_search_ok_(db, query, k, ids, scores)) return -1;
     if (!query) return vi_fail_(-1, "the query is NULL", (const char *)0, (const char *)0);
     n = store_search_filter(db->s, query, (i32)k, (i64 *)ids, scores, (i64)all, (i64)any);
-    vi_cos_(scores, n);
+    vi_cos_(db, scores, n);
     return n;
 }
 
@@ -475,7 +488,7 @@ VI_API int vi_search_batch(vi_db *db, const float *queries, int nq, int k, vi_i6
         return vi_fail_(-1, "query ", nb, why);
     }
     if (nq > 0) store_search_batch(db->s, queries, (i32)nq, (i32)k, (i64 *)ids, scores, (i32)threads);
-    vi_cos_(scores, nq * k);
+    vi_cos_(db, scores, nq * k);
     return 0;
 }
 

@@ -36,7 +36,7 @@ static void store_willneed_(const RagStore *s, const i32 *rows, i32 m)
 }
 
 /* exact re-score of candidate rows into the (row, score) top-k */
-static void store_rescore_(RagStore *s, const f32 *qn, const i32 *rows, i32 m, i32 k, i64 *out_rows, f32 *out_scores, i32 *have)
+static void store_rescore_(RagStore *s, const f32 *qn, f32 qlen, const i32 *rows, i32 m, i32 k, i64 *out_rows, f32 *out_scores, i32 *have)
 {
     i32 i, pf;
     i64 f0 = 0;
@@ -54,7 +54,7 @@ static void store_rescore_(RagStore *s, const f32 *qn, const i32 *rows, i32 m, i
         if (i + STORE_PF_AHEAD < m && rows[i + STORE_PF_AHEAD] >= 0 && rows[i + STORE_PF_AHEAD] < s->built_upto)
             store_prefetch_row_((const f32 *)(const void *)SCOL_AT(&s->vec, rows[i + STORE_PF_AHEAD]), (i32)(s->vec.esz / 4));
         if (row < 0 || row >= s->built_upto || store_row_bad_(s, row)) continue;   /* a damaged row is never served */
-        eng_topk_(out_rows, out_scores, k, have, (i64)row, 2.0f * store_dot_(s, qn, row) - 2.0f);
+        eng_topk_(out_rows, out_scores, k, have, (i64)row, store_score_(s, qn, qlen, row));
     }
     if (!pf && store_vec_filed_(s)) {
         i64 df = store_majflt_() - f0;
@@ -205,7 +205,7 @@ static f32 store_recall_at_(RagStore *s, const f32 *Q, const i32 *self, i32 nq, 
         i64 got[11];
         f32 sc[11];
         i32 have = 0, kept = 0;
-        store_rescore_(s, Q + (size_t)q * s->dim, rows + (size_t)q * R, cnt[q], 11, got, sc, &have);
+        store_rescore_(s, Q + (size_t)q * s->dim, 1.0f, rows + (size_t)q * R, cnt[q], 11, got, sc, &have);
         for (x = 0; x < have && kept < 10; ++x) {
             if (self && got[x] == self[q]) continue;             /* a row asking for itself finds itself: not a hit */
             ++kept;

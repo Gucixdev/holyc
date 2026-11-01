@@ -34,7 +34,8 @@ quit                          ok bye
 
 The commands: `ping`, `stats`, `search K X1 .. XD`, `add ID X1 .. XD`, `get ID`, `del ID`, `del LO HI` (every id in
 the range), `build`, `save`, `snapshot`, `help`, `quit`. A reply is `ok ...` or `err WHAT`; scores are the cosine
-(1 the same direction, -1 the opposite), with 6 decimals.
+(1 the same direction, -1 the opposite), with 6 decimals - or, for a store made with `-M dot` or `-M l2`, the inner
+product or the Euclidean distance.
 
 Texts (see [api.md](api.md#texts-from-a-small-chunk-to-the-whole-document)): `addt ID X1 .. XD TEXT` adds a row with
 a text, the rest of the line, with `\n` `\r` `\t` `\0` `\\` for the bytes a line cannot carry; `text ID` answers
