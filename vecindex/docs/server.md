@@ -26,15 +26,15 @@ A session over TCP, word for word:
 ```
 add 1 1 0 0 0                 ok
 add 2 0 1 0 0                 ok
-search 2 0.9 0.1 0 0          ok 2 1 -0.012233 2 -1.779137
+search 2 0.9 0.1 0 0          ok 2 1 0.993884 2 0.110432
 stats                         ok count=2 dim=4 pending=2 built=0 snapshot=idle last=none hot=8 cold=72 memory=0 damaged=0 rebuilt=0 rows_bad=0 rows_healed=0 journal=ok
 del 1 2                       ok 2
 quit                          ok bye
 ```
 
 The commands: `ping`, `stats`, `search K X1 .. XD`, `add ID X1 .. XD`, `get ID`, `del ID`, `del LO HI` (every id in
-the range), `build`, `save`, `snapshot`, `help`, `quit`. A reply is `ok ...` or `err WHAT`; scores are `-|q - v|^2`
-of the unit vectors, with 6 decimals.
+the range), `build`, `save`, `snapshot`, `help`, `quit`. A reply is `ok ...` or `err WHAT`; scores are the cosine
+(1 the same direction, -1 the opposite), with 6 decimals.
 
 Texts (see [api.md](api.md#texts-from-a-small-chunk-to-the-whole-document)): `addt ID X1 .. XD TEXT` adds a row with
 a text, the rest of the line, with `\n` `\r` `\t` `\0` `\\` for the bytes a line cannot carry; `text ID` answers

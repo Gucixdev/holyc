@@ -79,8 +79,8 @@ int main(void)
 
 ```sh
 cc -Iinclude demo.c -L.build -lvecindex -lm -lpthread -o demo && LD_LIBRARY_PATH=.build ./demo
-1 -0.012
-2 -1.779
+1 0.994
+2 0.110
 ```
 
 For an LLM, each row can carry its text: `vi_add_text`, then `vi_search_hybrid` (the vector and BM25 over the texts,
@@ -89,7 +89,7 @@ fused by rank) and `vi_range` over a document's ids to hand the model the chunks
 document, Enter again prints the choice. The same from Python (ctypes), Go (cgo) and Rust (`extern "C"`), every
 function, texts, and how durability works: [docs/api.md](docs/api.md). Inside a C program the library can also be
 one more file of the build (`src/vecindex.c`, or `store.c` itself for the internal API). Over a socket, `vserv` serves one store file to anything that can open a
-socket, in one-line commands (`search 10 0.1 0.2 ...` -> `ok 3 42 -0.01 ...`), binary frames or HTTP
+socket, in one-line commands (`search 10 0.1 0.2 ...` -> `ok 3 42 0.99 ...`), binary frames or HTTP
 ([docs/server.md](docs/server.md)).
 
 ## Results

@@ -7,12 +7,16 @@ the exported symbols). Any language with a C foreign-function interface binds it
 own. The examples below were run against the library; each prints
 
 ```
-1 -0.012
-2 -1.779
+1 0.994
+2 0.110
 ```
 
-Scores are `-|q - v|^2` of the unit vectors: 0 is the same direction, -4 the opposite one. Every call may be made
-from any thread on the same handle at once.
+Scores are the cosine, bigger is better: 1 the same direction, 0 unrelated, -1 the opposite. Every call may be
+made from any thread on the same handle at once. A call that fails returns -1 (NULL for `vi_open`, `vi_dir_*` and
+`vi_batch_begin`) and `vi_error()` says why in words, per thread: "the vector has a NaN or an infinity at index 3",
+"no row with id 42", "docs.vxi holds vectors of 384 dimensions, not 768". A NULL handle is such an error, not a
+crash. Rows are indexed as they come by a thread of the store's own (`VI_MANUAL` at `vi_open` turns it off, then
+`vi_build` indexes).
 
 ## Functions
 
@@ -32,6 +36,7 @@ from any thread on the same handle at once.
 | `vi_batch_commit(b, sync)`, `vi_batch_abort(b)` | applies the batch as one change - searches see none of it before and all of it after, and a crash leaves all or none of it (one journal record with a CRC-32C) - and frees it; `sync` 1: on the disk before it returns. The number of changes, -1 refused with nothing applied (a NaN, a bad text, no memory), -2 applied but the fsync failed |
 | `vi_search_hybrid(db, q, text, tlen, k, ids, scores)` | the vector and the words (BM25 over the texts), fused by rank; either side may be left out |
 | `vi_set_tag`, `vi_get_tag` | a 64-bit tag per row |
+| `vi_error()` | why the calling thread's last failed call failed, in words |
 | `vi_search(db, q, k, ids, scores)` | the k nearest rows, best first |
 | `vi_search_tagged(db, q, k, all, any, ids, scores)` | the same over rows whose tag has every bit of `all` and one of `any` |
 | `vi_search_batch(db, qs, nq, k, ids, scores, threads)` | many queries on several threads |
@@ -40,7 +45,7 @@ from any thread on the same handle at once.
 | `vi_set_layout(db, code_bits, row_bytes)` | 4-, 2- or 1-bit scan codes (dim/2, dim/4 or dim/8 bytes a row), f32 or int8 rows, before the first row |
 | `vi_set_aggression(db, a)` | how much of the machine to take, 0..1 (default 1, or `VECINDEX_AGGRESSION`): threads out of the CPUs the process may use (affinity, cgroup quota); background work at nice 10 to 19 |
 | `vi_set_memory(db, tier)` | what stays in RAM whatever the memory pressure (mlock): 0 nothing, the kernel decides (default); 1 what every search scans (codes, slot table, centroids), rows stay on the disk; 2 rows, ids and tags too. -1 when the memlock limit refused part of it |
-| `vi_set_parity(db, data, parity)`, `vi_set_check_reads(db, on)`, `vi_set_verify(level)`, `vi_open_error()`, `vi_integrity(db, ...)`, `vi_scrub(path, repair, &fixed)` | integrity: Reed-Solomon parity of the files written (default 32 + 2), row checks on reads (default on), what an open checks (default every block), why an open failed, what the checks found, a scrub of a file (see Integrity below) |
+| `vi_set_parity(db, data, parity)`, `vi_set_check_reads(db, on)`, `vi_set_verify(level)`, `vi_open_error()`, `vi_integrity(db, &health)`, `vi_scrub(path, repair, &fixed)` | integrity: Reed-Solomon parity of the files written (default 32 + 2), row checks on reads (default on), what an open checks (default every block), why an open failed, what the checks found, a scrub of a file (see Integrity below) |
 | `vi_memory(db, &hot, &cold)` | bytes scanned by every search (hot) and bytes read only for candidates and hits (cold) |
 | `vi_save(db, path)` | rewrites the file and starts a fresh journal |
 | `vi_sync(db)` | flushes the journal to the disk |

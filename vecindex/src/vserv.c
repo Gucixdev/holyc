@@ -357,7 +357,7 @@ static char *vs_i64_(char *p, i64 v)
     return p;
 }
 
-/* a score with 6 decimals; scores are -||q-v||^2 on unit vectors, so within [-4, 0] */
+/* a number with 6 decimals: a cosine, a fused score, a vector's value */
 static char *vs_f32_(char *p, f32 v)
 {
     i64 x;
@@ -519,7 +519,13 @@ static void vs_flush_(VsWorker *w, VsConn *c)
 
 /* ---- the store operations both protocols share ---- */
 
-static i32 vs_search_(VsWorker *w, VsConn *c, const f32 *q, i32 k) { return store_search(c->t->s, q, k, w->ids, w->sc); }
+/* the k nearest rows; their scores as the cosine (the store's -|q - v|^2 of unit vectors, turned), bigger is better */
+static i32 vs_search_(VsWorker *w, VsConn *c, const f32 *q, i32 k)
+{
+    i32 n = store_search(c->t->s, q, k, w->ids, w->sc), i;
+    for (i = 0; i < n; ++i) w->sc[i] = 1.0f + 0.5f * w->sc[i];
+    return n;
+}
 
 static void vs_stats_(VsConn *c, i64 *v)
 {

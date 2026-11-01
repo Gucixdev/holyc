@@ -7,8 +7,12 @@
  *   ./run lib                      .build/libvecindex.so and .build/libvecindex.a, then tests/api_test.c against both
  *   cc -Iinclude app.c -L.build -lvecindex -lm -lpthread
  *
- * Vectors are float[dim], any length: they are stored unit-normalised and compared by inner product (cosine). Scores
- * are -|q - v|^2 of the unit vectors, so 0 is identical and -4 opposite; ids are yours, any 64-bit value.
+ * Vectors are float[dim], any length: they are stored unit-normalised and compared by cosine. A search's scores are
+ * the cosine, bigger is better: 1 the same direction, 0 unrelated, -1 the opposite. Ids are yours, any 64-bit value.
+ *
+ * Errors: a call that fails returns -1 (NULL for the ones that return a handle) and vi_error() says why, in words -
+ * "the vector has a NaN or an infinity at index 3", "no row with id 42", "docs.vxi holds vectors of 384 dimensions,
+ * not 768". A NULL handle is an error like any other, never a crash.
  *
  * Threads: every function may be called from any thread on the same handle at once. Searches run side by side;
  * writes (add, delete, set_tag, build, save) are serialised against them by one readers-writer lock.
@@ -44,15 +48,21 @@ typedef struct vi_db vi_db;
 
 #define VI_VERSION "0.3.0"
 
-/* flags for vi_open */
-#define VI_LIVE 1        /* index added rows as they come and rebuild the index as it ages, from a thread of its own */
+/* flags for vi_open. By default rows are indexed as they come and the index is rebuilt as it ages, by a thread of the
+ * store's own: there is no vi_build to forget. VI_MANUAL turns that off (then vi_build indexes what was added; until
+ * then the new rows are found by an exact scan). VI_LIVE, the default now, is still accepted. */
+#define VI_LIVE   1
+#define VI_MANUAL 2
 
 /* The library's version, VI_VERSION of the build. */
 VI_API const char *vi_version(void);
 
+/* Why the calling thread's last failed call failed, in words ("" before any failure). Each thread has its own. */
+VI_API const char *vi_error(void);
+
 /* Opens the store in the file at path, or creates it with dim dimensions when there is no such file (dim 0: it must
- * exist). A file that exists but cannot be read is an error, never silently replaced. path NULL: a store in memory
- * only. Returns NULL on failure. */
+ * exist; a dim that differs from the file's is an error). A file that exists but cannot be read is an error, never
+ * silently replaced. path NULL: a store in memory only. Returns NULL on failure, and vi_error() says why. */
 VI_API vi_db *vi_open(const char *path, int dim, int flags);
 
 /* Flushes the journal to the disk (as vi_sync), waits for a running snapshot, and frees the handle. It does not
@@ -75,10 +85,12 @@ VI_API int vi_dim(const vi_db *db);
 VI_API vi_i64 vi_count(vi_db *db);
 
 /* Adds a row, or replaces the row with this id (one change: a crash leaves the old row or the new one, never
- * neither). 0 on success, -1 when the vector has a NaN or an infinity (it is refused) or memory ran out. */
+ * neither). 0 on success, -1 when the vector has a NaN or an infinity or is all zeros (it is refused) or memory ran
+ * out. */
 VI_API int vi_add(vi_db *db, vi_i64 id, const float *vec);
 
-/* vi_add for n rows (vecs: n x dim, row after row); returns how many went in. */
+/* vi_add for n rows (vecs: n x dim, row after row); returns how many went in. When some were refused, vi_error()
+ * names the first: "row 17 (id 9042): the vector has a NaN ...". */
 VI_API int vi_add_batch(vi_db *db, int n, const vi_i64 *ids, const float *vecs);
 
 /* Removes the row with this id; returns 1, or 0 when there is none. */
@@ -127,8 +139,8 @@ VI_API void vi_batch_abort(vi_batch *b);
 VI_API int vi_set_tag(vi_db *db, vi_i64 id, vi_i64 tag);
 VI_API int vi_get_tag(vi_db *db, vi_i64 id, vi_i64 *tag);
 
-/* The k nearest rows to query: their ids and scores into ids[k] and scores[k], best first; returns how many. Rows
- * added since the last build are found too (an exact scan of them, or the live index). */
+/* The k nearest rows to query: their ids and cosines into ids[k] and scores[k], best first; returns how many, or -1
+ * (k below 1, a NULL buffer, a NaN in the query: vi_error() says which). Rows just added are found too. */
 VI_API int vi_search(vi_db *db, const float *query, int k, vi_i64 *ids, float *scores);
 
 /* The same, over rows whose tag has every bit of all set and, when any is not 0, at least one bit of any. */
@@ -136,20 +148,21 @@ VI_API int vi_search_tagged(vi_db *db, const float *query, int k, vi_i64 all, vi
 
 /* Hybrid search: the vector query (NULL: words only) and the words of text (tlen bytes, -1: 0-terminated; NULL: the
  * vector only) against the rows' texts (BM25), fused by rank - so an exact name, a number or a rare word is found
- * even where the embedding blurs it. ids and scores (the fused score, bigger = better) get up to k hits; returns how
- * many. The first such search builds the word index over every text; later writes keep it current. */
+ * even where the embedding blurs it. ids and scores get up to k hits; returns how many. The scores rank the hits of
+ * this one search (bigger is better) - a fused rank, not a cosine, so compare them only within one result. The first
+ * such search builds the word index over every text; later writes keep it current. */
 VI_API int vi_search_hybrid(vi_db *db, const float *query, const char *text, int tlen, int k, vi_i64 *ids, float *scores);
 
-/* nq queries (queries: nq x dim) on up to threads threads (0: every core); ids and scores get k slots a query, a
- * missing hit has id -1. */
-VI_API void vi_search_batch(vi_db *db, const float *queries, int nq, int k, vi_i64 *ids, float *scores, int threads);
+/* nq queries (queries: nq x dim) on up to threads threads (0: every core); ids and scores (cosines) get k slots a
+ * query, a missing hit has id -1 and score -1. 0, or -1 when an argument or a query is wrong. */
+VI_API int vi_search_batch(vi_db *db, const float *queries, int nq, int k, vi_i64 *ids, float *scores, int threads);
 
-/* Builds the index over every row (searches before it work, by exact scan). */
+/* Builds the index over every row now (with VI_MANUAL; by default the store's own thread does it as rows come). */
 VI_API void vi_build(vi_db *db);
 
 /* Keeps recall@10 at target (e.g. 0.95): every build measures recall against an exact search and picks the fewest
- * probes that reach it. 0 turns it off. */
-VI_API void vi_set_recall(vi_db *db, float target);
+ * probes that reach it. 0 turns it off. 0, or -1 for a target outside [0, 1). */
+VI_API int vi_set_recall(vi_db *db, float target);
 
 /* Memory per row before the first row is added: code_bits 4 (default), 2 or 1 for what a search scans (dim / 2,
  * dim / 4 or dim / 8 bytes a row; fewer bits scan faster and rank more coarsely, so more candidates are re-scored);
@@ -204,9 +217,9 @@ VI_API int vi_set_parity(vi_db *db, int data, int parity);
 /* What opening checks, for every vi_open after the call (process-wide): 2 every block, the default; 1 only the
  * blocks that hold the header; 0 nothing (to rescue a file whose checksums are gone). $VECINDEX_VERIFY sets the
  * default. Damaged blocks are rebuilt from the parity and written back; when they cannot be, a damaged index is
- * built again from the rows and damaged rows make vi_open fail - vi_open_error says why. */
+ * built again from the rows and damaged rows make vi_open fail - vi_error says why. */
 VI_API void vi_set_verify(int level);
-VI_API const char *vi_open_error(void);
+VI_API const char *vi_open_error(void);   /* vi_error, under its older name */
 
 /* Every row also carries a 32-bit check of its vector, id and tag, tested whenever a search re-scores it or vi_get
  * reads it: a row that fails is first rebuilt from the parity of the file it was read from (the page went bad on the
@@ -214,12 +227,15 @@ VI_API const char *vi_open_error(void);
  * damaged data is never returned. vi_set_check_reads(db, 0) turns the test off. */
 VI_API void vi_set_check_reads(vi_db *db, int on);
 
-/* What opening found: the file's blocks (0 for a file written before checksums), the damaged ones, how many of them
- * were rebuilt; since then, rows that failed their check and stayed out (rows_bad) or were rebuilt on the spot
- * (rows_healed); journal_damaged 1 when a damaged journal record stopped the replay (a copy of the journal is kept
- * as PATH.j.damaged). Any pointer may be NULL. */
-VI_API void vi_integrity(vi_db *db, vi_i64 *blocks, vi_i64 *bad, vi_i64 *fixed, vi_i64 *rows_bad, vi_i64 *rows_healed,
-                         int *journal_damaged);
+/* What the checks found. */
+typedef struct {
+    vi_i64 blocks;              /* the file's blocks, data and parity (0: a file written before checksums) */
+    vi_i64 bad, fixed;          /* blocks the open found damaged, and how many of them it rebuilt */
+    vi_i64 rows_bad;            /* rows that failed their check when read since, and stayed out of every result */
+    vi_i64 rows_healed;         /* rows that failed it and were rebuilt from the parity on the spot */
+    int journal_damaged;        /* 1: a damaged journal record stopped the replay (a copy is kept as PATH.j.damaged) */
+} vi_health;
+VI_API int vi_integrity(vi_db *db, vi_health *h);
 
 /* Checks every block of the store file at path against its digest, the parity blocks and both copies of the table,
  * reading from the disk where the page cache lets it; with repair, rebuilds what it can in place. Safe beside a

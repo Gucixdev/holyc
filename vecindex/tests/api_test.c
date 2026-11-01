@@ -83,7 +83,7 @@ int main(void)
     vec_(7, v);
     check(vi_add(db, 1006, v) == 0 && vi_count(db) == N - N / 10, "vi_add of an existing id replaces its row");
     n = vi_search(db, v, 2, got, sc);
-    check(n == 2 && got[0] + got[1] == 1006 + 1007 && got[0] != got[1] && sc[1] > -1e-4f, "the replaced row has the new vector, once");
+    check(n == 2 && got[0] + got[1] == 1006 + 1007 && got[0] != got[1] && sc[1] > 0.9999f && sc[0] <= 1.0001f, "the replaced row has the new vector, once (cosine 1)");
     vec_(6, v);
     vi_add(db, 1006, v);                                          /* back as it was */
     for (i = 0; i < 20; ++i) { vec_(5000 + i, v); vi_add(db, ((vi_i64)7 << 20) | i, v); }
@@ -301,6 +301,30 @@ int main(void)
         rmdir(dpath);
     }
 
+    /* errors say why; a NULL handle is an error, not a crash */
+    {
+        char fn[64];
+        float bad[DIM], z[DIM];
+        vi_i64 i2[2];
+        float s2[2];
+        sprintf(fn, "/tmp/vecindex_api_err_%d.vxi", (int)getpid());
+        for (i = 0; i < DIM; ++i) { bad[i] = 0.5f; z[i] = 0.0f; }
+        bad[3] = bad[3] / (z[0] * 0.0f + z[1]);                  /* 0.5 / 0: an infinity */
+        db = vi_open(fn, DIM, 0);
+        check(db && vi_add(db, 1, bad) == -1 && strstr(vi_error(), "infinity at index 3") != 0, "vi_add of an infinity: -1, and vi_error names its index");
+        check(db && vi_add(db, 2, z) == -1 && strstr(vi_error(), "all zeros") != 0, "vi_add of a zero vector: -1, all zeros");
+        vec_(1, v);
+        check(db && vi_add(db, 3, v) == 0 && vi_get(db, 99, w) == -1 && strstr(vi_error(), "no row with id 99") != 0, "vi_get of no such id: no row with id 99");
+        check(db && vi_search(db, v, 0, i2, s2) == -1 && strstr(vi_error(), "k must be") != 0, "vi_search with k 0: -1, k must be 1 or more");
+        check(db && vi_search(db, v, 2, i2, s2) == 1 && i2[0] == 3 && s2[0] > 0.9999f, "vi_search: the cosine, 1 for the same direction");
+        check(vi_add((vi_db *)0, 1, v) == -1 && strstr(vi_error(), "db is NULL") != 0, "a NULL handle: -1, db is NULL");
+        if (db) vi_close(db);
+        check(vi_open(fn, DIM + 1, 0) == (vi_db *)0 && strstr(vi_error(), "dimensions, not") != 0, "vi_open with another dim: NULL, and the dims in vi_error");
+        check(vi_open("/nonexistent/x.vxi", 0, 0) == (vi_db *)0 && strstr(vi_error(), "dim 0 cannot create") != 0, "vi_open of no file with dim 0: NULL, and why");
+        remove(fn);
+        sprintf(fn, "/tmp/vecindex_api_err_%d.vxi.j", (int)getpid()); remove(fn);
+    }
+
     /* integrity: digests and parity in every file, checked at open, a scrub of the file */
     {
         char fn[64], jn[72];
@@ -315,7 +339,7 @@ int main(void)
         check(vi_scrub(fn, 0, &fixed) == 0 && fixed == 0, "vi_scrub of an intact file: 0 damaged");
         check(vi_scrub("/nonexistent/vecindex.vxi", 0, (vi_i64 *)0) == -1, "vi_scrub of no file: -1");
         db = vi_open(fn, 0, 0);
-        if (db) vi_integrity(db, &blocks, &bad, &fixed, &rows_bad, &rows_healed, &jd);
+        if (db) { vi_health hh; if (vi_integrity(db, &hh) == 0) { blocks = hh.blocks; bad = hh.bad; fixed = hh.fixed; rows_bad = hh.rows_bad; rows_healed = hh.rows_healed; jd = hh.journal_damaged; } }
         check(db && blocks > 0 && bad == 0 && fixed == 0 && rows_bad == 0 && rows_healed == 0 && jd == 0 && !*vi_open_error(),
               "vi_integrity after an open: blocks checked, none damaged");
         if (db) { vec_(77, v); check(vi_get(db, 1078, v) == 0 && self_found_(db, 0, 3000, 97, 0) >= 20, "rows read with their checks on: found"); }
