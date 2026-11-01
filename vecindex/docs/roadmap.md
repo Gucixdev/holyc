@@ -28,8 +28,9 @@ Open:
 - p99 under a steady write load: a burst faster than one core indexes waits in the exact-scan tail, and a rebuild
   holds two indexes; index bursts on more cores and bound the tail
 - the cascade's benchmark, and its shortlist tuned rather than fixed at 8 x R
-- head-to-head runs against Qdrant's TurboQuant, the RaBitQ engines (Milvus, LanceDB), USearch, LEANN and VecGrid
-  through `py/bench.py` (the jobs are in `bench/run_all.sh`), and a graph index at very high recall
+- head-to-head runs: Qdrant (HNSW) and LEANN are in the harness (`py/bench.py`, `bench/run_all.sh`) but have not
+  finished a run; Qdrant's TurboQuant mode, the RaBitQ engines (Milvus, LanceDB) and USearch are not in it yet;
+  a graph index at very high recall
 - streaming chunking; lazy loading beyond what mmap and tenants opened on first use already do
 - checksums per block, ZFS-style: cryptographic (BLAKE3 or SHA-256) to catch bitrot, checked on read and by a scrub
 - versioning: older snapshots kept and readable
