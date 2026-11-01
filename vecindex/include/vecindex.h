@@ -172,9 +172,9 @@ VI_API void vi_set_aggression(vi_db *db, float a);
 
 /* What stays in RAM whatever the memory pressure (mlock). A search scans the hot part every time - the index's codes
  * (code_bits per dimension), its slot table and centroids - and reads the cold part only for the candidates it
- * re-scores and the hits it returns: the rows (f32 or int8), ids, tags and texts. tier 0 (default): nothing locked,
+ * re-scores and the hits it returns: the rows (f32 or int8), ids, tags, their checks and texts. tier 0 (default): nothing locked,
  * the kernel keeps what searches touch; 1: the hot part locked - low-bit codes in RAM, full-precision rows on the
- * disk; 2: the rows, ids and tags locked too. Returns 0, or -1 when the memlock limit refused part of it (ulimit -l,
+ * disk; 2: the rows, ids, tags and checks locked too. Returns 0, or -1 when the memlock limit refused part of it (ulimit -l,
  * systemd's LimitMEMLOCK=); that part is then only read ahead. hot and cold (either may be NULL) get the bytes of
  * each part. */
 VI_API int vi_set_memory(vi_db *db, int tier);
@@ -208,10 +208,18 @@ VI_API int vi_set_parity(vi_db *db, int data, int parity);
 VI_API void vi_set_verify(int level);
 VI_API const char *vi_open_error(void);
 
+/* Every row also carries a 32-bit check of its vector, id and tag, tested whenever a search re-scores it or vi_get
+ * reads it: a row that fails is first rebuilt from the parity of the file it was read from (the page went bad on the
+ * disk after the open: the blocks are rebuilt and written back, as ZFS heals a read), else left out of every result -
+ * damaged data is never returned. vi_set_check_reads(db, 0) turns the test off. */
+VI_API void vi_set_check_reads(vi_db *db, int on);
+
 /* What opening found: the file's blocks (0 for a file written before checksums), the damaged ones, how many of them
- * were rebuilt; journal_damaged 1 when a damaged journal record stopped the replay (a copy of the journal is kept
+ * were rebuilt; since then, rows that failed their check and stayed out (rows_bad) or were rebuilt on the spot
+ * (rows_healed); journal_damaged 1 when a damaged journal record stopped the replay (a copy of the journal is kept
  * as PATH.j.damaged). Any pointer may be NULL. */
-VI_API void vi_integrity(vi_db *db, vi_i64 *blocks, vi_i64 *bad, vi_i64 *fixed, int *journal_damaged);
+VI_API void vi_integrity(vi_db *db, vi_i64 *blocks, vi_i64 *bad, vi_i64 *fixed, vi_i64 *rows_bad, vi_i64 *rows_healed,
+                         int *journal_damaged);
 
 /* Checks every block of the store file at path against its digest, the parity blocks and both copies of the table,
  * reading from the disk where the page cache lets it; with repair, rebuilds what it can in place. Safe beside a

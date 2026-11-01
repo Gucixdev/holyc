@@ -406,10 +406,11 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
             store_tiers(c->t->s, &hot, &cold);
             p = vs_str_(p, " hot="); p = vs_i64_(p, hot); p = vs_str_(p, " cold="); p = vs_i64_(p, cold);
             p = vs_str_(p, " memory="); p = vs_i64_(p, (i64)c->t->s->mem_tier); }
-        {   i64 nb, bad, fx;
+        {   i64 nb, bad, fx, rb, rh;
             i32 jd;
-            store_integrity(c->t->s, &nb, &bad, &fx, &jd);
+            store_integrity(c->t->s, &nb, &bad, &fx, &rb, &rh, &jd);
             p = vs_str_(p, " damaged="); p = vs_i64_(p, bad); p = vs_str_(p, " rebuilt="); p = vs_i64_(p, fx);
+            p = vs_str_(p, " rows_bad="); p = vs_i64_(p, rb); p = vs_str_(p, " rows_healed="); p = vs_i64_(p, rh);
             p = vs_str_(p, jd ? " journal=damaged" : " journal=ok"); }
         vs_line_reply_(w, c, o, p);
     } else if (VS_CMD("build")) { vs_build_(c); vs_line_reply_(w, c, o, vs_str_(o, "ok")); }

@@ -238,6 +238,7 @@ typedef struct {
 
     SCol     vec, idc, metac;   /* the rows: unit vectors, caller doc ids, caller i64 tags (0 = none) */
     SCol     vsc;           /* int8 rows only: the f32 scale of each row */
+    SCol     rck;           /* a 32-bit check of each row (its vector, id and tag), tested whenever a search uses it */
     i32      vbytes;        /* 4: f32 rows; 1: int8 rows (each row times its scale) */
     i32      codebits;      /* 4, 2 or 1: the scan index's code width (store_set_codes) */
     i32      cascade;       /* 4-bit index with 1-bit codes beside: scan those, re-score a shortlist (store_set_cascade) */
@@ -254,6 +255,11 @@ typedef struct {
     size_t   map_len;
     i64      sum_blocks, sum_bad, sum_fixed;   /* what the load's checks found (store_integrity) */
     i32      sum_k, sum_m;  /* parity of the files this store writes (store_set_parity) */
+    void    *msum;          /* the loaded file's layout and digests (an SSum), to rebuild blocks a row comes from */
+    int      mfd;           /* that file, open for the rebuilds (-1: none) */
+    pthread_mutex_t heal_mu; /* one rebuild at a time */
+    i32      vreads;        /* test every row a search uses against its check (store_set_check_reads; default on) */
+    i64      rot_rows, rot_healed;   /* rows that failed their check and stayed out, and those rebuilt from parity */
     i32      jdamaged;      /* the journal had a damaged record or header: its copy is PATH.j.damaged */
 
     i32      idmap_ok;      /* 0: nsorted / ids_h / dup are rebuilt on the next lookup (after a load or a compaction) */
@@ -286,6 +292,7 @@ typedef struct {
 #define STORE_SC(s, r)   (*(f32 *)(void *)SCOL_AT(&(s)->vsc, r))
 #define STORE_ID(s, r)   (*(i64 *)(void *)SCOL_AT(&(s)->idc, r))
 #define STORE_META(s, r) (*(i64 *)(void *)SCOL_AT(&(s)->metac, r))
+#define STORE_RCK(s, r)  (*(u32 *)(void *)SCOL_AT(&(s)->rck, r))
 #define STORE_DEAD(s, r) ((i32)(((s)->dead[(size_t)(r) >> 6] >> ((u32)(r) & 63u)) & 1u))
 #define STORE_KILL(s, r) ((s)->dead[(size_t)(r) >> 6] |= (u64)1 << ((u32)(r) & 63u))
 #define STORE_TXO(s, r)  (*(u64 *)(void *)SCOL_AT(&(s)->txo, r))     /* text rows only (has_text) */
@@ -489,12 +496,14 @@ static i32 store_reserve_(RagStore *s, i64 need)
     while (s->vec.nchunk < nch) if (scol_push_(s, &s->vec)) return -1;
     while (s->idc.nchunk < nch) if (scol_push_(s, &s->idc)) return -1;
     while (s->metac.nchunk < nch) if (scol_push_(s, &s->metac)) return -1;
+    while (s->rck.nchunk < nch) if (scol_push_(s, &s->rck)) return -1;
     while (s->vbytes == 1 && s->vsc.nchunk < nch) if (scol_push_(s, &s->vsc)) return -1;
     while (s->has_text && s->txo.nchunk < nch) if (scol_push_(s, &s->txo)) return -1;
     ci = (i32)((i64)s->count >> STORE_CSHIFT);                   /* the chunk the next row lands in */
     if (scol_unshare_(s, &s->vec, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
         || scol_unshare_(s, &s->idc, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
         || scol_unshare_(s, &s->metac, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
+        || scol_unshare_(s, &s->rck, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT))
         || (s->vbytes == 1 && scol_unshare_(s, &s->vsc, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT)))
         || (s->has_text && scol_unshare_(s, &s->txo, ci, (i64)s->count - ((i64)ci << STORE_CSHIFT)))) return -1;
     if (words > s->dead_words) {
@@ -583,10 +592,10 @@ static i32 store_tq_pin_(const RagStore *s, const Tq *t, i32 hot, i32 warm)
 /* (un)pin the rows, their int8 scales, ids and tags that live in a file (the loaded .vxi, the spill file) */
 static i32 store_rows_pin_(const RagStore *s, i32 on)
 {
-    const SCol *cols[4];
+    const SCol *cols[5];
     i32 c, i, rc = 0;
-    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac;
-    for (c = 0; c < 4; ++c)
+    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac; cols[4] = &s->rck;
+    for (c = 0; c < 5; ++c)
         for (i = 0; i < cols[c]->nchunk; ++i) {
             i64 rows = (i64)s->count - ((i64)i << STORE_CSHIFT);
             if (rows > STORE_CROWS) rows = STORE_CROWS;
@@ -773,6 +782,7 @@ RagStore *store_new(Arena *a, i32 dim)
     s->addbuf = (f32 *)malloc((size_t)dim * sizeof(f32));
     s->idc.esz = sizeof(i64); s->idc.elem = sizeof(i64);
     s->metac.esz = sizeof(i64); s->metac.elem = sizeof(i64);
+    s->rck.esz = sizeof(u32); s->rck.elem = sizeof(u32);
     s->txo.esz = sizeof(u64); s->txo.elem = sizeof(u64);
     pthread_mutex_init(&s->lex_mu, (const pthread_mutexattr_t *)0);
     h64_init(&s->dup, 8);
@@ -787,6 +797,8 @@ RagStore *store_new(Arena *a, i32 dim)
     pthread_mutex_init(&s->snap_mu, (const pthread_mutexattr_t *)0);
     pthread_mutex_init(&s->jsync_mu, (const pthread_mutexattr_t *)0);
     s->sum_k = STORE_SUM_K; s->sum_m = STORE_SUM_M;
+    s->mfd = -1; s->vreads = 1;
+    pthread_mutex_init(&s->heal_mu, (const pthread_mutexattr_t *)0);
     s->snap_last = 2;
     s->spill_fd = -1;
     s->spill_min = STORE_SPILL_MIN;
@@ -825,6 +837,8 @@ void store_set_spill(RagStore *s, const char *dir, i64 min_bytes)
 static void store_live_stop_(RagStore *s);
 static i32 store_snap_reap_(RagStore *s, i32 block);
 
+static void store_msum_free_(void *p);                          /* store_sum.c */
+
 void store_destroy(RagStore *s)
 {
     store_live_stop_(s);
@@ -841,7 +855,9 @@ void store_destroy(RagStore *s)
     if (s->jf) fclose(s->jf);
     free(s->jpath); s->jpath = (char *)0;
     arena_free(&s->idx_arena);
-    scol_free_(&s->vec); scol_free_(&s->idc); scol_free_(&s->metac); scol_free_(&s->vsc); scol_free_(&s->txo);
+    scol_free_(&s->vec); scol_free_(&s->idc); scol_free_(&s->metac); scol_free_(&s->vsc); scol_free_(&s->txo); scol_free_(&s->rck);
+    if (s->msum) { store_msum_free_(s->msum); s->msum = (void *)0; }
+    if (s->mfd >= 0) { close(s->mfd); s->mfd = -1; }
     store_tx_free_(s);
     if (s->lex) { lex_free(s->lex); free(s->lex); s->lex = (Lex *)0; }
     pthread_mutex_destroy(&s->lex_mu);
@@ -858,10 +874,10 @@ void store_mem(RagStore *s, i64 *ram, i64 *file)
 {
     i64 r = 0, f = 0;
     i32 c;
-    SCol *cols[5];
+    SCol *cols[6];
     pthread_rwlock_rdlock(&s->lock);
-    cols[0] = &s->vec; cols[1] = &s->idc; cols[2] = &s->metac; cols[3] = &s->vsc; cols[4] = &s->txo;
-    for (c = 0; c < 5; ++c) {
+    cols[0] = &s->vec; cols[1] = &s->idc; cols[2] = &s->metac; cols[3] = &s->vsc; cols[4] = &s->txo; cols[5] = &s->rck;
+    for (c = 0; c < 6; ++c) {
         i32 i;
         for (i = 0; i < cols[c]->nchunk; ++i) {
             i64 rows = (i64)s->count - ((i64)i << STORE_CSHIFT), b;
@@ -894,7 +910,7 @@ void store_mem(RagStore *s, i64 *ram, i64 *file)
 void store_tiers(RagStore *s, i64 *hot, i64 *cold)
 {
     i64 h = 0, c = 0;
-    const SCol *cols[5];
+    const SCol *cols[6];
     const Tq *t;
     i32 i;
     pthread_rwlock_rdlock(&s->lock);
@@ -906,8 +922,8 @@ void store_tiers(RagStore *s, i64 *hot, i64 *cold)
         if (t->nc > 1) h += (i64)t->nc * t->dim * 8 + ((i64)t->nc + 1) * 4;  /* the centroids, and transposed */
     }
     h += (((i64)s->count + 63) >> 6) * 8;                         /* the dead-row bits of the rows there are */
-    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac; cols[4] = &s->txo;
-    for (i = 0; i < 5; ++i) if (cols[i]->nchunk) c += (i64)s->count * (i64)cols[i]->esz;
+    cols[0] = &s->vec; cols[1] = &s->vsc; cols[2] = &s->idc; cols[3] = &s->metac; cols[4] = &s->txo; cols[5] = &s->rck;
+    for (i = 0; i < 6; ++i) if (cols[i]->nchunk) c += (i64)s->count * (i64)cols[i]->esz;
     c += s->tx.used;
     pthread_rwlock_unlock(&s->lock);
     if (hot) *hot = h;
@@ -1099,6 +1115,58 @@ static f32 store_dot_(const RagStore *s, const f32 *q, i32 r)
     return vs_dot_i8(q, STORE_I8(s, r), s->dim) * STORE_SC(s, r);
 }
 
+#define STORE_U64(hi, lo) (((u64)(hi) << 32) | (u64)(lo))
+/* The check of row r: its vector (the f32 values, or the int8 bytes and the scale), id and tag mixed in four lanes of
+ * multiply-xor, folded to 32 bits. Built from values, not memory bytes: the same on any byte order. */
+static u32 store_rck_row_(const RagStore *s, i32 r)
+{
+    const u64 K = STORE_U64(0xff51afd7u, 0xed558ccdu);
+    u64 h0 = STORE_U64(0x9e3779b9u, 0x7f4a7c15u), h1 = h0 ^ K, h2 = h0 + K, h3 = ~h0, w;
+    i32 i, d = s->dim;
+    if (s->vbytes != 1) {
+        const f32 *v = STORE_VEC(s, r);
+        u32 a[8];
+        for (i = 0; i + 8 <= d; i += 8) {
+            memcpy(a, v + i, sizeof(a));
+            h0 = (h0 ^ ((u64)a[0] | (u64)a[1] << 32)) * K; h1 = (h1 ^ ((u64)a[2] | (u64)a[3] << 32)) * K;
+            h2 = (h2 ^ ((u64)a[4] | (u64)a[5] << 32)) * K; h3 = (h3 ^ ((u64)a[6] | (u64)a[7] << 32)) * K;
+        }
+        for (; i < d; ++i) { memcpy(a, v + i, 4); h0 = (h0 ^ (u64)a[0]) * K; }
+    } else {
+        const u8 *x = (const u8 *)STORE_I8(s, r);
+        u32 sc;
+        for (i = 0; i < d; i += 8) {
+            i32 j;
+            for (w = 0, j = 0; j < 8 && i + j < d; ++j) w |= (u64)x[i + j] << (8 * j);
+            h1 = (h1 ^ w) * K;
+        }
+        memcpy(&sc, &STORE_SC(s, r), 4);
+        h2 = (h2 ^ (u64)sc) * K;
+    }
+    h0 = (h0 ^ (u64)STORE_ID(s, r)) * K;
+    h3 = (h3 ^ (u64)STORE_META(s, r)) * K;
+    w = h0 ^ (h1 << 17 | h1 >> 47) ^ (h2 << 31 | h2 >> 33) ^ (h3 << 47 | h3 >> 17) ^ (u64)(u32)d;
+    w ^= w >> 33; w *= K; w ^= w >> 29;
+    return (u32)(w ^ (w >> 32));
+}
+
+static i32 store_row_heal_(RagStore *s, i32 r);                 /* store_sum.c */
+
+/* 1 when row r fails its check - after rebuilding the file blocks it was read from, when it was - and must not be
+ * used: a search leaves it out, a lookup does not find it. Counted either way. */
+static i32 store_row_bad_(RagStore *s, i32 r)
+{
+    i32 healed;
+    if (!s->vreads || STORE_RCK(s, r) == store_rck_row_(s, r)) return 0;
+    healed = store_row_heal_(s, r);
+#if defined(__GNUC__)
+    __atomic_add_fetch(healed ? &s->rot_healed : &s->rot_rows, 1, __ATOMIC_RELAXED);
+#else
+    if (healed) ++s->rot_healed; else ++s->rot_rows;
+#endif
+    return !healed;
+}
+
 /* store a normalised f32 row into row r (int8: symmetric, scale = max |v| / 127) */
 static void store_put_row_(RagStore *s, i32 r, const f32 *v)
 {
@@ -1160,6 +1228,7 @@ static void store_append_locked_(RagStore *s, const f32 *vec, i64 doc_id, i64 me
     store_put_row_(s, r, v);
     STORE_ID(s, r) = doc_id;
     STORE_META(s, r) = meta;
+    STORE_RCK(s, r) = store_rck_row_(s, r);
     if (s->has_text) STORE_TXO(s, r) = 0;
     s->dead[r >> 6] &= ~((u64)1 << (r & 63));
     store_note_row_(s, r);
@@ -1303,6 +1372,7 @@ i32 store_get_vec(RagStore *s, i64 doc_id, f32 *out)
     store_need_idmap_(s);
     pthread_rwlock_rdlock(&s->lock);
     r = store_live_row_(s, doc_id);
+    if (r >= 0 && store_row_bad_(s, r)) r = -1;                  /* damaged: not served */
     if (r >= 0) { const f32 *v = store_row_(s, r, out); if (v != out) memcpy(out, v, (size_t)s->dim * sizeof(f32)); }
     pthread_rwlock_unlock(&s->lock);
     return r >= 0 ? 0 : -1;
@@ -1313,7 +1383,8 @@ i32 store_set_meta(RagStore *s, i64 doc_id, i64 meta)
     pthread_rwlock_wrlock(&s->lock);
     store_idmap_locked_(s);
     r = store_live_row_(s, doc_id);
-    if (r >= 0) STORE_META(s, r) = meta;
+    if (r >= 0 && !store_row_bad_(s, r)) { STORE_META(s, r) = meta; STORE_RCK(s, r) = store_rck_row_(s, r); }
+    else r = -1;
     if (r >= 0) store_jrec_(s, 'M', doc_id, meta, (const f32 *)0);
     pthread_rwlock_unlock(&s->lock);
     return r >= 0 ? 0 : -1;
@@ -1324,6 +1395,7 @@ i32 store_get_meta(RagStore *s, i64 doc_id, i64 *meta)
     store_need_idmap_(s);
     pthread_rwlock_rdlock(&s->lock);
     r = store_live_row_(s, doc_id);
+    if (r >= 0 && store_row_bad_(s, r)) r = -1;                  /* damaged: not served */
     if (r >= 0) *meta = STORE_META(s, r);
     pthread_rwlock_unlock(&s->lock);
     return r >= 0 ? 0 : -1;
@@ -1359,6 +1431,7 @@ static i32 store_compact_(RagStore *s)
             if (s->vbytes == 1) STORE_SC(s, w) = STORE_SC(s, i);
             STORE_ID(s, w) = STORE_ID(s, i);
             STORE_META(s, w) = STORE_META(s, i);
+            STORE_RCK(s, w) = STORE_RCK(s, i);
             if (s->has_text) STORE_TXO(s, w) = STORE_TXO(s, i);
         }
         ++w;

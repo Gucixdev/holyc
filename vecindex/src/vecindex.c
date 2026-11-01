@@ -144,14 +144,18 @@ VI_API int vi_set_memory(vi_db *db, int tier) { return store_set_memory(db->s, (
 VI_API int vi_set_parity(vi_db *db, int data, int parity) { return store_set_parity(db->s, (i32)data, (i32)parity); }
 VI_API void vi_set_verify(int level) { store_set_verify((i32)level); }
 VI_API const char *vi_open_error(void) { return store_load_error(); }
-VI_API void vi_integrity(vi_db *db, vi_i64 *blocks, vi_i64 *bad, vi_i64 *fixed, int *journal_damaged)
+VI_API void vi_set_check_reads(vi_db *db, int on) { store_set_check_reads(db->s, (i32)on); }
+VI_API void vi_integrity(vi_db *db, vi_i64 *blocks, vi_i64 *bad, vi_i64 *fixed, vi_i64 *rows_bad, vi_i64 *rows_healed,
+                         int *journal_damaged)
 {
-    i64 b, d, f;
+    i64 b, d, f, rb, rh;
     i32 j;
-    store_integrity(db->s, &b, &d, &f, &j);
+    store_integrity(db->s, &b, &d, &f, &rb, &rh, &j);
     if (blocks) *blocks = (vi_i64)b;
     if (bad) *bad = (vi_i64)d;
     if (fixed) *fixed = (vi_i64)f;
+    if (rows_bad) *rows_bad = (vi_i64)rb;
+    if (rows_healed) *rows_healed = (vi_i64)rh;
     if (journal_damaged) *journal_damaged = (int)j;
 }
 VI_API vi_i64 vi_scrub(const char *path, int repair, vi_i64 *fixed)

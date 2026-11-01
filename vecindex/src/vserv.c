@@ -306,7 +306,7 @@ static VsTen *vs_ten_open_(const char *name, i32 n, const char **err)
     if (vs_ten_setup_(t) != 0) vs_log_((const VsConn *)0, 1, "tenant name=%s: the memlock limit refused part of -m %d", t->name, (int)vs_mem);
     {   i64 nb, bad, fx;                                         /* what the load's checks found, when anything */
         i32 jd;
-        store_integrity(t->s, &nb, &bad, &fx, &jd);
+        store_integrity(t->s, &nb, &bad, &fx, (i64 *)0, (i64 *)0, &jd);
         if (bad || jd) vs_log_((const VsConn *)0, bad > fx, "check file=%s blocks=%.0f damaged=%.0f rebuilt=%.0f journal=%s", t->path,
                                (double)nb, (double)bad, (double)fx, jd ? "damaged (copy kept as .j.damaged)" : "ok"); }
     t->next = vs_tens;
@@ -981,7 +981,7 @@ int main(int argc, char **argv)
         memrc = vs_ten_setup_(&vs_one);
         {   i64 nb, bad, fx;
             i32 jd;
-            store_integrity(vs_one.s, &nb, &bad, &fx, &jd);
+            store_integrity(vs_one.s, &nb, &bad, &fx, (i64 *)0, (i64 *)0, &jd);
             if (bad || jd) fprintf(stderr, "vserv: %s: %.0f of %.0f blocks were damaged, %.0f rebuilt%s\n", path, (double)bad, (double)nb,
                                    (double)fx, jd ? "; the journal had a damaged record (its copy: .j.damaged)" : ""); }
         store_tiers(vs_one.s, &hot, &cold);

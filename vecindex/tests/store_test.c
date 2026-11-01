@@ -235,8 +235,8 @@ static i32 sd_tiers_(Arena *a)
     for (i = 0; i < SDM_N; ++i) store_add(s, x + (size_t)i * SDM_DIM, 7000 + i);
     store_build(s);
     store_tiers(s, &hot, &cold);
-    /* cold: every row's f32 vector, id and tag, exactly; hot: the 4-bit codes at least (dim / 2 bytes a row) */
-    if (!s->tq || cold != (i64)SDM_N * (SDM_DIM * 4 + 8 + 8) || hot < (i64)SDM_N * (SDM_DIM / 2) || hot >= cold) ok = 0;
+    /* cold: every row's f32 vector, id, tag and check, exactly; hot: the 4-bit codes at least (dim / 2 bytes a row) */
+    if (!s->tq || cold != (i64)SDM_N * (SDM_DIM * 4 + 8 + 8 + 4) || hot < (i64)SDM_N * (SDM_DIM / 2) || hot >= cold) ok = 0;
     print_cstr("  tiers: hot "); print_i64(hot); print_cstr(" B, cold "); print_i64(cold); print_cstr(" B for ");
     print_i64(SDM_N); print_cstr(" rows of "); print_i64(SDM_DIM); print_cstr(" dims\n");
     if (!ok) print_cstr("  tiers: sizes FAILED\n");
@@ -602,7 +602,7 @@ static i32 sd_sums_(Arena *a)
     size_t clen;
     RagStore *s, *l;
     SSum z;
-    i64 nb, bad, fx, r1, r2, f1;
+    i64 nb, bad, fx, r1, r2, f1, rb = 0, rh = 0;
     i32 i, e, ok = 1, jdm;
     u32 st = 4242u;
     struct stat sst;
@@ -632,7 +632,7 @@ static i32 sd_sums_(Arena *a)
     l = store_load(a, path);
     if (!l) ok = 0;
     else {
-        store_integrity(l, &nb, &bad, &fx, &jdm);
+        store_integrity(l, &nb, &bad, &fx, &rb, &rh, &jdm);
         if (nb != (i64)(z.N + z.P) || bad || fx || jdm) { print_cstr("  sums: a clean load FAILED\n"); ok = 0; }
         for (i = 0; i < 5; ++i) store_get_vec(l, 5000 + 700 * i, ref + i * SDX_DIM);
         store_destroy(l);
@@ -644,11 +644,33 @@ static i32 sd_sums_(Arena *a)
     l = store_load(a, path);
     if (!l) { print_cstr("  sums: a load with one damaged block FAILED\n"); ok = 0; }
     else {
-        store_integrity(l, &nb, &bad, &fx, &jdm);
+        store_integrity(l, &nb, &bad, &fx, &rb, &rh, &jdm);
         if (bad != 1 || fx != 1 || !sdx_same_(l, ref, 5)) { print_cstr("  sums: rebuilding a damaged block FAILED\n"); ok = 0; }
         store_destroy(l);
     }
     if (store_scrub(path, 0, &fx) != 0) { print_cstr("  sums: the rebuilt block was not written back\n"); ok = 0; }
+
+    /* the disk goes bad under a loaded store: a row read later fails its check, its block is rebuilt from the parity
+     * and written back, the row is served as it was (ZFS heals a read the same way); a row damaged in memory, where
+     * there is nothing to rebuild from, is left out */
+    l = store_load(a, path);
+    if (!l) ok = 0;
+    else {
+        f32 v[SDX_DIM];
+        i64 hits[4]; f32 hsc[4];
+        sdx_flip_(path, 64 + (u64)700 * SDX_DIM * 4 + 10);       /* row 700 (id 5700): v9 rows start at byte 64 */
+        if (store_get_vec(l, 5700, v) != 0 || memcmp(v, ref + SDX_DIM, sizeof(v)) != 0) { print_cstr("  sums: healing a row read after the load FAILED\n"); ok = 0; }
+        store_integrity(l, &nb, &bad, &fx, &rb, &rh, &jdm);
+        if (rh != 1 || rb != 0) { print_cstr("  sums: the healed row was not counted\n"); ok = 0; }
+        store_add(l, x + (size_t)5 * SDX_DIM, 7777);                /* a row only in memory, then a bit of it flips */
+        STORE_VEC(l, l->count - 1)[3] += 0.25f;
+        if (store_get_vec(l, 7777, v) == 0) { print_cstr("  sums: a row damaged in memory was served\n"); ok = 0; }
+        if (store_search(l, x + (size_t)5 * SDX_DIM, 4, hits, hsc) > 0 && hits[0] == 7777) { print_cstr("  sums: a damaged row came out of a search\n"); ok = 0; }
+        store_integrity(l, &nb, &bad, &fx, &rb, &rh, &jdm);
+        if (rb < 1) { print_cstr("  sums: the damaged row was not counted\n"); ok = 0; }
+        store_destroy(l);
+    }
+    if (store_scrub(path, 0, &fx) != 0) { print_cstr("  sums: the block healed on read was not written back\n"); ok = 0; }
 
     /* two damaged blocks of one group, parity 1: the rows are lost - the load says so instead of serving them */
     sdx_spit_(path, clean, clen);
@@ -696,7 +718,7 @@ static i32 sd_sums_(Arena *a)
     l = store_load(a, path);
     if (!l) ok = 0;
     else {
-        store_integrity(l, &nb, &bad, &fx, &jdm);
+        store_integrity(l, &nb, &bad, &fx, &rb, &rh, &jdm);
         if (!jdm || !store_has(l, 9004) || store_has(l, 9005) || stat(jd, &sst) != 0) { print_cstr("  journal: a damaged frame FAILED\n"); ok = 0; }
         store_destroy(l);
     }
@@ -712,12 +734,12 @@ static i32 sd_sums_(Arena *a)
     l = store_load(a, path);
     if (!l) ok = 0;
     else {
-        store_integrity(l, &nb, &bad, &fx, &jdm);
+        store_integrity(l, &nb, &bad, &fx, &rb, &rh, &jdm);
         if (jdm || !store_has(l, 9101) || store_has(l, 9102) || stat(jd, &sst) == 0) { print_cstr("  journal: a torn tail FAILED\n"); ok = 0; }
         store_destroy(l);
     }
     if (ok) print_cstr("  integrity: BLAKE3 matches the reference; damaged blocks rebuilt from Reed-Solomon parity and written\n"
-                       "             back; damage beyond repair refused; copies of the trailer and table mended by a scrub;\n"
+                       "             back, at load and on a read after it; damage beyond repair refused or left out; copies of the trailer and table mended by a scrub;\n"
                        "             a damaged journal frame stops replay with a copy kept, a torn tail does not\n");
     remove(path); remove(jn); remove(jd); remove(bare);
     free(clean); free(x); free(buf); free(jn); free(jd);
@@ -1344,7 +1366,7 @@ int main(void)
             print_cstr("  journal: live "); print_i64(store_count(jl)); print_cstr(" of "); print_i64(want_live);
             print_cstr(", replayed adds found "); print_i64(hit); print_cstr("/60, deleted still visible "); print_i64(gone); print_cstr("\n");
             if (store_count(jl) != want_live || hit < 55 || gone != 0) ok = 0;
-            { i32 jd = 1; store_integrity(jl, (i64 *)0, (i64 *)0, (i64 *)0, &jd); if (jd) { print_cstr("  journal: a torn tail taken for damage\n"); ok = 0; } }
+            { i32 jd = 1; store_integrity(jl, (i64 *)0, (i64 *)0, (i64 *)0, (i64 *)0, (i64 *)0, &jd); if (jd) { print_cstr("  journal: a torn tail taken for damage\n"); ok = 0; } }
             store_destroy(jl);
         }
         store_destroy(j);

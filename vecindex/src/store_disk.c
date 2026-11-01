@@ -455,6 +455,7 @@ static i32 store_write_file_(RagStore *s, const char *path, const char *tmp, u64
        || (s->vbytes == 1 && (store_pad_(f) || store_col_w_live_(f, &s->vsc, s->count, dead)))
        || store_pad_(f) || store_col_w_live_(f, &s->idc, s->count, dead)
        || store_pad_(f) || store_col_w_live_(f, &s->metac, s->count, dead)
+       || store_pad_(f) || store_col_w_live_(f, &s->rck, s->count, dead)
        || (s->has_text && store_text_w_(f, s, s->count, dead))
        || fwrite(&kind, 1, 1, f) != 1
        || (kind == 1 && engine_save(s->idx, f))
@@ -838,6 +839,16 @@ static i32 store_heap_r_(RagStore *s, u8 *map, size_t flen, FILE *f, size_t off,
     return 0;
 }
 
+/* the checks of rows [0, count) computed, for a file older than v9 that does not carry them: 0, or -1 */
+static i32 store_rck_fill_(RagStore *s)
+{
+    i32 r;
+    i64 nch = ((i64)s->count + STORE_CROWS - 1) >> STORE_CSHIFT;
+    while (s->rck.nchunk < nch) if (scol_push_(s, &s->rck)) return -1;
+    for (r = 0; r < s->count; ++r) STORE_RCK(s, r) = store_rck_row_(s, r);
+    return 0;
+}
+
 /* v5 to v9: map the file privately (copy-on-write: the store may still edit rows in place, the file is never
  * written through the mapping) and point the columns and the scan index into it. Nothing is read up front;
  * pages arrive on first touch, the id lookups are built on first use. dend: where a v9 file's data ends (0: the file's
@@ -849,7 +860,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     i32 live = hdr[3], dim = hdr[2], ext[4], v7 = hdr[1] == STORE_VERSION7 || hdr[1] == STORE_VERSION8 || hdr[1] == STORE_VERSION9,
         i8rows = hdr[1] == STORE_VERSION_I8, texts = 0, drop_idx = 0;
     struct stat st;
-    size_t len, o_vecs, o_vsc = 0, o_ids, o_meta, o_kind, o_txo = 0, o_heap = 0;
+    size_t len, o_vecs, o_vsc = 0, o_ids, o_meta, o_kind, o_txo = 0, o_heap = 0, o_rck = 0;
     u8 *map = (u8 *)0, kind = 0;
     u64 stamp = 0, hlen = 0;
 
@@ -868,6 +879,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     else o_ids = STORE_AL(o_vecs + (size_t)live * (size_t)dim * 4);
     o_meta = STORE_AL(o_ids + (size_t)live * 8);
     o_kind = o_meta + (size_t)live * 8;
+    if (hdr[1] == STORE_VERSION9) { o_rck = STORE_AL(o_kind); o_kind = o_rck + (size_t)live * 4; }   /* the rows' checks */
     if (texts) {                                                 /* v8: the heap's length, the offsets, the heap */
         size_t o_len = STORE_AL(o_kind);
         if (o_len + 8 > len || fseeko(f, (off_t)o_len, SEEK_SET) != 0 || STORE_R64(f, (i64 *)(void *)&hlen, 1)) {
@@ -896,7 +908,8 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
         if (store_col_r_(s, &s->vec, map, len, f, o_vecs, live) || store_col_r_(s, &s->idc, map, len, f, o_ids, live)
             || store_col_r_(s, &s->metac, map, len, f, o_meta, live)
             || (i8rows && store_col_r_(s, &s->vsc, map, len, f, o_vsc, live))
-            || (texts && store_col_r_(s, &s->txo, map, len, f, o_txo, live))) { fclose(f); store_destroy(s); return (RagStore *)0; }
+            || (texts && store_col_r_(s, &s->txo, map, len, f, o_txo, live))
+            || (o_rck && store_col_r_(s, &s->rck, map, len, f, o_rck, live))) { fclose(f); store_destroy(s); return (RagStore *)0; }
         s->dead_words = ((i64)live + 63) >> 6;
         s->dead = (u64 *)calloc((size_t)s->dead_words, sizeof(u64));
         if (map) {                                               /* re-scoring reads rows at random: no read-ahead */
@@ -908,6 +921,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     s->txlive = (i64)hlen;
     s->count = live;
     s->live = live;
+    if (!o_rck && live > 0 && store_rck_fill_(s)) { fclose(f); store_destroy(s); return (RagStore *)0; }   /* older file */
     s->idmap_ok = live == 0;
     if (map) kind = map[o_kind];
     else if (fseeko(f, (off_t)o_kind, SEEK_SET) != 0 || fread(&kind, 1, 1, f) != 1) { fclose(f); store_destroy(s); return (RagStore *)0; }
@@ -943,23 +957,31 @@ static RagStore *store_load_impl_(Arena *a, const char *path, i32 ro)
     u64 ubad;
     strcpy(store_lerr_, "cannot be read, or not a store file of a version this build knows");
     /* the checks come first, before even the header is trusted: they rebuild a damaged one too */
+    memset(&z, 0, sizeof(z));
     sums = store_sum_load_(path, ro, lvl, &z, &bad, &fixed, &ubad);
     if (sums < 0) { strcpy(store_lerr_, "some blocks could not be read to check them"); return (RagStore *)0; }
-    if (!(f = fopen(path, "rb"))) return (RagStore *)0;
+    if (!(f = fopen(path, "rb"))) { free(z.tab); return (RagStore *)0; }
     if (STORE_R32(f, hdr, 4) || (u32)hdr[0] != STORE_MAGIC
         || (hdr[1] != 4 && hdr[1] != STORE_VERSION && hdr[1] != STORE_VERSION_I8 && hdr[1] != STORE_VERSION7
-            && hdr[1] != STORE_VERSION8 && hdr[1] != STORE_VERSION9)) { fclose(f); return (RagStore *)0; }
+            && hdr[1] != STORE_VERSION8 && hdr[1] != STORE_VERSION9)) { fclose(f); free(z.tab); return (RagStore *)0; }
     if (hdr[1] == STORE_VERSION9 && !sums && lvl > 0) {
         strcpy(store_lerr_, "neither copy of its checksums can be read (VECINDEX_VERIFY=0 loads it unchecked)");
         fclose(f);
         return (RagStore *)0;
     }
+    if (sums && hdr[1] == 4) { free(z.tab); z.tab = (u8 *)0; }
     if (hdr[1] != 4) {
         s = store_load_v5_(a, path, f, hdr, ro, sums ? z.D : 0, lvl > 0 ? ubad : ~(u64)0);
         if (s) {
             store_lerr_[0] = 0;
             if (sums) { s->sum_blocks = (i64)(z.N + z.P); s->sum_bad = bad; s->sum_fixed = fixed; s->sum_k = (i32)z.k; s->sum_m = (i32)z.m; }
+            if (sums && z.tab && s->map && (s->msum = malloc(sizeof(SSum))) != (void *)0) {   /* rows read later can heal */
+                memcpy(s->msum, &z, sizeof(SSum));
+                z.tab = (u8 *)0;
+                s->mfd = open(path, ro ? O_RDONLY : O_RDWR);
+            }
         }
+        if (sums) free(z.tab);
         return s;
     }
 
@@ -972,6 +994,7 @@ static RagStore *store_load_impl_(Arena *a, const char *path, i32 ro)
     for (i = 0; i < live; ++i) if (STORE_R64(f, &STORE_ID(s, i), 1)) { fclose(f); store_destroy(s); return (RagStore *)0; }
     for (i = 0; i < live; ++i) if (STORE_R64(f, &STORE_META(s, i), 1)) { fclose(f); store_destroy(s); return (RagStore *)0; }
     s->count = live;
+    if (store_rck_fill_(s)) { fclose(f); store_destroy(s); return (RagStore *)0; }
     store_reindex_(s);
 
     if (fread(&has_idx, 1, 1, f) != 1) { fclose(f); store_destroy(s); return (RagStore *)0; }

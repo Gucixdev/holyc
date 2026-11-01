@@ -27,7 +27,7 @@ A session over TCP, word for word:
 add 1 1 0 0 0                 ok
 add 2 0 1 0 0                 ok
 search 2 0.9 0.1 0 0          ok 2 1 -0.012233 2 -1.779137
-stats                         ok count=2 dim=4 pending=2 built=0 snapshot=idle last=none hot=8 cold=64 memory=0
+stats                         ok count=2 dim=4 pending=2 built=0 snapshot=idle last=none hot=8 cold=72 memory=0 damaged=0 rebuilt=0 rows_bad=0 rows_healed=0 journal=ok
 del 1 2                       ok 2
 quit                          ok bye
 ```
@@ -95,7 +95,8 @@ data block, rebuilds damaged ones and writes them back, and says so on stderr (f
 blocks= damaged= rebuilt= journal=`); a file with damage beyond the parity in its rows does not start. `scrub` on the
 line protocol reads every block of the current store's file from the disk, rebuilds and rewrites what it can, logs
 `scrub file= damaged= rebuilt= ms=` and replies `ok damaged=N rebuilt=M`; `stats` ends with `damaged= rebuilt=
-journal=ok|damaged`, what the load found. A cron line that runs `scrub` weekly is the ZFS habit.
+rows_bad= rows_healed= journal=ok|damaged`: what the load found, then the rows that failed their check when a search
+read them - rebuilt from the parity on the spot, or left out of the results. A cron line that runs `scrub` weekly is the ZFS habit.
 
 There is no replication inside the server. A copy of the store is the file plus its journal, both written atomically
 (`rename`), so `rsync` or `cp` of the two at any moment is a consistent backup; a standby machine that replays them
@@ -106,14 +107,14 @@ point-in-time copy without touching the live journal.
 
 A search scans the hot part of a store every time: the index's codes (1, 2 or 4 bits a dimension), its slot table and
 centroids. It reads the cold part only for the few hundred candidates it re-scores and the hits it returns: the rows
-(f32 or int8), ids, tags and texts. The file is mapped, so by default the kernel keeps what searches touch and drops
+(f32 or int8), ids, tags, their checks and texts. The file is mapped, so by default the kernel keeps what searches touch and drops
 the rarely read rows first under pressure. `-m` takes that decision away from it:
 
 | `-m` | locked in RAM | on the disk, read when needed |
 |---|---|---|
 | 0 (default) | nothing; the codes are read ahead at start | everything, cached as the kernel sees fit |
 | 1 | the hot part | rows, ids, tags, texts |
-| 2 | the hot part, rows, ids and tags | texts |
+| 2 | the hot part, rows, ids, tags and checks | texts |
 
 `stats` reports both sizes (`hot=` and `cold=` in bytes) and the tier. For 100M rows of 768 dimensions with 1-bit
 codes and f32 rows that is about 10 GB hot (96 bytes of codes and 4 of slot table a row) and 307 GB cold: `-m 1`

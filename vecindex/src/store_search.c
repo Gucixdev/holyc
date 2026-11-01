@@ -74,7 +74,7 @@ static i32 store_search_impl_(RagStore *s, const f32 *query, i32 k,
                 i32 j, dup = 0;
                 if (STORE_DEAD(s, i) || !store_meta_ok_(STORE_META(s, i), all_bits, any_bits)) continue;
                 for (j = 0; j < have; ++j) if (out_doc_ids[j] == i) { dup = 1; break; }
-                if (dup) continue;
+                if (dup || store_row_bad_(s, i)) continue;
                 eng_topk_(out_doc_ids, out_scores, k, &have, (i64)i, 2.0f * store_dot_(s, qn, i) - 2.0f);
             }
         }
@@ -84,6 +84,7 @@ static i32 store_search_impl_(RagStore *s, const f32 *query, i32 k,
     for (i = s->built_upto; i < tail; ++i) {                    /* the pending tail: exact */
         if (STORE_DEAD(s, i)) continue;
         if (filtered && !store_meta_ok_(STORE_META(s, i), all_bits, any_bits)) continue;
+        if (store_row_bad_(s, i)) continue;
         eng_topk_(out_doc_ids, out_scores, k, &have, (i64)i, 2.0f * store_dot_(s, qn, i) - 2.0f);
     }
     for (i = 0; i < have; ++i) out_doc_ids[i] = STORE_ID(s, out_doc_ids[i]);   /* rows -> doc ids, only for the k kept */
@@ -120,7 +121,7 @@ static void store_batch_fin_(void *p, i64 a, i64 b, i32 tid)
         i32 have = 0, i;
         store_rescore_(s, qn, j->rows + (size_t)q * j->R, j->cnt[q], j->k, ids, sc, &have);
         for (i = s->built_upto; i < s->count; ++i)               /* the pending tail: exact */
-            if (!STORE_DEAD(s, i)) eng_topk_(ids, sc, j->k, &have, (i64)i, 2.0f * store_dot_(s, qn, i) - 2.0f);
+            if (!STORE_DEAD(s, i) && !store_row_bad_(s, i)) eng_topk_(ids, sc, j->k, &have, (i64)i, 2.0f * store_dot_(s, qn, i) - 2.0f);
         for (i = 0; i < have; ++i) ids[i] = STORE_ID(s, ids[i]);
         for (; i < j->k; ++i) { ids[i] = -1; sc[i] = -4.0f; }
     }

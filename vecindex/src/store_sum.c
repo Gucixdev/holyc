@@ -432,8 +432,8 @@ const char *store_load_error(void) { return store_lerr_; }
 
 /* Before a load reads the file at path: its blocks against their digests (all of them at level 2, the first group
  * at level 1), damaged ones rebuilt and written back unless ro. 1 when the file has checksums (*z: its layout, z->tab
- * freed; *bad, *fixed, *ubad as ssum_check_), 0 when it has none that can be read, -1 when they could not all be
- * checked. */
+ * kept for the caller; *bad, *fixed, *ubad as ssum_check_), 0 when it has none that can be read, -1 when they could
+ * not all be checked. */
 /* 1 when the file open as fd says it is a v9 store in its header */
 static i32 ssum_v9_(int fd)
 {
@@ -457,7 +457,7 @@ static i32 store_sum_load_(const char *path, i32 ro, i32 lvl, SSum *z, i64 *bad,
             if (map) munmap(mp, (size_t)(z->N + z->P) << z->blog);
             if (err && *bad > *fixed) r = -1;          /* a block went unread: unknown */
         }
-        free(z->tab); z->tab = (u8 *)0;
+        if (r < 0) { free(z->tab); z->tab = (u8 *)0; }
     }
     close(fd);
     return r;
@@ -516,13 +516,67 @@ i32 store_set_parity(RagStore *s, i32 k, i32 m)
     return 0;
 }
 
-/* What the last load found: the file's blocks (data and parity, 0 for a file without checksums), the damaged ones
- * and how many of those were rebuilt; jdamaged 1 when the journal had a damaged record or header (its copy kept as
- * PATH.j.damaged). Any pointer may be NULL. */
-void store_integrity(RagStore *s, i64 *blocks, i64 *bad, i64 *fixed, i32 *jdamaged)
+/* What the load found: the file's blocks (data and parity, 0 for a file without checksums), the damaged ones and how
+ * many of those were rebuilt; since then, the rows that failed their check when a search or lookup read them and
+ * stayed out (rows_bad), and those whose blocks were rebuilt from the parity on the spot (rows_healed); jdamaged 1
+ * when the journal had a damaged record or header (its copy kept as PATH.j.damaged). Any pointer may be NULL. */
+void store_integrity(RagStore *s, i64 *blocks, i64 *bad, i64 *fixed, i64 *rows_bad, i64 *rows_healed, i32 *jdamaged)
 {
     if (blocks) *blocks = s->sum_blocks;
     if (bad) *bad = s->sum_bad;
     if (fixed) *fixed = s->sum_fixed;
+#if defined(__GNUC__)
+    if (rows_bad) *rows_bad = __atomic_load_n(&s->rot_rows, __ATOMIC_RELAXED);
+    if (rows_healed) *rows_healed = __atomic_load_n(&s->rot_healed, __ATOMIC_RELAXED);
+#else
+    if (rows_bad) *rows_bad = s->rot_rows;
+    if (rows_healed) *rows_healed = s->rot_healed;
+#endif
     if (jdamaged) *jdamaged = s->jdamaged;
+}
+
+/* Whether searches and lookups test every row they read against its check (on by default; off saves the hashing of
+ * the re-scored rows, a few percent of a search). */
+void store_set_check_reads(RagStore *s, i32 on) { s->vreads = on != 0; }
+
+static void store_msum_free_(void *p) { SSum *z = (SSum *)p; if (z) { free(z->tab); free(z); } }
+
+/* Row r failed its check. Its bytes that lie in the mapped file (the store never writes to mapped chunks) are rebuilt:
+ * the blocks under them from the parity, confirmed by their digests and written back - the mapping shows the page
+ * cache, so the row reads true again, as ZFS heals a read. 1 when the row passes its check afterwards. */
+static i32 store_row_heal_(RagStore *s, i32 r)
+{
+    SSum *z = (SSum *)s->msum;
+    const u8 *part[5], *m0 = (const u8 *)s->map;
+    size_t n[5];
+    u64 done[16], off, b, e, g;
+    i32 np = 0, nd = 0, i, k;
+    u8 *mem;
+    SJob j;
+    if (!z || !z->tab || s->mfd < 0 || !m0) return 0;
+    part[np] = SCOL_AT(&s->vec, r); n[np++] = s->vec.esz;
+    if (s->vbytes == 1) { part[np] = SCOL_AT(&s->vsc, r); n[np++] = 4; }
+    part[np] = SCOL_AT(&s->idc, r); n[np++] = 8;
+    part[np] = SCOL_AT(&s->metac, r); n[np++] = 8;
+    part[np] = SCOL_AT(&s->rck, r); n[np++] = 4;
+    if (!(mem = (u8 *)malloc(((size_t)1 + 3u * z->m) << z->blog))) return 0;
+    memset(&j, 0, sizeof(j));
+    j.z = z; j.heal = 1; j.gstep = 1; j.ubad = ~(u64)0;
+    pthread_mutex_lock(&s->heal_mu);                             /* one descriptor, rare: one rebuild at a time */
+    for (i = 0; i < np; ++i) {
+        if (part[i] < m0 || part[i] + n[i] > m0 + s->map_len) continue;   /* not from the file: nothing to rebuild */
+        off = (u64)(part[i] - m0);
+        for (b = off >> z->blog, e = (off + n[i] - 1) >> z->blog; b <= e && b < z->N; ++b) {
+            g = b % z->G;
+            for (k = 0; k < nd && done[k] != g; ++k) {}
+            if (k < nd) continue;
+            if (nd < 16) done[nd++] = g;
+            ssum_group_(&j, g, s->mfd, s->mfd, mem);
+        }
+    }
+    if (j.fixed && fdatasync(s->mfd) != 0) j.err = 1;
+    s->sum_bad += j.bad; s->sum_fixed += j.fixed;
+    pthread_mutex_unlock(&s->heal_mu);
+    free(mem);
+    return STORE_RCK(s, r) == store_rck_row_(s, r);
 }

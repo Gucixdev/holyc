@@ -258,7 +258,7 @@ int main(void)
     {
         vi_i64 hot = 0, cold = 0;
         vi_memory(db, &hot, &cold);
-        check(hot > 0 && hot < cold && cold == (vi_i64)2000 * (DIM * 4 + 16), "vi_memory: hot (the codes) and cold (the rows, ids and tags)");
+        check(hot > 0 && hot < cold && cold == (vi_i64)2000 * (DIM * 4 + 20), "vi_memory: hot (the codes) and cold (the rows, ids, tags and checks)");
         check(vi_set_memory(db, 1) >= -1 && vi_set_memory(db, 2) >= -1 && vi_set_memory(db, 0) == 0 && self_found_(db, 0, 2000, 97, 0) >= 20,
               "vi_set_memory 1, 2, 0: searches still find their rows");
     }
@@ -304,19 +304,21 @@ int main(void)
     /* integrity: digests and parity in every file, checked at open, a scrub of the file */
     {
         char fn[64], jn[72];
-        vi_i64 blocks = 0, bad = -1, fixed = -1;
+        vi_i64 blocks = 0, bad = -1, fixed = -1, rows_bad = -1, rows_healed = -1;
         int jd = -1;
         sprintf(fn, "/tmp/vecindex_api_sums_%d.vxi", (int)getpid());
         sprintf(jn, "%s.j", fn);
         db = vi_open(fn, DIM, 0);
         check(db && vi_set_parity(db, 8, 2) == 0 && vi_set_parity(db, 0, 2) == -1 && vi_set_parity(db, 8, 99) == -1,
               "vi_set_parity: 8 and 2 taken, 0 data blocks or 99 parity refused");
-        if (db) { for (i = 0; i < 3000; ++i) { vec_(i, v); vi_add(db, 1 + i, v); } vi_build(db); vi_save(db, (const char *)0); vi_close(db); }
+        if (db) { for (i = 0; i < 3000; ++i) { vec_(i, v); vi_add(db, 1000 + i, v); } vi_build(db); vi_save(db, (const char *)0); vi_close(db); }
         check(vi_scrub(fn, 0, &fixed) == 0 && fixed == 0, "vi_scrub of an intact file: 0 damaged");
         check(vi_scrub("/nonexistent/vecindex.vxi", 0, (vi_i64 *)0) == -1, "vi_scrub of no file: -1");
         db = vi_open(fn, 0, 0);
-        if (db) vi_integrity(db, &blocks, &bad, &fixed, &jd);
-        check(db && blocks > 0 && bad == 0 && fixed == 0 && jd == 0 && !*vi_open_error(), "vi_integrity after an open: blocks checked, none damaged");
+        if (db) vi_integrity(db, &blocks, &bad, &fixed, &rows_bad, &rows_healed, &jd);
+        check(db && blocks > 0 && bad == 0 && fixed == 0 && rows_bad == 0 && rows_healed == 0 && jd == 0 && !*vi_open_error(),
+              "vi_integrity after an open: blocks checked, none damaged");
+        if (db) { vec_(77, v); check(vi_get(db, 1078, v) == 0 && self_found_(db, 0, 3000, 97, 0) >= 20, "rows read with their checks on: found"); }
         if (db) vi_close(db);
         vi_set_verify(1);
         db = vi_open(fn, 0, 0);

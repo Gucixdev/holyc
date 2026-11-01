@@ -40,6 +40,7 @@ from any thread on the same handle at once.
 | `vi_set_layout(db, code_bits, row_bytes)` | 4-, 2- or 1-bit scan codes (dim/2, dim/4 or dim/8 bytes a row), f32 or int8 rows, before the first row |
 | `vi_set_aggression(db, a)` | how much of the machine to take, 0..1 (default 1, or `VECINDEX_AGGRESSION`): threads out of the CPUs the process may use (affinity, cgroup quota); background work at nice 10 to 19 |
 | `vi_set_memory(db, tier)` | what stays in RAM whatever the memory pressure (mlock): 0 nothing, the kernel decides (default); 1 what every search scans (codes, slot table, centroids), rows stay on the disk; 2 rows, ids and tags too. -1 when the memlock limit refused part of it |
+| `vi_set_parity(db, data, parity)`, `vi_set_check_reads(db, on)`, `vi_set_verify(level)`, `vi_open_error()`, `vi_integrity(db, ...)`, `vi_scrub(path, repair, &fixed)` | integrity: Reed-Solomon parity of the files written (default 32 + 2), row checks on reads (default on), what an open checks (default every block), why an open failed, what the checks found, a scrub of a file (see Integrity below) |
 | `vi_memory(db, &hot, &cold)` | bytes scanned by every search (hot) and bytes read only for candidates and hits (cold) |
 | `vi_save(db, path)` | rewrites the file and starts a fresh journal |
 | `vi_sync(db)` | flushes the journal to the disk |
@@ -280,9 +281,17 @@ damage, not a crash: replay stops there as for a torn tail, a copy of the whole 
 and `vi_integrity` says so. A zero-filled tail (a file system that grew the file without the bytes landing) counts as
 torn.
 
-What this does not cover: a page that rots on the disk after it was checked and is read again before the next scrub
-(the store maps its file; pages read back from the disk later are not checked again), and damage beyond the parity.
-Files written by an older version (v8 and before) load as before, without checks, until the next save writes v9.
+Reads after the open are checked as well. Every row carries a 32-bit check of its vector, id and tag; a search tests
+each row it re-scores, `vi_get` the row it returns. A row that fails was read back from a disk page that went bad after
+the open: the blocks under it are rebuilt from the parity, confirmed by their digests and written back, and the row is
+used as it was - ZFS heals a read the same way. When there is nothing to rebuild from (the damage is in memory, or
+beyond the parity) the row is left out of every result: damaged data is never returned. `vi_integrity` counts both.
+The test costs a hash of each re-scored row; `vi_set_check_reads(db, 0)` turns it off. The scan's codes are an index
+built from the rows - damage there costs recall, never a wrong row - and are checked at the open and by a scrub, or
+never leave RAM with `vi_set_memory(db, 1)`.
+
+Damage beyond the parity of a group is found, not repaired. Files written by an older version (v8 and before) load
+as before, without block checks and with the row checks computed at the open, until the next save writes v9.
 
 A snapshot costs memory for the pages the parent changes while the child writes, up to a second copy of whatever is
 rewritten meanwhile. Under strict overcommit (`vm.overcommit_memory=2`) `fork` can fail for a store larger than the
