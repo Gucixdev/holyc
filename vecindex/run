@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# run - build and test vecindex. Every module in src/ has its self-test in tests/NAME_test.c: the bit-packed
+# quantizers (q1-q5 + qmix), the IVF coarse router + HNSW graph router, the 4-bit fast-scan, the adaptive engine
+# and the store. Then the SIMD kernels per instruction set, the C API, the store under the sanitizers and kill -9,
+# the server end to end and vfind. Each binary goes to .build/ and is rebuilt only when its source or a dependency
+# changed; it is compiled with -Werror and a non-zero exit fails the run.
+#   ./run            every test, and .build/libvecindex.so / .a (needs bash and gcc; python3 for the server's
+#                    end-to-end tests)
+#   ./run bench      also bench/bench.c (timings vs the Rust port)
+#   ./run stress     also tests/stress.c (churn + oracle + edge cases)
+#   ./run real_val   also bench/real_val.c, the SQuAD + AG-News retrieval benchmark (needs emb/real_data.bin)
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+CC="${CC:-gcc}"
+CFLAGS=(-std=c89 -pedantic -Wall -Wextra -Werror
+        -D_POSIX_C_SOURCE=200112L -O2 -march=native -Isrc)
+OUT=.build
+mkdir -p "$OUT"
+
+# q2/q4/q5 and their tests are sed-derived from q1 - fail loudly if they have drifted.
+tools/gen --check
+
+QDEPS=(src/q1.c src/q2.c src/q3.c src/q4.c src/q5.c src/qmix.c src/q4fs.c src/vsimd.h)
+ENG=("${QDEPS[@]}" src/ivf.c src/hnsw.c src/engine*.c)
+STORE=("${ENG[@]}" src/store*.c src/hdict.c src/lex.c src/tq*.c)
+
+fail=0
+for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store ${1:+$1}; do
+    bin="$OUT/$name"
+    src="tests/${name}_test.c"
+    def=()
+    case $name in
+        hdict)  deps=(src/hdict.c) ;;
+        lex)    deps=(src/hdict.c src/lex.c) ;;
+        q1|q2|q3|q4|q5) deps=("src/$name.c" src/vsimd.h) ;;
+        qmix)   deps=(src/q1.c src/q2.c src/q4.c src/qmix.c src/vsimd.h) ;;
+        q4fs)   deps=(src/q4.c src/q4fs.c src/vsimd.h) ;;
+        hnsw)   deps=(src/hnsw.c src/vsimd.h) ;;
+        ivf)    deps=(src/ivf.c) ;;
+        simd)   deps=(src/tq*.c src/vsimd.h src/base.h) ;;
+        engine) deps=("${ENG[@]}"); def=(-DENGINE_SERIALIZE) ;;   # exercise the .vxi round-trip in the test
+        store)  deps=("${STORE[@]}") ;;
+        bench)  src=bench/bench.c; def=(-DBENCH); deps=("${ENG[@]}") ;;
+        stress) src=tests/stress.c; def=(-DSTRESS); deps=("${STORE[@]}") ;;
+        real_val) src=bench/real_val.c; def=(-DREAL_VAL); deps=("${STORE[@]}")
+                  # needs the real corpus - skip cleanly if it is absent
+                  [[ -f emb/real_data.bin ]] || { echo "real_val: emb/real_data.bin absent (run py/real_gen.py emb) - skipped"; continue; } ;;
+        *)      echo "run: unknown target '$name'" >&2; exit 2 ;;
+    esac
+    stale=0
+    [[ -x $bin ]] || stale=1
+    for d in "$src" "${deps[@]}"; do [[ $d -nt $bin ]] && stale=1; done
+    (( stale )) && "$CC" "${CFLAGS[@]}" "$src" "${def[@]}" -lm -lpthread -o "$bin"
+    runargs=()
+    [[ $name == real_val ]] && runargs=(emb)
+    if ! "./$bin" "${runargs[@]}"; then echo "  ^ $name FAILED"; fail=1; fi
+    echo
+done
+
+# ---- the SIMD kernels again, built for the other code paths this CPU can run: on x86-64 AVX2 without AVX-512 and no
+# ---- SIMD at all, on aarch64 no NEON (tools/cross covers 32-bit ARM, RISC-V and big-endian s390x) ----
+case $(uname -m) in
+    x86_64)  isas=(haswell x86-64) ;;
+    aarch64) isas=(armv8-a+nosimd) ;;
+    *)       isas=() ;;
+esac
+for isa in "${isas[@]}"; do
+    bin="$OUT/simd_$isa"
+    stale=0
+    [[ -x $bin ]] || stale=1
+    for d in tests/simd_test.c src/tq*.c src/vsimd.h src/base.h; do [[ $d -nt $bin ]] && stale=1; done
+    (( stale )) && "$CC" "${CFLAGS[@]/-march=native/-march=$isa}" tests/simd_test.c -lm -lpthread -o "$bin"
+    "./$bin" || { echo "  ^ simd ($isa) FAILED"; fail=1; }
+done
+
+# ---- the C API: libvecindex.so / .a with nothing but vi_* exported, and a program that uses only the header ----
+echo "C API: libvecindex.so, libvecindex.a"
+"$CC" "${CFLAGS[@]}" -fPIC -shared -fvisibility=hidden -Iinclude src/vecindex.c -lm -lpthread -o "$OUT/libvecindex.so" || fail=1
+"$CC" "${CFLAGS[@]}" -fPIC -fvisibility=hidden -Iinclude -c src/vecindex.c -o "$OUT/vecindex.o" && ar rcs "$OUT/libvecindex.a" "$OUT/vecindex.o" || fail=1
+if command -v nm >/dev/null; then
+    extra=$(nm -D --defined-only "$OUT/libvecindex.so" | awk '{print $3}' | grep -v -E '^(vi_[a-z_]+|_init|_fini|_edata|_end|__bss_start)$' || true)
+    if [[ -z $extra ]]; then echo "  ok   only vi_* exported"; else echo "  FAIL exported beyond vi_*: $extra"; fail=1; fi
+fi
+"$CC" "${CFLAGS[@]}" -Iinclude tests/api_test.c -L"$OUT" -lvecindex -lm -lpthread -o "$OUT/api_test_so" \
+    && LD_LIBRARY_PATH="$OUT" "./$OUT/api_test_so" || { echo "  ^ C API (shared) FAILED"; fail=1; }
+"$CC" "${CFLAGS[@]}" -Iinclude tests/api_test.c "$OUT/libvecindex.a" -lm -lpthread -o "$OUT/api_test_a" \
+    && "./$OUT/api_test_a" > /dev/null || { echo "  ^ C API (static) FAILED"; fail=1; }
+echo
+
+# ---- the store's live mode (its own indexing / rebuild thread beside adders and searchers), under the thread sanitizer ----
+echo "store threads (live mode)"
+if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -march=native -Isrc tests/store_test.c -lm -lpthread -o "$OUT/store_tsan" 2>/dev/null; then
+    if TSAN_OPTIONS="halt_on_error=1" "./$OUT/store_tsan" > /dev/null; then echo "  ok   no data race reported"
+    else echo "  ^ store thread test FAILED"; fail=1; fi
+else
+    echo "  (thread sanitizer unavailable - skipped)"
+fi
+
+# ---- the store self-test again under the address and undefined-behaviour sanitizers ----
+echo "store under ASan/UBSan"
+if "$CC" -std=gnu99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -march=native -Isrc tests/store_test.c -lm -lpthread -o "$OUT/store_asan" 2>/dev/null; then
+    if "./$OUT/store_asan" > /dev/null; then echo "  ok   no memory error reported"
+    else echo "  ^ store under ASan/UBSan FAILED"; fail=1; fi
+else
+    echo "  (sanitizers unavailable - skipped)"
+fi
+
+# ---- crash safety for the store itself, with background snapshots running: kill -9 the writer (and in every other
+# ---- round its snapshot child too) at random moments; every synced row must be there exactly once ----
+echo "store crash test (journal + background snapshots)"
+"$CC" -std=gnu99 -O2 -march=native -Isrc tests/scrash.c -lm -lpthread -o "$OUT/scrash" && "./$OUT/scrash" 20 || { echo "  ^ store crash test FAILED"; fail=1; }
+
+# ---- the socket server: both protocols, Unix + TCP sockets, bad input, pipelining, concurrency, restart ----
+# ---- (TLS through the vendored BearSSL: built once into $OUT/libbearssl.a) ----
+echo "vserv"
+if [[ ! -f $OUT/libbearssl.a || third_party/bearssl/inc/bearssl.h -nt $OUT/libbearssl.a ]]; then
+    mkdir -p "$OUT/bearssl"
+    find third_party/bearssl/src -name '*.c' | while read -r f; do
+        o=${f#third_party/bearssl/src/}; echo "$f $OUT/bearssl/${o//\//_}"
+    done | xargs -P "$(nproc 2>/dev/null || echo 2)" -n 2 sh -c '"$0" -O2 -Ithird_party/bearssl/inc -Ithird_party/bearssl/src -c "$1" -o "${2%.c}.o"' "$CC" \
+        && ar rcs "$OUT/libbearssl.a" "$OUT"/bearssl/*.o || fail=1
+fi
+"$CC" "${CFLAGS[@]}" -isystem third_party/bearssl/inc src/vserv.c "$OUT/libbearssl.a" -lm -lpthread -o "$OUT/vserv" || fail=1
+"$CC" "${CFLAGS[@]}" -DVSERV_NO_TLS src/vserv.c -lm -lpthread -o "$OUT/vserv_plain" || fail=1
+if command -v python3 >/dev/null; then
+    python3 py/vserv_test.py "$OUT/vserv" || { echo "  ^ vserv FAILED"; fail=1; }
+    python3 py/vserv_test.py "$OUT/vserv_plain" >/dev/null || { echo "  ^ vserv (no TLS build) FAILED"; fail=1; }
+    python3 py/vserv_tls_test.py "$OUT/vserv" || { echo "  ^ vserv TLS FAILED"; fail=1; }
+else
+    echo "  (python3 unavailable - built, end-to-end tests skipped)"
+fi
+# ---- vfind: search the texts as you type, Enter to the document (a TUI, driven through tmux; skipped without) ----
+"$CC" "${CFLAGS[@]}" src/vfind.c -lm -lpthread -o "$OUT/vfind" \
+    && "$CC" "${CFLAGS[@]}" tests/vfind_demo.c -lm -lpthread -o "$OUT/vfind_demo" \
+    && tests/vfind_test.sh "$OUT/vfind" "$OUT/vfind_demo" || { echo "  ^ vfind FAILED"; fail=1; }
+
+# ---- the line protocol, the log, the journal under kill -9, timed snapshots, mTLS names in the log ----
+"$CC" -std=gnu99 -O2 -Wall -Wextra tests/vserv_test.c -o "$OUT/vserv_line_test" \
+    && "$OUT/vserv_line_test" "$OUT/vserv" 2>/dev/null || { echo "  ^ vserv line protocol FAILED"; fail=1; }
+
+exit $fail
