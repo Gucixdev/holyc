@@ -258,6 +258,13 @@ static i32 sd_tiers_(Arena *a)
     print_cstr("  tiers: locked kB "); print_i64(k0); print_cstr(" -> tier 1: "); print_i64(k1); print_cstr(" -> tier 2: ");
     print_i64(k2); print_cstr(" -> tier 0: "); print_i64(k3); print_cstr(" -> tier 1 and a rebuild: "); print_i64(k4); print_cstr("\n");
     if (k0 < 0) print_cstr("  tiers: no VmLck here - what got locked is not checked\n");
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+    else if (1) print_cstr("  tiers: built with a sanitizer, which turns mlock into a no-op - what got locked is not checked\n");
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+    else if (1) print_cstr("  tiers: built with a sanitizer, which turns mlock into a no-op - what got locked is not checked\n");
+#endif
+#endif
     else if (!l->map) print_cstr("  tiers: the store is not mapped here (a big-endian CPU) - nothing to lock, not checked\n");
     else if (r1 != 0 || r2 != 0 || r0 != 0 || r3 != 0)
         print_cstr("  tiers: the memlock limit refused the lock (ulimit -l) - what got locked is not checked\n");

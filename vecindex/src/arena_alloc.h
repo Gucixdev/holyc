@@ -189,6 +189,7 @@ void free_region(Arena_Region *r)
     size_t size_bytes = offsetof(Arena_Region, data) + sizeof(u64) * r->capacity;
     int ret = munmap(r, size_bytes);
     ARENA_ASSERT(ret == 0);
+    (void)ret;                       /* unused when ARENA_ASSERT compiles out (clang -Werror) */
 }
 
 #elif ARENA_BACKEND == ARENA_BACKEND_FLAT
@@ -252,6 +253,7 @@ void free_region(Arena_Region *r)
     size_t size_bytes = offsetof(Arena_Region, data) + sizeof(u64) * r->capacity;
     int ret = munmap(r, size_bytes);
     ARENA_ASSERT(ret == 0);
+    (void)ret;                       /* unused when ARENA_ASSERT compiles out (clang -Werror) */
 }
 
 #else

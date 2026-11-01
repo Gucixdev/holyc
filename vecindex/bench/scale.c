@@ -135,11 +135,11 @@ static void ground_truth_(i64 n, i32 nq, const f32 *q, i64 *gt, i32 nth)
 }
 
 /* ---- searching: one query per thread ---- */
-typedef struct { RagStore *s; const f32 *q; i64 *res; i32 a, b; double *lat; } SJob;
+typedef struct { RagStore *s; const f32 *q; i64 *res; i32 a, b; double *lat; } ScJob;
 
 static void *s_job_(void *p)
 {
-    SJob *j = (SJob *)p;
+    ScJob *j = (ScJob *)p;
     i32 i;
     f32 sc[GTK];
     for (i = j->a; i < j->b; ++i) {
@@ -153,7 +153,7 @@ static void *s_job_(void *p)
 
 static double run_queries_(RagStore *s, const f32 *q, i32 nq, i64 *res, i32 nth, double *lat)
 {
-    SJob j[16]; pthread_t th[16];
+    ScJob j[16]; pthread_t th[16];
     i32 t;
     double t0 = now_();
     for (t = 0; t < nth; ++t) { j[t].s = s; j[t].q = q; j[t].res = res; j[t].a = nq * t / nth; j[t].b = nq * (t + 1) / nth; j[t].lat = lat; }

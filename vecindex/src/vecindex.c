@@ -160,6 +160,7 @@ VI_API vi_db *vi_open(const char *path, int dim, int flags)
         }
     }
     if (!(flags & VI_MANUAL)) store_set_live(db->s, 1, 1.0f);   /* rows are indexed as they come: no vi_build to forget */
+    {   char *e = vi_ebuf_(); if (e) *e = 0; }                   /* an open that worked leaves no reason from an earlier failure */
     return db;
 }
 
