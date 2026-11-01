@@ -10,6 +10,7 @@ is a nod, not a claim: this has nothing to do with TempleOS's HolyC language, it
 | [`lazytui`](lazytui) | Terminal UI library on plain ANSI escapes | C99: `-std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE` | own |
 | [`fzf`](fzf) | Fuzzy finder compatible with fzf 0.74's command line | C11 GNU: `-std=gnu11` | own, not a fork of the Go fzf |
 | [`notcoreutils`](notcoreutils) | `cb cloc colorado dv man netcat sudo tgates tree` | C11 GNU: `-std=gnu11 -D_GNU_SOURCE` | own |
+| [`agent_launcher`](agent_launcher) | The layer for LLM agents on top of [vecindex](https://github.com/Gucixdev/vecindex): a note database (links, tags, hybrid search, MCTS), agent memory with a rule engine, a cross-encoder re-rank | C89: `-std=c89 -pedantic`; the fuzz, thread and crash tests `-std=gnu99` | own, moved out of vecindex |
 | [`gtop`](gtop) | System monitor TUI (CPU/GPU, RAM, disk, net, processes) | C99: `-std=c99` plus POSIX.1-2008 (set in the source), links `-lm` | own, C port of an earlier Rust version |
 | [`dwl`](dwl) | Wayland compositor | C99 features; no `-std` flag, built with the compiler default (wlroots' headers need C11) | fork of [dwl](https://codeberg.org/dwl/dwl) |
 | [`dmenu`](dmenu) | Launcher, native Wayland | C99: `-std=c99 -pedantic`; `dmenu_menu.c` is `-std=gnu11` | fork of [dmenu](https://git.suckless.org/dmenu) (`wayland` branch) |
@@ -20,7 +21,8 @@ The "language" column is what each directory's own Makefile or `run` script pass
 compiler, not a claim about what else would compile.
 
 The vector and note database that lived here as `ragdb/` is now its own repository,
-[vecindex](https://github.com/Gucixdev/vecindex), history included.
+[vecindex](https://github.com/Gucixdev/vecindex), history included. vecindex is the vector database alone now; the
+agent layer that grew on top of it came back here as `agent_launcher/` and uses it as a library.
 
 Every directory builds on its own; there is no top-level build. Each has its own README with
 the details, this page is the map.
@@ -39,6 +41,9 @@ git clone https://github.com/Gucixdev/holyc && cd holyc
 (cd fzf && make && make test)     # 413 tests, differential against /usr/bin/fzf when present
 (cd notcoreutils && make && make test)   # 57 tests; binaries land in bin/
 (cd gtop && make && make test)           # 46 checks against the live system
+
+# needs vecindex cloned next to holyc (or VECINDEX=path)
+(cd agent_launcher && ./run)
 ```
 
 ## What each piece is
@@ -94,6 +99,12 @@ directly: CPU with per-core frequency and temperature, RAM split into used/zram/
 views (clean and raw), an always-open process tree per program split into user and system, an info panel that explains the selected process or service, multi-select, kill and a command palette. `gtop --snapshot` prints a frame as plain text,
 which the 46 checks in `tests/run` use. It started as a 1:1 port of an earlier Rust/ratatui version; the process tree and the new PROC columns came after.
 
+### agent_launcher
+Notes and memory for LLM agents, on vecindex's store: `vecdb.c` (notes, `[[wikilinks]]`, tags, BM25 + vector hybrid
+search, MCTS over the link graph, embedding servers, a command line), `mem.c` (agent memory: lifetime, tiers, a rule
+engine) and `rerank.c` (a cross-encoder second pass). It includes vecindex's `src/store.c` straight from a checkout.
+See [`agent_launcher/README.md`](agent_launcher/README.md).
+
 ### The Wayland desktop: dwl, dmenu, lemonbar, nnn
 Forks kept as `git subtree`s with the full upstream history, so `git log <dir>/` shows who
 wrote what. Local changes on top of upstream:
@@ -111,6 +122,7 @@ wrote what. Local changes on top of upstream:
 | Piece | Needs |
 |---|---|
 | base, lazytui, fzf, notcoreutils | a C compiler (gcc or clang), make, Linux |
+| agent_launcher | a C compiler, bash and a [vecindex](https://github.com/Gucixdev/vecindex) checkout (`VECINDEX`, default `../vecindex` beside holyc); python3 with torch only for the optional model servers |
 | gtop | a C compiler and make; optional `nvidia-smi`, `intel_gpu_top`, `lsusb` for GPU and TPU info |
 | dwl | wlroots 0.20, wayland, xkbcommon, pkg-config |
 | dmenu, lemonbar | wayland-client, xkbcommon, fontconfig, freetype2 |
