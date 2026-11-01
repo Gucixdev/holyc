@@ -45,6 +45,7 @@ git clone https://github.com/Gucixdev/holyc && cd holyc
 
 # vector database, and the agent layer built on it
 (cd vecindex && ./run)             # self-tests, sanitizers, kill -9, the server end to end
+(cd vecindex && ./run all DATA)    # all of that, stress, the cross-built tests and every benchmark
 (cd agent_launcher && ./run)       # builds against ../vecindex
 ```
 
@@ -130,7 +131,7 @@ wrote what. Local changes on top of upstream:
 | Piece | Needs |
 |---|---|
 | base, lazytui, fzf, notcoreutils | a C compiler (gcc or clang), make, Linux |
-| vecindex | a C compiler and bash; python3 for the server's end-to-end tests; numpy and the compared libraries for `bench/run_all.sh` |
+| vecindex | a C compiler and bash; python3 for the server's end-to-end tests; numpy and the compared libraries for `./run compare` |
 | agent_launcher | a C compiler, bash and `vecindex/` (`VECINDEX` points at another copy); python3 with torch only for the optional model servers |
 | gtop | a C compiler and make; optional `nvidia-smi`, `intel_gpu_top`, `lsusb` for GPU and TPU info |
 | dwl | wlroots 0.20, wayland, xkbcommon, pkg-config |

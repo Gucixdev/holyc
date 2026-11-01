@@ -4,13 +4,64 @@
 # and the store. Then the SIMD kernels per instruction set, the C API, the store under the sanitizers and kill -9,
 # the server end to end and vfind. Each binary goes to .build/ and is rebuilt only when its source or a dependency
 # changed; it is compiled with -Werror and a non-zero exit fails the run.
-#   ./run            every test, and .build/libvecindex.so / .a (needs bash and gcc; python3 for the server's
-#                    end-to-end tests)
-#   ./run bench      also bench/bench.c (timings vs the Rust port)
-#   ./run stress     also tests/stress.c (churn + oracle + edge cases)
-#   ./run real_val   also bench/real_val.c, the SQuAD + AG-News retrieval benchmark (needs emb/real_data.bin)
+#   ./run                      every test, and .build/libvecindex.so / .a (needs bash and gcc; python3 for the server's
+#                              end-to-end tests)
+#   ./run bench                also bench/bench.c (timings vs the Rust port)
+#   ./run stress               also tests/stress.c (churn + oracle + edge cases)
+#   ./run real_val             also bench/real_val.c, the SQuAD + AG-News retrieval benchmark (needs emb/real_data.bin)
+#   ./run compare DATA [OUT]   only the measurements of docs/benchmarks.md: every library on GloVe-100 through
+#                              py/bench.py, then the 10M and 100M scale runs. DATA from py/prepare_glove.py; results in
+#                              OUT (default bench/results-HOSTNAME), `python3 py/tables.py OUT/glove.jsonl` prints the
+#                              tables. Needs python3 with numpy, faiss-cpu, turbovec, qdrant-edge-py, vecgrid, and LEANN
+#                              in a venv of its own ($PYTHON_LEANN); a library that cannot import is logged and skipped.
+#                              2-3 hours on 2 cores, ~30 GB in /var/tmp ($VECINDEX_SPILL). The memory limit of the
+#                              published numbers: systemd-run --user --scope -p MemoryMax=5.84G ./run compare DATA
+#   ./run all [DATA [OUT]]     everything: every test, then stress, bench and real_val, the cross-built tests
+#                              (tools/cross: the targets whose compiler and qemu are installed), and compare when DATA
+#                              is given
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# every measurement of docs/benchmarks.md, in one go (data dir, results dir): 0, or 1 when a build failed
+compare() {
+    local data out py p job
+    data=$(realpath "$1") || return 1
+    out=$(realpath -m "${2:-bench/results-$(hostname)}")
+    py=${PYTHON:-python3}
+    mkdir -p "$out"
+    lscpu > "$out/cpu.txt" 2>/dev/null || true
+    (
+        cd bench || exit 1
+        gcc -std=gnu99 -O3 -march=native -fPIC -shared -I../src vi.c -o libvi.so -lm -lpthread || exit 1
+        gcc -std=gnu99 -O2 -march=native -I../src scale.c -lm -lpthread -o scale || exit 1
+        log() { echo "=== $* $(date +%T)" | tee -a "$out/run.log"; }
+        # GloVe-100: every library through the same harness (turbovec on 1 thread too: its one-query-per-call column)
+        for job in "vecindex 2" "vecindex-i8 2" "vecindex-2bit 2" "vecindex-2bit-i8 2" "vecindex-1bit 2" "vecindex-1bit-i8 2" \
+                   "vecindex-cascade 2" "vecindex-cascade-i8 2" "turbovec4 1" "turbovec4 2" "turbovec2 1" "turbovec2 2" \
+                   "faiss-ivfpqfs 2" "faiss-hnsw 2" "faiss-ivfflat 2" "qdrant 2" "vecgrid 2" "leann 2"; do
+            set -- $job
+            p=$py; [[ $1 == leann ]] && p=${PYTHON_LEANN:-$py}
+            log "$1 threads=$2"
+            "$p" ../py/bench.py "$data" "$1" --threads "$2" --lat 1000 >> "$out/glove.jsonl" 2>> "$out/run.log" || log "$1 failed"
+        done
+        # scale: synthetic rows streamed through the store (time and memory at every stage)
+        log "scale 10M x 128"
+        TQ_VERBOSE=1 ./scale 10000000 128 --nq 100 --probe 100,200,400,800 > "$out/scale_10m.jsonl" 2>&1 || log "scale 10M failed"
+        log "scale 100M x 96, 2-bit codes + int8 rows"
+        TQ_VERBOSE=1 ./scale 100000000 96 --nq 100 --bits 2 --int8 --probe 1000,2000,4000,8000 --rerank 1000 \
+            > "$out/scale_100m.jsonl" 2>&1 || log "scale 100M failed"
+        log "done: $out"
+    )
+}
+
+mode=${1:-}
+case $mode in
+    compare) [[ -n ${2:-} ]] || { echo "usage: ./run compare DATA_DIR [OUT_DIR]" >&2; exit 2; }
+             compare "$2" "${3:-}"; exit $? ;;
+    all)     more=(stress bench real_val) ;;
+    "")      more=() ;;
+    *)       more=("$mode") ;;
+esac
 
 CC="${CC:-gcc}"
 CFLAGS=(-std=c89 -pedantic -Wall -Wextra -Werror
@@ -26,7 +77,7 @@ ENG=("${QDEPS[@]}" src/ivf.c src/hnsw.c src/engine*.c)
 STORE=("${ENG[@]}" src/store*.c src/hdict.c src/lex.c src/blake3.c src/tq*.c)
 
 fail=0
-for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store ${1:+$1}; do
+for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store ${more[@]+"${more[@]}"}; do
     bin="$OUT/$name"
     src="tests/${name}_test.c"
     def=()
@@ -138,5 +189,13 @@ fi
 # ---- the line protocol, the log, the journal under kill -9, timed snapshots, mTLS names in the log ----
 "$CC" -std=gnu99 -O2 -Wall -Wextra tests/vserv_test.c -o "$OUT/vserv_line_test" \
     && "$OUT/vserv_line_test" "$OUT/vserv" 2>/dev/null || { echo "  ^ vserv line protocol FAILED"; fail=1; }
+
+if [[ $mode == all ]]; then
+    echo; echo "cross-built tests (tools/cross; a target without its compiler and qemu is skipped)"
+    tools/cross || { echo "  ^ cross FAILED"; fail=1; }
+    echo
+    if [[ -n ${2:-} ]]; then compare "$2" "${3:-}" || { echo "  ^ compare FAILED"; fail=1; }
+    else echo "compare: skipped (./run all DATA_DIR runs it; DATA_DIR from py/prepare_glove.py)"; fi
+fi
 
 exit $fail

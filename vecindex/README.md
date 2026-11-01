@@ -18,7 +18,7 @@ library.
 | `include/vecindex.h` | the C API: one opaque handle, plain C types; `libvecindex.so` / `.a` export nothing else |
 | `src/` | the library and the programs: headers, quantizers, indexes, the store, the C API, `vserv.c`, `vfind.c` |
 | `tests/` | one self-test per module (`NAME_test.c`), plus the crash and stress tests and the server's tests |
-| `bench/` | benchmark programs in C and `run_all.sh`, which runs every measurement in [docs/benchmarks.md](docs/benchmarks.md) |
+| `bench/` | benchmark programs in C; `./run compare` runs every measurement in [docs/benchmarks.md](docs/benchmarks.md) |
 | `py/` | all the Python: the harness that times the other libraries, dataset preparation, the server's end-to-end tests |
 | `docs/` | the long-form documentation (list below) |
 | `tools/gen` | regenerates `src/q2.c`, `q4.c`, `q5.c` and their tests from the q1 templates |
@@ -48,6 +48,8 @@ part of `LAYER.c`, which includes it; it is not compiled on its own.
 git clone https://github.com/Gucixdev/holyc && cd holyc/vecindex
 ./run            # self-tests, sanitizer, thread and crash-safety tests, the server end to end (needs bash and gcc)
 ./run stress     # plus the churn / oracle stress tests
+./run all DATA   # everything in one go: every test, stress, bench, real_val, the cross-built tests, then every
+                 # benchmark of docs/benchmarks.md on DATA (py/prepare_glove.py); without DATA, all but those
 tools/cross      # the core tests for aarch64, armv7, riscv64 and s390x under qemu (needs their gcc and qemu-user)
 ```
 

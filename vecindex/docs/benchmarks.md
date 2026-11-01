@@ -28,8 +28,9 @@ probes and re-rank depth for vecindex, nprobe and k_factor for FAISS IVF, efSear
 | turbovec 2-bit | 1.7 s | 69 ms | 30 | 0.5448 | - | - | - | - |
 
 FAISS HNSW32, FAISS IVF4096,Flat and Qdrant are missing here: the cloud container was reclaimed in the middle of
-their runs three times. On the first host they were slower than FAISS IVF-PQ at every recall. `bench/run_all.sh
-DATA_DIR` runs every row of this table and the scale runs in one go on any Linux box, and
+their runs three times. On the first host they were slower than FAISS IVF-PQ at every recall. `./run compare
+DATA_DIR` runs every row of this table and the scale runs in one go on any Linux box (`./run all DATA_DIR` the tests
+before them), and
 `py/tables.py` turns its output into these tables.
 
 turbovec scans every code of every row (no clustering) and stops at recall@10 0.8465: 256 on 2 threads, 37 one query at a time QPS there.
@@ -59,7 +60,7 @@ Against the fastest other method at each recall:
 
 ## Scale: one 2-core box, a 5.84 GiB memory limit
 
-Still on the previous commits (`bench/run_all.sh` re-runs them on the current code):
+Still on the previous commits (`./run compare` re-runs them on the current code):
 
 - Old store (`b0e285e`): f32 rows in anonymous memory, OOM-killed between 7M and 8M rows of 128 dimensions during
   ingest.
