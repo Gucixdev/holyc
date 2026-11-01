@@ -17,17 +17,23 @@
 #                              2-3 hours on 2 cores, ~30 GB in /var/tmp ($VECINDEX_SPILL). The memory limit of the
 #                              published numbers: systemd-run --user --scope -p MemoryMax=5.84G ./run compare DATA
 #   ./run all [DATA [OUT]]     everything: every test, then stress, bench and real_val, the cross-built tests
-#                              (tools/cross: the targets whose compiler and qemu are installed), and compare when DATA
-#                              is given
+#                              (tools/cross: the targets whose compiler and qemu are installed), and compare: on DATA, or
+#                              on $COMPARE_DIR/data (default /var/tmp/vecindex-compare) when that exists, without the
+#                              10M/100M runs (SKIP_SCALE= to keep them). real_val builds its corpus into $COMPARE_DIR/emb
+#                              the first time (needs the venv-leann python with torch; installs datasets+transformers there)
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# everything compare and real_val need (python venvs, GloVe data, embeddings) lives in $CMP, never in the project
+CMP=${COMPARE_DIR:-/var/tmp/vecindex-compare}
 
 # every measurement of docs/benchmarks.md, in one go (data dir, results dir): 0, or 1 when a build failed
 compare() {
     local data out py p job T=${THREADS:-$(nproc)}   # every core by default; THREADS=2 for the published setting
     data=$(realpath "$1") || return 1
     out=$(realpath -m "${2:-bench/results-$(hostname)}")
-    py=${PYTHON:-python3}
+    py=${PYTHON:-$([[ -x $CMP/venv/bin/python ]] && echo "$CMP/venv/bin/python" || echo python3)}
+    local pl=${PYTHON_LEANN:-$([[ -x $CMP/venv-leann/bin/python ]] && echo "$CMP/venv-leann/bin/python" || echo "$py")}
     mkdir -p "$out"
     lscpu > "$out/cpu.txt" 2>/dev/null || true
     (
@@ -40,7 +46,7 @@ compare() {
                    "vecindex-cascade $T" "vecindex-cascade-i8 $T" "turbovec4 1" "turbovec4 $T" "turbovec2 1" "turbovec2 $T" \
                    "faiss-ivfpqfs $T" "faiss-hnsw $T" "faiss-ivfflat $T" "qdrant $T" "vecgrid $T" "leann $T"; do
             set -- $job
-            p=$py; [[ $1 == leann ]] && p=${PYTHON_LEANN:-$py}
+            p=$py; [[ $1 == leann ]] && p=$pl
             log "$1 threads=$2"
             "$p" ../py/bench.py "$data" "$1" --threads "$2" --lat 1000 >> "$out/glove.jsonl" 2>> "$out/run.log" || log "$1 failed"
         done
@@ -126,8 +132,18 @@ for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store ${more
         bench)  src=bench/bench.c; def=(-DBENCH); deps=("${ENG[@]}") ;;
         stress) src=tests/stress.c; def=(-DSTRESS); deps=("${STORE[@]}") ;;
         real_val) src=bench/real_val.c; def=(-DREAL_VAL); deps=("${STORE[@]}")
-                  # needs the real corpus - skip cleanly if it is absent
-                  [[ -f emb/real_data.bin ]] || { echo "real_val: emb/real_data.bin absent (run py/real_gen.py emb) - skipped"; rec real_val skip "no emb/real_data.bin (py/real_gen.py emb)"; continue; } ;;
+                  # the real corpus (SQuAD + AG-News, MiniLM embeddings): built once into $EMB (tmp), skipped if that cannot be done
+                  EMB=${EMB_DIR:-$CMP/emb}
+                  [[ -f emb/real_data.bin ]] && EMB=emb
+                  if [[ ! -f $EMB/real_data.bin && $mode == all ]]; then
+                      rp=${PYTHON_EMB:-$CMP/venv-leann/bin/python}
+                      if [[ -x $rp ]]; then
+                          echo "real_val: building the corpus into $EMB (first run only: downloads SQuAD, AG-News and MiniLM)"
+                          mkdir -p "$EMB" && { "$rp" -c 'import datasets, transformers, torch' 2>/dev/null || "$rp" -m pip install -q datasets "transformers<4.58"; } \
+                              && "$rp" py/real_gen.py "$EMB" > "$OUT/log_real_gen.txt" 2>&1 || echo "real_val: py/real_gen.py failed (see $OUT/log_real_gen.txt)"
+                      fi
+                  fi
+                  [[ -f $EMB/real_data.bin ]] || { echo "real_val: $EMB/real_data.bin absent (py/real_gen.py DIR) - skipped"; rec real_val skip "no real_data.bin (py/real_gen.py DIR)"; continue; } ;;
         *)      echo "run: unknown target '$name'" >&2; exit 2 ;;
     esac
     stale=0
@@ -135,7 +151,7 @@ for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store ${more
     for d in "$src" "${deps[@]}"; do [[ $d -nt $bin ]] && stale=1; done
     (( stale )) && "$CC" "${CFLAGS[@]}" "$src" "${def[@]}" -lm -lpthread -o "$bin"
     runargs=()
-    [[ $name == real_val ]] && runargs=(emb)
+    [[ $name == real_val ]] && runargs=("$EMB")
     if ! "./$bin" "${runargs[@]}" 2>&1 | tee "$OUT/log_$name.txt"; then echo "  ^ $name FAILED"; fail=1; rec "$name" FAIL; else rec "$name" ok "$(notes "$name")"; fi
     echo
 done
@@ -226,9 +242,14 @@ if [[ $mode == all ]]; then
     echo; echo "cross-built tests (tools/cross; a target without its compiler and qemu is skipped)"
     cro=$(tools/cross | tee /dev/stderr) && { rec "cross builds" ok "$(grep -c '^  ok' <<<"$cro") test runs ok on $(grep -c '^==' <<<"$cro") of 4 CPUs (aarch64 armv7 riscv64 s390x), $(grep -c 'skipped' <<<"$cro") skipped"; } || { echo "  ^ cross FAILED"; fail=1; rec "cross builds" FAIL; }
     echo
-    if [[ -n ${2:-} ]]; then
-        if compare "$2" "${3:-}"; then rec compare ok; else echo "  ^ compare FAILED"; fail=1; rec compare FAIL; fi
-    else echo "compare: skipped (./run all DATA_DIR runs it; DATA_DIR from py/prepare_glove.py)"; rec compare skip "no DATA_DIR (py/prepare_glove.py)"; fi
+    data=${2:-}; res=${3:-}
+    if [[ -z $data && -f $CMP/data/meta.json ]]; then   # the GloVe set prepared earlier: use it, without the 10M/100M runs (they want far more RAM and disk)
+        data=$CMP/data; res=${res:-$CMP/results}; SKIP_SCALE=${SKIP_SCALE-1}; export SKIP_SCALE
+        echo "compare: using $data (SKIP_SCALE=$SKIP_SCALE; SKIP_SCALE= ./run all runs the scale tests too)"
+    fi
+    if [[ -n $data ]]; then
+        if compare "$data" "$res"; then rec compare ok; else echo "  ^ compare FAILED"; fail=1; rec compare FAIL; fi
+    else echo "compare: skipped (./run all DATA_DIR runs it; DATA_DIR from py/prepare_glove.py)"; rec compare skip "no DATA_DIR ($CMP/data absent; py/prepare_glove.py)"; fi
 fi
 
 # ---- the table at the very end ----
@@ -242,9 +263,9 @@ for i in "${!RN[@]}"; do
 done
 printf '  %-22s %-6s %5s  %s\n' ---------------------- ------ ----- ----------------
 echo "  $nok ok, $nfail FAILED, $nskip skipped   ($((SECONDS-T0)) s)"
-if [[ $mode == all && -n ${2:-} ]]; then
-    res=$(realpath -m "${3:-bench/results-$(hostname)}")
-    [[ -s $res/glove.jsonl ]] && { echo; echo "=================== compare: GloVe-100 ==================="; python3 py/tables.py "$res/glove.jsonl" || true; }
+if [[ $mode == all && -n ${data:-} ]]; then
+    res=$(realpath -m "${res:-bench/results-$(hostname)}")
+    [[ -s $res/glove.jsonl ]] && { echo; echo "=================== compare: GloVe-100 ==================="; "${PYTHON:-python3}" py/tables.py "$res/glove.jsonl" || true; }
 fi
 
 exit $fail
