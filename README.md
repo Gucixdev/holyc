@@ -1,29 +1,30 @@
 # vecindex
 
-A vector database in C89 for approximate nearest-neighbour search: a TurboQuant-style rotated 4-bit (or 2-bit)
-fast-scan with exact re-scoring, IVF clustering, bit-packed 1-8 bit quantizers, BM25 hybrid search and an optional
-agent-memory layer. It runs inside a program in any language through its C API (`include/vecindex.h`, one shared
-or static library), or as `vserv`, a small epoll server (Unix and TCP sockets, a binary protocol and HTTP/1.1, TLS
-1.2 through the vendored BearSSL). Nothing beyond libc, libm and pthreads (and BearSSL for TLS).
+A vector database in C89 for approximate nearest-neighbour search: a TurboQuant-style rotated 4-bit (or 2-bit, or
+1-bit in front of the 4-bit) fast-scan with exact re-scoring, IVF clustering, bit-packed 1-8 bit quantizers and BM25
+hybrid search. It runs inside a program in any language through its C API (`include/vecindex.h`, one shared or
+static library), or as `vserv`, a small epoll server (Unix and TCP sockets, a binary protocol and HTTP/1.1, TLS 1.2
+through the vendored BearSSL). Nothing beyond libc, libm and pthreads (and BearSSL for TLS).
 
-It used to live in [holyc](https://github.com/Gucixdev/holyc) as `ragdb/`; its history came along.
+It used to live in [holyc](https://github.com/Gucixdev/holyc) as `ragdb/`; its history came along. The note database
+and agent memory that grew on top of it went back to holyc as `agent_launcher/`, which uses vecindex as a library.
 
 ## Layout
 
 | path | what is there |
 |---|---|
 | `include/vecindex.h` | the C API: one opaque handle, plain C types; `libvecindex.so` / `.a` export nothing else |
-| `src/` | the library and the server: headers, quantizers, indexes, the store, vecdb, mem.c, `vserv.c`, `vecdb_cli.c` |
-| `tests/` | one self-test per module (`NAME_test.c`), plus the crash, fuzz, thread and stress tests |
+| `src/` | the library and the programs: headers, quantizers, indexes, the store, the C API, `vserv.c`, `vfind.c` |
+| `tests/` | one self-test per module (`NAME_test.c`), plus the crash and stress tests and the server's tests |
 | `bench/` | benchmark programs in C and `run_all.sh`, which runs every measurement in [docs/benchmarks.md](docs/benchmarks.md) |
-| `py/` | all the Python: the harness that times the other libraries, dataset preparation, the embedding and rerank servers, the server's end-to-end tests |
+| `py/` | all the Python: the harness that times the other libraries, dataset preparation, the server's end-to-end tests |
 | `docs/` | the long-form documentation (list below) |
 | `tools/gen` | regenerates `src/q2.c`, `q4.c`, `q5.c` and their tests from the q1 templates |
 | `third_party/bearssl/` | BearSSL 0.6, MIT, unmodified |
 | `emb/` | generated retrieval benchmark data, not committed |
 
-Everything is one translation unit: a program includes the `.c` file of the layer it needs (`store.c`, `vecdb.c`,
-`mem.c`) and compiles once with `-Isrc`. `./run` builds each test into `.build/`. A file named `LAYER_part.c` is a
+Everything is one translation unit: a program includes the `.c` file of the layer it needs (`store.c`, or
+`engine.c` for the quantizers alone) and compiles once with `-Isrc`. `./run` builds each test into `.build/`. A file named `LAYER_part.c` is a
 part of `LAYER.c`, which includes it; it is not compiled on its own.
 
 | `src/` files | what they hold |
@@ -34,9 +35,6 @@ part of `LAYER.c`, which includes it; it is not compiled on its own.
 | `tq.c`, `tq_scan.c`, `tq_add.c` | the rotated 4-bit / 2-bit fast-scan index: build, scan, rows added after the build |
 | `hdict.c`, `lex.c` | hash dictionaries; the term dictionary, postings and BM25 |
 | `store.c`, `store_tune.c`, `store_live.c`, `store_search.c`, `store_text.c`, `store_disk.c` | the vector store: rows, ids, build; self-tuning; live mode; search; texts, id ranges and hybrid search; the file and its journal |
-| `vecdb.c`, `vecdb_embed.c`, `vecdb_search.c`, `vecdb_graph.c`, `vecdb_disk.c`, `vecdb_cli.c` | the note database: notes, links, tags; embedding servers; hybrid search; MCTS and the query language; files; the command line |
-| `mem.c`, `mem_rules.c`, `mem_disk.c` | agent memory: lifetime and tiers; the rule engine; its files |
-| `rerank.c` | a cross-encoder second pass over vecdb's hybrid search |
 | `vecindex.c` | the C API of `include/vecindex.h` over the store |
 | `vfind.c` | search a store's texts as you type, like fzf; Enter opens the whole document |
 | `vserv.c`, `vserv_proto.c`, `vserv_text.c`, `vserv_log.c`, `vserv_pem.c` | the server: sockets, workers, TLS; the line, binary and HTTP protocols; texts and JSON; the log; certificates and keys |
@@ -45,7 +43,7 @@ part of `LAYER.c`, which includes it; it is not compiled on its own.
 
 ```sh
 git clone https://github.com/Gucixdev/vecindex && cd vecindex
-./run            # self-tests, fuzzers, thread and crash-safety tests, the server end to end (needs bash and gcc)
+./run            # self-tests, sanitizer, thread and crash-safety tests, the server end to end (needs bash and gcc)
 ./run stress     # plus the churn / oracle stress tests
 tools/cross      # the core tests for aarch64, armv7, riscv64 and s390x under qemu (needs their gcc and qemu-user)
 ```
@@ -118,18 +116,17 @@ section; `./run`, `./run stress`, `./run bench` and `./run real_val` reproduce t
 
 | area | status | evidence |
 |---|---|---|
-| Crash safety | atomic per-file + cross-file (generation-suffix) writes; the store's journal and background snapshots | `tests/vcrash.c`/`tests/vcrash2.c`, 25-90 rounds, always consistent; `tests/scrash.c` kills a store writer (and in every other round its snapshot child) at random moments: every synced row there exactly once |
+| Crash safety | the store's journal and background snapshots | `tests/scrash.c` kills a store writer (and in every other round its snapshot child) at random moments: every synced row there exactly once |
 | CPUs | x86-64 (AVX-512, AVX2 or neither), ARM 64- and 32-bit (NEON), RISC-V 64, s390x (big-endian); 32-bit builds keep 64-bit file offsets | `tests/simd_test.c` checks every SIMD kernel against a plain reference: in `./run` for this CPU and, on x86-64, for an AVX2-only and a no-SIMD build. `tools/cross` builds the core tests for aarch64, armv7, riscv64 and s390x and runs them under qemu; it found a 32-bit bug that broke snapshots, fixed. Speed on real ARM hardware: not measured |
 | C API | `include/vecindex.h`, only `vi_*` exported | `tests/api_test.c` against the shared and the static library; Python, Go and Rust bindings run by hand ([docs/api.md](docs/api.md)) |
-| Concurrency | one rwlock per layer, TSan-clean, the store's live thread too | `tests/vthreads.c`/`tests/mthreads.c` and the store self-test under TSan in `./run` (it found two real races in live mode, fixed) |
-| Fuzzing | 3 fuzzers (parser, rule engine, malformed input) | `tests/vfuzz.c`/`tests/mrfuzz.c` - the rule-parser one found and fixed a real stack-overflow crash on its first run |
-| Adversarial stress | invariant checks, not just "doesn't crash" | `tests/stress.c`/`tests/mstress.c` - found and fixed 5 bugs this way |
+| Concurrency | a readers-writer lock, TSan-clean, the store's live thread too | the store self-test under TSan in `./run` (it found two real races in live mode, fixed) |
+| Adversarial stress | invariant checks, not just "doesn't crash" | `tests/stress.c` (churn against an oracle, edge cases) in `./run stress` |
+| Memory errors | the store self-test under ASan and UBSan | in `./run`; not yet run |
 | Static analysis | clang analyzer + clang-tidy across the core, findings triaged by hand | 2 real (unreachable) issues fixed, the rest traced and confirmed false positives |
-| Scale | measured to the breaking point | store: 100M vectors (d=96, 2-bit + int8) ingested, built and searched in a 5.84 GiB cgroup on 2 cores; the old store was OOM-killed between 7M and 8M. vecdb: 8M notes end to end where the old code died at ~4M |
+| Scale | measured to the breaking point | store: 100M vectors (d=96, 2-bit + int8) ingested, built and searched in a 5.84 GiB cgroup on 2 cores; the old store was OOM-killed between 7M and 8M |
 | Memory tiers | the scanned codes hot in RAM, the rows cold on the disk and read only for re-scored candidates; `vi_set_memory` / `vserv -m` lock the hot part (or the rows too) with mlock | tests written, not yet run: `tests/store_test.c` checks the sizes and, through VmLck, what gets locked and released; `tests/vserv_test.c` the stats fields and `-m` |
 | Server | `src/vserv.c`: epoll, Unix + TCP, a line protocol + binary + HTTP/1.1, TLS 1.2 (BearSSL), mutual TLS; the journal flushed every second, background snapshots; a log of every write with its peer (uid/pid, address, certificate name) instead of users and roles | `py/vserv_test.py` (29 checks), `py/vserv_tls_test.py` (22 checks) and `tests/vserv_test.c` (kill -9 against the journal, timed snapshots, the log, mTLS names) in `./run` |
 | Retrieval quality | a SQuAD-based benchmark, not hand-labeled questions | `bench/real_val.c`: gold@10 up to 85.6%, against an 87.1% ceiling for this embedder |
-| Reranking | a cross-encoder second pass with a measured effect | `src/rerank.c`: MRR 0.751 -> 0.887, gold@1 62.1% -> 81.5% on the subset where it has room to help |
 | Independent review | **not done** | every test here was written and run by the author of the code |
 | Tenants | a store file per tenant, opened on first use: in the library (`vi_dir_*`) or the server (`vserv DIR`, where `-U` binds a client certificate to its tenant) | tests written, not yet run: `tests/api_test.c` (`vi_dir_*`), `tests/vserv_test.c` (isolation, the three protocols, the log, a restart, `-U` with a tenant's certificate) |
 | Transactions | write batches: searches see all or none of one, a crash leaves all or none (one CRC-checked journal record), commit with fsync on request (`vi_batch_*`, `begin`/`commit` in `vserv`) | tests written, not yet run: `tests/store_test.c` (refused and aborted batches, a torn and a damaged batch in the journal, a reader that must never see half of one, durable commits from 4 threads), `tests/api_test.c`, `tests/vserv_test.c` (kill -9 right after `commit sync`) |
@@ -141,9 +138,9 @@ section; `./run`, `./run stress`, `./run bench` and `./run real_val` reproduce t
 - [docs/benchmarks.md](docs/benchmarks.md) - GloVe-100 against FAISS and turbovec (the Qdrant runs never finished); scale; the priority table
   of optimisations; bottlenecks; how to reproduce.
 - [docs/server.md](docs/server.md) - `vserv`: sockets, protocols, TLS, live mode.
-- [docs/vecdb.md](docs/vecdb.md) - the note database on top of the store: hybrid search, wikilinks, MCTS
-  exploration, embeddings, reranking, durability, self-tuning, live ingest, scale.
-- [docs/mem.md](docs/mem.md) - mem.c: lifetime, metamemory, event -> fact -> concept, a rule engine.
+- [docs/store.md](docs/store.md) - the store: the TurboQuant-style scan, IVF, self-tuning, live ingest, rows past
+  RAM, stemming, the SQuAD retrieval benchmark.
+- [docs/roadmap.md](docs/roadmap.md) - what is done, what is written but not run, what is open.
 - [docs/comparison.md](docs/comparison.md) - how this compares to mainstream RAG and vector-DB stacks.
 - [docs/quantizers.txt](docs/quantizers.txt) - the bit-packed quantizer files q1-q5, qmix, q4fs, ivf, hnsw, engine.
 

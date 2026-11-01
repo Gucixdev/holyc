@@ -1,5 +1,5 @@
 /* vcmp.c - vecindex store vs another index on the SAME vectors (e.g. turbovec, see py/vcmp_turbovec.py).
- *   vcmp dump wiki.rec OUT_DIR     embed the articles with vecdb_embed -> OUT_DIR/{data,queries,truth}.bin
+ *   vcmp dump wiki.rec OUT_DIR     embed the articles (hashed, embed_ below) -> OUT_DIR/{data,queries,truth}.bin
  *   vcmp run  OUT_DIR              build the store on data.bin, report build time, recall@10, ms/query
  * data.bin: N x DIM f32 (unit); queries.bin: NQ x DIM (perturbed corpus rows); truth.bin: NQ x 10 i32 exact top-10. */
 #include "store.c"
@@ -13,7 +13,7 @@ static double now_(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t)
 
 static void embed_(const char *t, i32 n, f32 *out)
 {
-    /* same recipe as vecdb.c: signed feature hashing of words + bigrams */
+    /* signed feature hashing of words + bigrams */
     i32 i = 0, d; f32 nrm = 0.0f; u64 prev = 0; i32 have = 0;
     for (d = 0; d < DIM; ++d) out[d] = 0.0f;
     while (i < n) {

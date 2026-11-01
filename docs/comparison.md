@@ -90,20 +90,10 @@ Not covered: ScaNN, Annoy, NMSLIB, Azure AI Search, turbopuffer, Typesense, Marq
   the process may actually use (affinity and cgroup quota) and runs background work at a lower priority. Durability
   is a journal plus background snapshots rather than replication; the server speaks a line protocol next to binary and
   HTTP.
-- **mem.c's memory architecture is not something Pinecone/Weaviate/Qdrant/Milvus have at all** -
-  they are ANN indexes plus a metadata filter. Decay/half-life, metamemory (a real "I don't
-  know"), event->fact->concept promotion via a deterministic rule engine is usually hand-rolled
-  today with an LLM call doing the summarising (Mem0, Letta/MemGPT-style agent memory). Doing it
-  with zero LLM calls (a small forward-chaining s-expression interpreter over real vector
-  similarity) is a genuine, unusual design choice - cheaper, deterministic, and testable in a way
-  an LLM-summarised memory store is not.
-- **The graph (wikilinks/backlinks/tags/ghost nodes, MCTS bridge-note exploration) is native**,
-  not bolted on as metadata filters - most vector DBs have no equivalent.
-- **Engineering rigor unusual for a solo/embedded project**: atomic cross-file writes (the
-  generation-suffix fix), TSan-clean concurrency at two layers, adversarial stress tests with real
-  invariants that found real bugs (not just "does it crash" fuzzing), a rule-parser fuzzer that
-  found a real stack-overflow crash on its first run. This is closer to how a production index
-  engine gets built than a typical tutorial RAG project.
+- **Engineering rigor unusual for a solo/embedded project**: kill -9 tests against the journal and the background
+  snapshots, TSan-clean concurrency including the live indexing thread, adversarial stress tests with real invariants
+  (not just "does it crash"), every SIMD kernel checked against a scalar reference and cross-built for four other CPU
+  families under qemu. This is closer to how a production index engine gets built than a typical tutorial RAG project.
 - **Embedded, zero dependencies, single C89 file per layer** - and an optional server (`src/vserv.c`,
   2.4 MB idle, TLS through vendored BearSSL) when it has to sit behind a socket. A real advantage
   where self-hosted/offline/small-footprint matters, which a hosted vector DB cannot give you.
@@ -111,7 +101,7 @@ Not covered: ScaNN, Annoy, NMSLIB, Azure AI Search, turbopuffer, Typesense, Marq
 ## Where it is behind
 
 - **Scale.** Single-node only - no sharding/replication. Measured, not guessed: 100M vectors on one
-  2-core box with a 5.84 GiB memory limit (compact mode), 8M notes through the whole vecdb layer;
+  2-core box with a 5.84 GiB memory limit (compact mode);
   past one machine's disk there is nothing. Milvus/Qdrant/Pinecone scale across machines, to
   billions of vectors.
 - **No graph index.** IVF only, where most of the field uses HNSW or Vamana. FAISS HNSW and Qdrant never finished on
@@ -128,16 +118,10 @@ Not covered: ScaNN, Annoy, NMSLIB, Azure AI Search, turbopuffer, Typesense, Marq
   turbovec and VecGrid.
 - **Bindings and filters.** A C ABI and three wire protocols, no packages for other languages (LanceDB, zvec and
   USearch ship several). Filtering is one 64-bit tag per row (`vi_search_tagged`), not arbitrary metadata or SQL.
-- **Embedding quality.** The default is `multilingual-e5-small` (118M params) - mid-tier. Larger
-  open models (e5-mistral-7b, NV-Embed) and commercial APIs (OpenAI text-embedding-3-large,
-  Voyage, Cohere) score meaningfully higher on standard retrieval benchmarks. `bench/real_val.c` ([vecdb.md](vecdb.md))
-  gives a real number for THIS repo on a real SQuAD-based task (gold@10 up to 85.6%, near the
-  87.1% ceiling this specific embedder allows) - not a claim of beating stronger embedders, a
-  measurement of how close to lossless the ANN index itself is relative to whatever embedder
-  it's given.
-- **One reranking model.** `src/rerank.c`/`py/rerank_srv.py` wire up `cross-encoder/ms-marco-MiniLM-L-6-v2`
-  (English only), measured at +19.4 points gold@1 on the SQuAD subset where it has room to help ([vecdb.md](vecdb.md)).
-  A multilingual one (`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` or similar) is not tested here.
+- **No models.** vecindex stores the vectors it is given and re-scores with them; embedding and cross-encoder
+  re-ranking are the caller's, where Weaviate, Chroma, Milvus and others can call a model for you. `bench/real_val.c`
+  ([store.md](store.md)) measures the index on a SQuAD-based task with `all-MiniLM-L6-v2`: gold@10 up to 85.6%, near
+  the 87.1% ceiling that embedder allows - how close to lossless the index is, not a claim about embedders.
 - **No users and roles, replication or HA.** Access is the operating system's and TLS's business and accountability is
   the log; a standby is a copy of the file and its journal. Tenants are a store file each, in the library
   (`vi_dir_*`) or the server, and a batch of writes goes in all or none - both written and compiled, not yet run. A
@@ -151,9 +135,7 @@ Not covered: ScaNN, Annoy, NMSLIB, Azure AI Search, turbopuffer, Typesense, Marq
 loads far faster than FAISS IVF-PQ and searches faster at equal recall on two hosts, runs on CPUs most of the field
 does not target, and keeps texts and BM25 next to the vectors in plain C. It does not compete with Milvus, Qdrant or
 Pinecone across machines, has no graph index, and has not yet been measured against Qdrant's TurboQuant or the RaBitQ
-engines. As a *memory layer for an agent* (event lifetime, decay, metamemory, deterministic consolidation), it does
-something none of the mainstream RAG/vector-DB products offer natively - which is the more interesting half of this
-project, not "does it beat Qdrant."
+engines.
 
 ## Sources
 

@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 # run - build and test vecindex. Every module in src/ has its self-test in tests/NAME_test.c: the bit-packed
-# quantizers (q1-q5 + qmix), the IVF coarse router + HNSW graph router, the 4-bit fast-scan, the adaptive engine,
-# the store, vecdb and mem.c. Then the vecdb command line, the fuzzers, the thread and crash-safety tests and the
-# server end to end. Each binary goes to .build/ and is rebuilt only when its source or a dependency changed; it
-# is compiled with -Werror and a non-zero exit fails the run.
+# quantizers (q1-q5 + qmix), the IVF coarse router + HNSW graph router, the 4-bit fast-scan, the adaptive engine
+# and the store. Then the SIMD kernels per instruction set, the C API, the store under the sanitizers and kill -9,
+# the server end to end and vfind. Each binary goes to .build/ and is rebuilt only when its source or a dependency
+# changed; it is compiled with -Werror and a non-zero exit fails the run.
 #   ./run            every test, and .build/libvecindex.so / .a (needs bash and gcc; python3 for the server's
 #                    end-to-end tests)
-#   ./run bench      also bench/bench.c (timings vs the Rust port) and bench/mbench.c (mem.c timings, including the
-#                    mem_consolidate cost-vs-N sweep - takes a couple of minutes)
-#   ./run stress     also tests/stress.c (churn + oracle + edge cases) and tests/mstress.c (mem.c churn + real
-#                    invariant checks, one layer up)
+#   ./run bench      also bench/bench.c (timings vs the Rust port)
+#   ./run stress     also tests/stress.c (churn + oracle + edge cases)
 #   ./run real_val   also bench/real_val.c, the SQuAD + AG-News retrieval benchmark (needs emb/real_data.bin)
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -25,11 +23,10 @@ tools/gen --check
 
 QDEPS=(src/q1.c src/q2.c src/q3.c src/q4.c src/q5.c src/qmix.c src/q4fs.c src/vsimd.h)
 ENG=("${QDEPS[@]}" src/ivf.c src/hnsw.c src/engine*.c)
-STORE=("${ENG[@]}" src/store*.c src/hdict.c src/tq*.c)
-VECDB=("${STORE[@]}" src/lex.c src/vecdb*.c)
+STORE=("${ENG[@]}" src/store*.c src/hdict.c src/lex.c src/tq*.c)
 
 fail=0
-for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store vecdb mem ${1:+$1}; do
+for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store ${1:+$1}; do
     bin="$OUT/$name"
     src="tests/${name}_test.c"
     def=()
@@ -44,8 +41,6 @@ for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store vecdb 
         simd)   deps=(src/tq*.c src/vsimd.h src/base.h) ;;
         engine) deps=("${ENG[@]}"); def=(-DENGINE_SERIALIZE) ;;   # exercise the .vxi round-trip in the test
         store)  deps=("${STORE[@]}") ;;
-        vecdb)  deps=("${VECDB[@]}") ;;
-        mem)    deps=("${VECDB[@]}" src/mem*.c) ;;
         bench)  src=bench/bench.c; def=(-DBENCH); deps=("${ENG[@]}") ;;
         stress) src=tests/stress.c; def=(-DSTRESS); deps=("${STORE[@]}") ;;
         real_val) src=bench/real_val.c; def=(-DREAL_VAL); deps=("${STORE[@]}")
@@ -93,48 +88,6 @@ fi
     && "./$OUT/api_test_a" > /dev/null || { echo "  ^ C API (static) FAILED"; fail=1; }
 echo
 
-# ---- vecdb command line, end to end (built-in embedder, no model server) ----
-echo "vecdb cli end-to-end"
-cli="$OUT/vecdb_cli"
-"$CC" "${CFLAGS[@]}" src/vecdb_cli.c -lm -lpthread -o "$cli" || fail=1
-T=$(mktemp -d)
-mkdir "$T/notes"
-printf 'Physics of light. See [[Quantum]] and [[Optics]]. #physics\n' > "$T/notes/light.md"
-printf 'Quantum mechanics and entanglement. Links: [[Light]]. #physics/quantum\n' > "$T/notes/quantum.md"
-printf 'Cooking pasta with tomato. #food\n' > "$T/notes/pasta.md"
-step() { local want="$1"; shift; local out; out=$("$@" 2>&1 || true); if grep -q -- "$want" <<<"$out"; then echo "  ok   $want"; else echo "  FAIL expected '$want' from: $*"; echo "$out" | head -5; fail=1; fi; }
-DB="$T/x.vdb"
-step "3 notes" "$cli" "$DB" index "$T/notes"
-step "quantum.md" "$cli" "$DB" search "entanglement #physics"
-step "light.md" "$cli" "$DB" backlinks quantum
-step "optics" "$cli" "$DB" ghosts
-step "#physics/quantum" "$cli" "$DB" tags
-step "pasta.md" "$cli" "$DB" tag food
-printf 'Cooking risotto.\n' > "$T/notes/pasta.md"; rm "$T/notes/light.md"
-step "1 notes removed" "$cli" "$DB" update "$T/notes"
-step "2 notes" "$cli" "$DB" stats
-step "risotto\|pasta" "$cli" "$DB" search risotto
-step "removed quantum" "$cli" "$DB" remove quantum
-step "1 notes" "$cli" "$DB" stats
-step "not a directory" "$cli" "$DB" index "$T/nope"
-rm -rf "$T"
-
-# ---- random input under the address/undefined-behaviour sanitizers ----
-echo "vecdb fuzz"
-if "$CC" -std=gnu99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Isrc tests/vfuzz.c -lm -lpthread -o "$OUT/vfuzz" 2>/dev/null; then
-    "./$OUT/vfuzz" 3000 || { echo "  ^ fuzz FAILED"; fail=1; }
-else
-    echo "  (sanitizers unavailable - skipped)"
-fi
-
-# ---- readers + a writer on one database, under the thread sanitizer ----
-echo "vecdb threads"
-if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -Isrc tests/vthreads.c -lm -lpthread -o "$OUT/vthreads" 2>/dev/null; then
-    "./$OUT/vthreads" || { echo "  ^ thread test FAILED"; fail=1; }
-else
-    echo "  (thread sanitizer unavailable - skipped)"
-fi
-
 # ---- the store's live mode (its own indexing / rebuild thread beside adders and searchers), under the thread sanitizer ----
 echo "store threads (live mode)"
 if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -march=native -Isrc tests/store_test.c -lm -lpthread -o "$OUT/store_tsan" 2>/dev/null; then
@@ -144,44 +97,19 @@ else
     echo "  (thread sanitizer unavailable - skipped)"
 fi
 
-# ---- crash safety: kill -9 a writer at random moments, the database must reload with everything it synced ----
-echo "vecdb crash test"
-"$CC" -std=gnu99 -O2 -march=native -Isrc tests/vcrash.c -lm -lpthread -o "$OUT/vcrash" && "./$OUT/vcrash" 25 || { echo "  ^ crash test FAILED"; fail=1; }
-
-# ---- crash safety: same, but re-indexing an EXISTING path from scratch (vecdb_new, no load) - the one place a
-# ---- full file replacement happens, so it needs its own generation-suffixed-filename atomicity (VecDB.bodygen) ----
-echo "vecdb crash test 2 (re-index over an existing database)"
-"$CC" -std=gnu99 -O2 -march=native -Isrc tests/vcrash2.c -lm -lpthread -o "$OUT/vcrash2" && "./$OUT/vcrash2" 20 || { echo "  ^ crash test 2 FAILED"; fail=1; }
+# ---- the store self-test again under the address and undefined-behaviour sanitizers ----
+echo "store under ASan/UBSan"
+if "$CC" -std=gnu99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -march=native -Isrc tests/store_test.c -lm -lpthread -o "$OUT/store_asan" 2>/dev/null; then
+    if "./$OUT/store_asan" > /dev/null; then echo "  ok   no memory error reported"
+    else echo "  ^ store under ASan/UBSan FAILED"; fail=1; fi
+else
+    echo "  (sanitizers unavailable - skipped)"
+fi
 
 # ---- crash safety for the store itself, with background snapshots running: kill -9 the writer (and in every other
 # ---- round its snapshot child too) at random moments; every synced row must be there exactly once ----
 echo "store crash test (journal + background snapshots)"
 "$CC" -std=gnu99 -O2 -march=native -Isrc tests/scrash.c -lm -lpthread -o "$OUT/scrash" && "./$OUT/scrash" 20 || { echo "  ^ store crash test FAILED"; fail=1; }
-
-# ---- readers + a writer on one Mem (mem.c's own rwlock, one layer above vecdb's), under the thread sanitizer ----
-echo "mem threads"
-if "$CC" -std=gnu99 -g -O1 -fsanitize=thread -Isrc tests/mthreads.c -lm -lpthread -o "$OUT/mthreads" 2>/dev/null; then
-    "./$OUT/mthreads" || { echo "  ^ mem thread test FAILED"; fail=1; }
-else
-    echo "  (thread sanitizer unavailable - skipped)"
-fi
-
-# ---- crash safety for mem.c's own files (PATH.mem, PATH.mem.cold), same discipline as vcrash.c/vcrash2.c ----
-echo "mem crash test"
-"$CC" -std=gnu99 -O2 -march=native -Isrc tests/mcrash.c -lm -lpthread -o "$OUT/mcrash" && "./$OUT/mcrash" 20 || { echo "  ^ mem crash test FAILED"; fail=1; }
-
-# ---- optional cross-encoder rerank pass over vecdb's hybrid search (src/rerank.c + py/rerank_srv.py) -
-# ---- needs a torch/transformers-capable python3; skips cleanly if none is found, same as real_val ----
-echo "rerank demo"
-"$CC" "${CFLAGS[@]}" tests/rerank_test.c -lm -lpthread -o "$OUT/rerank_demo" && "./$OUT/rerank_demo" || { echo "  ^ rerank demo FAILED"; fail=1; }
-
-# ---- random input against the rule parser/evaluator (mirrors vfuzz.c one layer up) ----
-echo "mem rule parser fuzz"
-if "$CC" -std=gnu99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -Isrc tests/mrfuzz.c -lm -lpthread -o "$OUT/mrfuzz" 2>/dev/null; then
-    "./$OUT/mrfuzz" 5000 || { echo "  ^ mem rule fuzz FAILED"; fail=1; }
-else
-    echo "  (sanitizers unavailable - skipped)"
-fi
 
 # ---- the socket server: both protocols, Unix + TCP sockets, bad input, pipelining, concurrency, restart ----
 # ---- (TLS through the vendored BearSSL: built once into $OUT/libbearssl.a) ----
@@ -210,20 +138,5 @@ fi
 # ---- the line protocol, the log, the journal under kill -9, timed snapshots, mTLS names in the log ----
 "$CC" -std=gnu99 -O2 -Wall -Wextra tests/vserv_test.c -o "$OUT/vserv_line_test" \
     && "$OUT/vserv_line_test" "$OUT/vserv" 2>/dev/null || { echo "  ^ vserv line protocol FAILED"; fail=1; }
-
-# ---- mem.c timings (mirrors bench.c one layer up): ingest/search/touch/archive/recall/save/load,
-# ---- and the mem_consolidate cost-vs-N sweep that is the one gap README calls out ----
-if [[ "${1:-}" == bench ]]; then
-    echo
-    echo "mem bench"
-    "$CC" -std=gnu99 -O2 -march=native -Isrc bench/mbench.c -lm -lpthread -o "$OUT/mbench" && "./$OUT/mbench" || { echo "  ^ mem bench FAILED"; fail=1; }
-fi
-
-# ---- mem.c adversarial churn + real invariant checks (mirrors stress.c one layer up) ----
-if [[ "${1:-}" == stress ]]; then
-    echo
-    echo "mem stress"
-    "$CC" "${CFLAGS[@]}" tests/mstress.c -lm -lpthread -o "$OUT/mstress" && "./$OUT/mstress" || { echo "  ^ mem stress FAILED"; fail=1; }
-fi
 
 exit $fail

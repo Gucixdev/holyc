@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn a Wikipedia XML dump into the record stream vbench_wiki reads.
+"""Turn a Wikipedia XML dump into the record stream bench/vcmp.c reads.
 
   bzcat simplewiki.xml.bz2 | python3 wikiprep.py > wiki.rec  [max_articles]
 

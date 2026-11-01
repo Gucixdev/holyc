@@ -175,7 +175,7 @@ too); the Unix socket takes TLS or, for local tools, plaintext (`-T`: TLS only).
 Lake host of [benchmarks.md](benchmarks.md) (2k rows; the Python clients are the bottleneck). `-L` puts the store in
 live mode (added rows are indexed by the server's own thread and the index is rebuilt in the background as it ages -
 no `/build` calls) and `-r 0.95` keeps recall@10 at 0.95 (the probes tuned on the queries it answers); see "Live
-ingest" in [vecdb.md](vecdb.md).
+ingest" in [store.md](store.md).
 
 ## Tests
 

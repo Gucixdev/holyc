@@ -1272,7 +1272,7 @@ static i32 store_live_row_(const RagStore *s, i64 doc_id)
     return r;
 }
 /* borrowed pointer to the live row's vector (valid until the next build/compact - adds never move rows; no
- * lock - for single-threaded callers such as vecdb), NULL if the id is not live */
+ * lock - for callers that hold their own lock), NULL if the id is not live */
 const f32 *store_vec_ptr(const RagStore *s, i64 doc_id)
 {
     i32 r;

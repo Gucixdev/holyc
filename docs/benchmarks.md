@@ -29,7 +29,7 @@ probes and re-rank depth for vecindex, nprobe and k_factor for FAISS IVF, efSear
 
 FAISS HNSW32, FAISS IVF4096,Flat and Qdrant are missing here: the cloud container was reclaimed in the middle of
 their runs three times. On the first host they were slower than FAISS IVF-PQ at every recall. `bench/run_all.sh
-DATA_DIR` runs every row of this table, the scale runs and vecdb's 8M notes in one go on any Linux box, and
+DATA_DIR` runs every row of this table and the scale runs in one go on any Linux box, and
 `py/tables.py` turns its output into these tables.
 
 turbovec scans every code of every row (no clustering) and stops at recall@10 0.8465: 256 on 2 threads, 37 one query at a time QPS there.
@@ -67,8 +67,6 @@ Still on the previous commits (`bench/run_all.sh` re-runs them on the current co
 - 100M x 96, 2-bit codes + int8 rows (`5125fd9`, first host): ingest 195 s at 289 MB anonymous memory (10.8 GB of
   rows in the spill file), build 225 s (train 32, assign 131, encode 62), 3.0 GB RAM after; recall@10 0.849 / 0.888
   / 0.919 / 0.949 at 1000 / 2000 / 4000 / 8000 probes, 30.6 / 39.6 / 22.7 / 10.9 QPS on one thread.
-- vecdb, 8M notes (`10bb6d8`, first host): ingest 146 s, build 19 s, 3.6 GB anonymous memory, hybrid search 7.7
-  ms/query, MCTS explore 53 ms/query. The old code died at ~4M.
 
 ## Priority table: what gave the most, what gave the least
 
@@ -82,15 +80,14 @@ Ordered by what the change bought, biggest first.
 | 3 | `src/tq.c`: rotation + 4-bit fast-scan + exact re-score, replacing the IVF/q4 auto-tuner | 201k Wikipedia vectors: recall@10 76% -> 100%, build 70 s -> 1.1 s | `bench/vcmp.c` (12-core box) |
 | 4 | live mode: rows added after a build coded into their closest clusters, instead of waiting in the exact-scan tail | 40% of GloVe added after the build: 96 -> 5,393 QPS at recall@10 ~0.96 (56x) | `bench/live.c` |
 | 5 | a live rebuild running beside the indexing, catching up on new rows before the swap | rows streaming in at 50k/s, query p50 / p99 during the rebuild: 3.57 / 9.22 -> 0.68 / 4.76 ms | `bench/live.c` |
-| 6 | this round (`5621db4`) as a whole: rows 7, 8 and 14 | old and new code side by side on one host: not measured yet | `py/bench.py` |
+| 6 | this round (`5621db4`) as a whole: rows 7, 8 and 13 | old and new code side by side on one host: not measured yet | `py/bench.py` |
 | 7 | probes on int8 + VNNI, a reservoir instead of a heap, radix sort, prefetch two blocks ahead | one query, same probes: 390 -> 194 us (4-bit, probe 96), 378 -> 169 us (2-bit, probe 128); batch of 10k on 2 threads: 6.9k -> 11.3k and 6.7k -> 13.6k QPS | profiler, first host |
 | 8 | rows placed by their 4 closest top cells, 256 sample rows a centroid, one polish round | rows in the wrong cluster 24.4% -> 4.5%; true top 10 inside the 96 closest clusters 87.3% -> 90.0% of queries, 10% fewer rows scanned; build 2.0 -> 4.0 s | profiler, first host |
 | 9 | batch search, cluster by cluster | QPS at recall ~0.97 on 2 threads: 2183 -> 3194 | `py/bench.py`, first host |
 | 10 | 2-bit codes + int8 rows | 471 -> 150 B/vec for 1.5 recall points at the same probe | `py/bench.py`, first host |
-| 11 | vecdb: varint postings, 12-byte hash slots, a slab | 669 -> 392 B a note; 4M -> 8M notes in the cgroup | `bench/vbench1m.c` |
-| 12 | threaded build: two-level k-means, AVX-512 scoring, encoding per block range | 1M rows: 7.6 -> 2.25 s | `bench/scale.c` |
-| 13 | AVX-512 scan kernel with the threshold test in registers, quickselect for the probes, rows prefetched for re-scoring | 1 thread: 344 -> 408 QPS at nprobe 96, 176 -> 245 at nprobe 192 (same recall) | `py/bench.py`, first host |
-| 14 | 8 queries per pass over the int8 centroids (batch) | probes cost a batched query 9 us (27-31 us for a query alone) | profiler, first host |
+| 11 | threaded build: two-level k-means, AVX-512 scoring, encoding per block range | 1M rows: 7.6 -> 2.25 s | `bench/scale.c` |
+| 12 | AVX-512 scan kernel with the threshold test in registers, quickselect for the probes, rows prefetched for re-scoring | 1 thread: 344 -> 408 QPS at nprobe 96, 176 -> 245 at nprobe 192 (same recall) | `py/bench.py`, first host |
+| 13 | 8 queries per pass over the int8 centroids (batch) | probes cost a batched query 9 us (27-31 us for a query alone) | profiler, first host |
 
 What gave the least (measured, then dropped): a second polish round (+0.1 recall points for +0.85 s of build), 8 top
 cells instead of 4 (+0.15 points, +32% build), checking each centroid's nearest neighbours after the assignment (no
@@ -122,7 +119,6 @@ python3 py/bench.py DATA_DIR vecindex --threads 2 --lat 1000          # also vec
                                                                          # qdrant, turbovec4, turbovec2
 (cd bench && gcc -std=gnu99 -O2 -march=native -I../src scale.c -lm -lpthread -o scale)
 bench/scale 100000000 96 --bits 2 --int8 --probe 1000,2000,4000,8000 --rerank 1000 --nq 100
-gcc -std=gnu99 -O2 -march=native -Isrc bench/vbench1m.c -lm -lpthread -o .build/vbench1m && .build/vbench1m 8000000
 (cd bench && gcc -std=gnu99 -O2 -march=native -I../src live.c -lm -lpthread -o live)
-bench/live DATA_DIR full        # also: tail, stream 50000, stream, shift, drift (live ingest: docs/vecdb.md)
+bench/live DATA_DIR full        # also: tail, stream 50000, stream, shift, drift (live ingest: docs/store.md)
 ```

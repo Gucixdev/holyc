@@ -8,7 +8,6 @@ bench/data/
 bench/scale
 bench/live
 bench/tune
-bench/vbench1m
 bench/results-*/
 bench/.venv/
 py/.venv/

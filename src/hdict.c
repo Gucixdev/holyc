@@ -8,8 +8,7 @@
  *   HStr  byte-string key -> i32 value. Keys are copied into one pool
  *         (length-prefixed); a slot is 12 bytes: a 32-bit tag of the hash, the
  *         key's pool offset and the value, so a probe compares the tag first
- *         and only then the bytes. Load up to 0.7. term -> term id in lex.c,
- *         title -> node id and tag -> node id in vecdb.c.
+ *         and only then the bytes. Load up to 0.7. term -> term id in lex.c.
  *
  * Values are i32 >= 0; -1 means "absent". No arena: the tables grow with
  * realloc-style rehashing, so they may be used from any layer.

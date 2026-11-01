@@ -214,7 +214,7 @@ hit: doc 42 chunk 2
 ```
 
 The query vector is closest to chunk 1; the word "oxidised" picks chunk 2. `vi_search_hybrid` runs both sides and
-fuses them by rank (reciprocal rank fusion, the weights `vecdb` measured: words 1.5, vector 0.6, plus up to 2 for a
+fuses them by rank (reciprocal rank fusion with weights measured on Wikipedia: words 1.5, vector 0.6, plus up to 2 for a
 side whose best hit stands well clear of its runner-up), so an exact name, a number or a rare word is found where the
 embedding blurs it. Pass `NULL` for the words to search by the vector alone, or for the vector to search by words.
 

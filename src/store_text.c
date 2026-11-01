@@ -152,7 +152,7 @@ static void store_lex_ready_(RagStore *s)
 
 /* Hybrid search: the k best of the vector query q (unit length or not; NULL: words only) and BM25 over the texts for
  * the words of text (tlen bytes; NULL or 0: vector only), fused by rank. Each side fetches 3k + 10 candidates (at
- * most 250); a candidate scores w / (60 + rank) on each side it appears in. The weights are vecdb's, measured on
+ * most 250); a candidate scores w / (60 + rank) on each side it appears in. The weights were measured on
  * Wikipedia with two embedders: words 1.5, the vector 0.6, plus up to 2 for a side whose best hit stands out from its
  * runner-up, so an exact name or a near-duplicate wins either way. out_scores get the fused scores (bigger =
  * better). Returns the number of hits. */
