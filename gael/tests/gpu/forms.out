@@ -1,0 +1,5 @@
+(Cell :pos (V :x 0.0 :y -1.0) :n 2 :bits 15 :w 1.5)
+(Cell :pos (V :x 1.0 :y 1.0) :n 1 :bits 12 :w 3.5)
+(Cell :pos (V :x 2.0 :y 2.0) :n 0 :bits 23 :w 6.0)
+(Cell :pos (V :x 3.0 :y 3.0) :n -2 :bits 42 :w 9.0)
+(Cell :pos (V :x 4.0 :y -1.0) :n -6 :bits 3 :w 11.5)

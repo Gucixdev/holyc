@@ -1,0 +1,5 @@
+tests/errors/arena-static.gael:6:15: error: set: name lives outside this arena, and this value is made in it, so it would outlive it; (keep x) copies it out
+tests/errors/arena-static.gael:7:15: error: push: log lives outside this arena, and this value is made in it, so it would outlive it; (keep x) copies it out
+tests/errors/arena-static.gael:8:19: error: insert: outer lives outside this arena, and this value is made in it, so it would outlive it; (keep x) copies it out
+tests/errors/arena-static.gael:12:5: error: this value is made in the arena, which ends here; (keep x) copies it out
+tests/errors/arena-static.gael:13:1: error: keep takes one value: (keep x)

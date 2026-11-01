@@ -1,0 +1,4 @@
+; tests/repl.in uses this file; the REPL then gives width a new body, and repldump.gael says it replaced this one
+(enable geometry)
+(defn width ((r : Rect)) : float (- r.max.x r.min.x))
+(println "tests/repl.gael ran")

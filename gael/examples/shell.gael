@@ -1,0 +1,13 @@
+; Gluing commands together, with functions rather than bash's operators: sh gives a command's output, run tells
+; whether it succeeded, pipe joins commands like bash's |, pipe-in feeds text to the first one like <<<, and chain
+; hands a value on as the first argument of the next step. write-file and append-file write a file, env reads an
+; environment variable ("" when it is not set) and pid is the process id.
+(def list (format "%s/fruit.txt" (env "TMPDIR")))
+
+(write-file list (pipe-in "pear\napple\nfig\napple" "sort -u"))
+(append-file list "\nkiwi")
+(println "[%s]" (pipe (format "cat %s" list) "tr '\\n' ','"))
+(println "%v" (chain (format "cat %s" list) sh (split "\n")))
+(println "%b %b %b" (and (run (format "test -s %s" list)) (run "true")) (or (run "false") (run "true")) (and (run "true") (> 1 2)))
+(and (run "false") (run "echo this never runs"))
+(println "%b" (> (pid) 0))

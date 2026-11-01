@@ -1,0 +1,5 @@
+(let ((x : (option int) (some "a"))) x)
+(println "%d" (+ (some 1) 1))
+(defn f () : (option string) (some 3))
+(def o : (option unit) none)
+(def p : (option int int) none)

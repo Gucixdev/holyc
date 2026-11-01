@@ -1,0 +1,4 @@
+(defn f ((a : int)) : int
+  (+ a true))
+(println "%s" 1)
+(set nothing 3)

@@ -1,0 +1,7 @@
+; recursion: the call stack lives in the VM, the C code never recurses
+(defn fact ((n : int)) : int
+  (if (<= n 1)
+      1
+      (* n (fact (- n 1)))))
+
+(println "20! = %d" (fact 20))

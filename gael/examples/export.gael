@@ -1,0 +1,9 @@
+; @export before a def marks a global the way GDScript's @export marks a variable: an editor's inspector shows it
+; and lets you change it. gael -x FILE lists them, with the value when it is written as a literal.
+@export (def speed : float 10.0)
+@export (def player-name : string "Ada")
+@export (def lives : u8 3)
+(def secret 42)
+@export (def spawn-point : NodePath $Level/Start)
+
+(println "%v %s %d %d %v" speed player-name lives secret spawn-point)

@@ -1,0 +1,1 @@
+tests/errors/lib/broken.gael:2:35: error: /: int and float do not mix; convert one, like (int x) or (float x)

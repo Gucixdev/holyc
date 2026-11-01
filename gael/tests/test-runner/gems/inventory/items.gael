@@ -1,0 +1,6 @@
+(struct InvItem (name : string) (weight : float))
+
+(defn bag-weight ((bag : (vec InvItem))) : float
+  (let ((sum 0.0))
+    (for (it bag) (set sum (+ sum it.weight)))
+    sum))

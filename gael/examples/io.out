@@ -1,0 +1,7 @@
+arguments: (vec "one" "two")
+written: true
+read back: (vec "first" "second")
+a missing file: none
+line 1: hello
+line 2: world
+2 lines on stdin

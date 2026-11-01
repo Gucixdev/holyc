@@ -1,0 +1,8 @@
+; min, max, abs and clamp: their shape, and messages that name them, not the < and if they stand for
+(println "%d" (min 1))
+(println "%d" (abs 1 2))
+(println "%d" (clamp 1 2))
+(println "%f" (min 1 2.0))
+(println "%v" (abs "x"))
+(struct P (x : int))
+(println "%v" (max (P 1) (P 2)))

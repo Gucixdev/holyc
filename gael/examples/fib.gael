@@ -1,0 +1,11 @@
+; a loop with locals, and a function called before it is defined
+(println "fib(90) = %d" (fib 90))
+
+(defn fib ((n : int)) : int
+  (let ((a 0) (b 1) (i 0))
+    (while (< i n)
+      (let ((next (+ a b)))
+        (set a b)
+        (set b next)
+        (set i (+ i 1))))
+    a))

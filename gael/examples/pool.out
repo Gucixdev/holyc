@@ -1,0 +1,8 @@
+3 of 4: (handle 0 1) (handle 1 1) (handle 2 1)
+after a step: 2 left, a there: false
+p2 at (Vec2 :x 2.0 :y 1.0), 1 to go
+(handle 0 3) took the slot of (handle 0 1); a gives none
+(handle 0 3) p4
+(handle 1 1) p2
+(handle 2 1) p3
+(pool 3/4)

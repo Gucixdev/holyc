@@ -1,0 +1,3 @@
+(def s "gael")
+(println "%s" (substr s 1 3))
+(println "%s" (substr s 3 9))

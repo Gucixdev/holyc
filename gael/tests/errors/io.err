@@ -1,0 +1,4 @@
+tests/errors/io.gael:1:15: error: args takes no values: (args)
+tests/errors/io.gael:2:7: error: exit takes an int, not string
+tests/errors/io.gael:3:15: error: write-file takes 2 values: (write-file path text)
+tests/errors/io.gael:4:15: error: read-line takes no values: (read-line)

@@ -1,0 +1,1 @@
+tests/errors/coroutine-yield-main.gael:2: runtime error: yield is for a coroutine; the main program runs its coroutines with step-coroutines

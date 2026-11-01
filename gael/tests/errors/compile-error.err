@@ -1,0 +1,2 @@
+tests/errors/compile-error.gael:6:1: error: repeat takes a count and a body: (repeat 3 (println "hi"))
+tests/errors/compile-error.gael:7:1: error: compile-error takes one string: (compile-error "what is wrong")

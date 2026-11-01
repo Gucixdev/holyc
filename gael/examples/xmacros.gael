@@ -1,0 +1,46 @@
+; X-macros: one list of things, written once, and macros that each make something from it - the enum, a table of
+; names, a function per entry. The list is a macro that hands its entries to whatever macro it is given, the way C's
+; X(...) does. (string-of x) writes x as a string and (name-of "print-" x) joins a new name, as # and ## do in C.
+
+(defmacro colors                               ; the list: m gets the entries after the values it was given
+  ((_ m more ...) (m more ... (red 0xff0000) (green 0x00ff00) (blue 0x0000ff))))
+
+(defmacro def-enum ((_ name (v rgb) ...) (enum name v ...)))
+(defmacro def-names ((_ name (v rgb) ...) (def name (vec (string-of v) ...))))
+(defmacro def-rgb ((_ fname type (v rgb) ...) (defn fname ((c : type)) : int (match c (v rgb) ...))))
+(defmacro def-printers                         ; one function per entry, each with a name made from it
+  ((_ (v rgb) ...) (do (defn (name-of "print-" v) () (println "%s is %d" (string-of v) rgb)) ...)))
+
+(colors def-enum Color)                        ; (enum Color red green blue)
+(colors def-names color-names)                 ; (def color-names (vec "red" "green" "blue"))
+(colors def-rgb rgb-of Color)                  ; (defn rgb-of ((c : Color)) : int (match c (red 16711680) ...))
+(colors def-printers)                          ; print-red, print-green, print-blue
+
+(defmacro check                                ; the condition's own text in the message
+  ((_ e) (when (not e) (println "check failed: %s" (string-of e)))))
+
+(defmacro def-getters                          ; a name made from parts reads a field too: p.hp
+  ((_ type field ...) (do (defn (name-of type "-" field) ((p : type)) : int (name-of p "." field)) ...)))
+
+(defmacro with-squared                         ; a name made from the use's name is in the use's scope
+  ((_ v body ...) (let (((name-of v "-squared") (* v v))) body ...)))
+
+(defmacro def-shower                           ; a macro that makes a macro: its string-of is its own
+  ((_ name) (defmacro name ((_ e) (println "%s => %v" (string-of e) e)))))
+
+(struct Stats (hp : int) (mp : int))
+(def-getters Stats hp mp)
+(def-shower show)
+
+(println "%v" color-names)
+(println "green: %d" (rgb-of Color.green))
+(print-red)
+(print-blue)
+(check (< 1 2))
+(check (= (+ 2 2) 5))
+(let ((s (Stats 30 12)))
+  (println "Stats-hp %d, Stats-mp %d" (Stats-hp s) (Stats-mp s)))
+(let ((n 7))
+  (with-squared n (println "n-squared %d" n-squared)))
+(show (* 6 7))
+(show (string-of "a" 1 (b "c")))

@@ -1,0 +1,57 @@
+(gem curve :version "0.1.0")
+; Curves through points, ported from holyc's curve.h, on one number at a time: for a point, use them on x and on y.
+; t runs from 0 to 1 along the piece.
+;
+;   (bezier2 p0 p1 p2 t)                  ; quadratic: from p0 to p2, pulled toward p1
+;   (bezier3 p0 p1 p2 p3 t)               ; cubic: from p0 to p3, pulled toward p1 and p2
+;   (hermite p0 v0 p1 v1 t)               ; from p0 to p1, leaving with speed v0 and arriving with v1
+;   (catmull-rom p0 p1 p2 p3 t)           ; the piece from p1 to p2 of a smooth line through all four points
+;   (morton2 x y)                         ; the bits of x and y in turn: a Z-order index that keeps neighbours near
+
+(defn bezier2 ((p0 : float) (p1 : float) (p2 : float) (t : float)) : float
+  (let ((u (- 1.0 t))) (+ (* u u p0) (* 2.0 u t p1) (* t t p2))))
+
+(defn bezier3 ((p0 : float) (p1 : float) (p2 : float) (p3 : float) (t : float)) : float
+  (let ((u (- 1.0 t))) (+ (* u u u p0) (* 3.0 u u t p1) (* 3.0 u t t p2) (* t t t p3))))
+
+(defn hermite ((p0 : float) (v0 : float) (p1 : float) (v1 : float) (t : float)) : float
+  (let ((t2 (* t t)) (t3 (* t t t)))
+    (+ (* (+ (- (* 2.0 t3) (* 3.0 t2)) 1.0) p0)
+       (* (+ (- t3 (* 2.0 t2)) t) v0)
+       (* (+ (* -2.0 t3) (* 3.0 t2)) p1)
+       (* (- t3 t2) v1))))
+
+(defn catmull-rom ((p0 : float) (p1 : float) (p2 : float) (p3 : float) (t : float)) : float
+  (let ((t2 (* t t)) (t3 (* t t t)))
+    (* 0.5 (+ (* 2.0 p1)
+              (* (- p2 p0) t)
+              (* (+ (- (* 2.0 p0) (* 5.0 p1)) (* 4.0 p2) (- p3)) t2)
+              (* (+ (- (* 3.0 p1) p0) (* -3.0 p2) p3) t3)))))
+
+(defn curve--spread ((v : int)) : int            ; the low 32 bits of v, one zero bit after each
+  (let ((x (bit-and v 0xffffffff)))
+    (set x (bit-and (bit-or x (shl x 16)) 0x0000ffff0000ffff))
+    (set x (bit-and (bit-or x (shl x 8)) 0x00ff00ff00ff00ff))
+    (set x (bit-and (bit-or x (shl x 4)) 0x0f0f0f0f0f0f0f0f))
+    (set x (bit-and (bit-or x (shl x 2)) 0x3333333333333333))
+    (bit-and (bit-or x (shl x 1)) 0x5555555555555555)))
+
+(defn morton2 ((x : int) (y : int)) : int (bit-or (curve--spread x) (shl (curve--spread y) 1)))
+
+(@test "each curve starts and ends at its points"
+  (assert (= (bezier2 1.0 5.0 3.0 0.0) 1.0))
+  (assert (= (bezier2 1.0 5.0 3.0 1.0) 3.0))
+  (assert (= (bezier3 1.0 5.0 -2.0 3.0 0.0) 1.0))
+  (assert (= (bezier3 1.0 5.0 -2.0 3.0 1.0) 3.0))
+  (assert (= (hermite 1.0 9.0 4.0 -9.0 0.0) 1.0))
+  (assert (= (hermite 1.0 9.0 4.0 -9.0 1.0) 4.0))
+  (assert (= (catmull-rom 0.0 1.0 4.0 2.0 0.0) 1.0))
+  (assert (= (catmull-rom 0.0 1.0 4.0 2.0 1.0) 4.0)))
+(@test "points on a line give the line"
+  (assert (= (bezier3 0.0 1.0 2.0 3.0 0.5) 1.5))
+  (assert (= (catmull-rom 0.0 1.0 2.0 3.0 0.5) 1.5)))
+(@test "morton2 takes the bits of x and y in turn"
+  (assert (= (morton2 1 0) 1))
+  (assert (= (morton2 0 1) 2))
+  (assert (= (morton2 3 3) 15))
+  (assert (= (morton2 5 9) 147)))

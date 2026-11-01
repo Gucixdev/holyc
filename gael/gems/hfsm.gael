@@ -1,0 +1,92 @@
+(gem hfsm :version "0.1.0")
+; A hierarchical state machine, a step past holyc's fsm.h: states in a tree, enter and exit code per state, and a
+; move from one state to another that leaves and enters exactly the states between them. The state itself is a value
+; of an enum, so it lives where any value does - a global, a field, a column of the ecs gem.
+;
+;   (hfsm Mood (e : Guard)                    ; the enum Mood, and a context every enter and exit code gets as e
+;     (alive -) (calm alive) (chase alive) (dead -)        ; each state and its parent; - for none
+;     :enter ((calm (println "calm")) (dead (println "%s dies" e.name)))
+;     :exit ((chase (println "stops chasing"))))
+;
+; makes the enum and, for it:
+;   (Mood.start s e)            enters s from nothing: its parents first, top down; gives s
+;   (s.go to e)                 from s to the state to: exits from s up to the state the two share, enters down to
+;                               to; gives to (nothing happens when s is to)
+;   (s.in? t)                   s is t or inside it: (s.in? Mood.alive)
+;   (s.parent)                  (some parent) or none
+; A flat machine (holyc's fsm) is one where every parent is -.
+
+(defmacro hfsm--parent                         ; the parent of one state, as an option
+  ((_ m -) none)
+  ((_ m p) (some (name-of m "." p))))
+
+(defmacro hfsm
+  ((_ m (ctx : ty) (s p) ... :enter ((en ea) ...) :exit ((ex xa) ...))
+   (do
+     (enum m s ...)
+     (defn (name-of m ".parent") ((st : m)) : (option m)
+       (match st (s (hfsm--parent m p)) ...))
+     (defn (name-of m "--enter") ((st : m) (ctx : ty)) : unit
+       (do)
+       (when (= st (name-of m "." en)) ea) ...)
+     (defn (name-of m "--exit") ((st : m) (ctx : ty)) : unit
+       (do)
+       (when (= st (name-of m "." ex)) xa) ...)
+     (defn (name-of m ".in?") ((st : m) (t : m)) : bool
+       (let ((at st) (found (= st t)) (going true))
+         (while (and going (not found))
+           (match ((name-of m ".parent") at)
+             ((some up) (set at up) (set found (= up t)))
+             (none (set going false))))
+         found))
+     (defn (name-of m ".start") ((to : m) (ctx : ty)) : m
+       (let ((path : (vec m) (vec)) (at to) (going true))
+         (while going
+           (push path at)
+           (match ((name-of m ".parent") at) ((some up) (set at up)) (none (set going false))))
+         (for (i 0 (len path)) ((name-of m "--enter") (get path (- (len path) 1 i)) ctx))
+         to))
+     (defn (name-of m ".go") ((from : m) (to : m) (ctx : ty)) : m
+       (when (!= from to)
+         (let ((ups : (vec m) (vec)) (downs : (vec m) (vec)) (at from) (going true) (meet from) (met false))
+           (while going                        ; from and every state above it
+             (push ups at)
+             (match ((name-of m ".parent") at) ((some up) (set at up)) (none (set going false))))
+           (set at to)
+           (set going true)
+           (while going                        ; up from to until a state above from
+             (for (u ups) (when (and (not met) (= u at)) (set met true) (set meet u)))
+             (if met
+               (set going false)
+               (do (push downs at)
+                   (match ((name-of m ".parent") at) ((some up) (set at up)) (none (set going false))))))
+           (set going true)
+           (for (u ups)                        ; leave, inside out, up to the shared state
+             (when (and met (= u meet)) (set going false))
+             (when going ((name-of m "--exit") u ctx)))
+           (for (i 0 (len downs)) ((name-of m "--enter") (get downs (- (len downs) 1 i)) ctx))))
+       to)))
+  ((_ m (ctx : ty) (s p) ... :enter ((en ea) ...))
+   (hfsm m (ctx : ty) (s p) ... :enter ((en ea) ...) :exit ()))
+  ((_ m (ctx : ty) (s p) ... :exit ((ex xa) ...))
+   (hfsm m (ctx : ty) (s p) ... :enter () :exit ((ex xa) ...)))
+  ((_ m (ctx : ty) (s p) ...)
+   (hfsm m (ctx : ty) (s p) ... :enter () :exit ())))
+
+@test (hfsm hfsm--M (log : (vec string))
+  (top -) (a top) (a1 a) (b top)
+  :enter ((a (push log "+a")) (a1 (push log "+a1")) (b (push log "+b")))
+  :exit ((a (push log "-a")) (a1 (push log "-a1"))))
+(@test "start enters top down; go leaves up to the shared state and enters down"
+  (let ((log : (vec string) (vec)))
+    (let ((s (hfsm--M.start hfsm--M.a1 log)))
+      (assert (= (join log " ") "+a +a1"))
+      (set s (s.go hfsm--M.b log))
+      (assert (= (join log " ") "+a +a1 -a1 -a +b"))
+      (assert (s.in? hfsm--M.top))
+      (assert (not (s.in? hfsm--M.a)))
+      (set s (s.go hfsm--M.b log))
+      (assert (= (len log) 5)))))
+(@test "parent"
+  (assert (match (hfsm--M.parent hfsm--M.a1) ((some p) (= p hfsm--M.a)) (none false)))
+  (assert (match (hfsm--M.parent hfsm--M.top) ((some _) false) (none true))))

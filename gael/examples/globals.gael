@@ -1,0 +1,10 @@
+; globals: def, then set from anywhere after it
+(def hp : int 100)
+
+(defn hit ((damage : int)) : unit
+  (set hp (- hp damage))
+  (when (< hp 0) (set hp 0)))
+
+(hit 30)
+(hit 90)
+(println "hp %d" hp)

@@ -1,0 +1,5 @@
+tests/warnings/unused.gael:4:22: warning: b is never used; remove it, or call it _b if it must be there
+tests/warnings/unused.gael:4:35: warning: d is given values but never read; remove it, or call it _d if it must be there
+tests/warnings/unused.gael:8:19: warning: x is never used; write (some _) when only the some matters
+tests/warnings/unused.gael:9:7: warning: i is never used; write _ in its place when only the repeating matters, like (for (_ 0 3) ...)
+tests/warnings/unused.gael:12:9: warning: e is never used; write _ in its place when only the repeating matters, like (for (_ 0 3) ...)

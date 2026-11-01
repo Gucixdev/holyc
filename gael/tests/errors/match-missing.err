@@ -1,0 +1,4 @@
+tests/errors/match-missing.gael:3:3: error: match on Dir does not cover south, west; add arms for them or a _ arm
+tests/errors/match-missing.gael:7:3: error: match on bool does not cover false; add an arm for it or a _ arm
+tests/errors/match-missing.gael:9:3: error: match on (option int) does not cover none; add an arm for it or a _ arm
+tests/errors/match-missing.gael:11:3: error: match on int needs a _ arm for the values the arms do not list

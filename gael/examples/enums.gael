@@ -1,0 +1,21 @@
+; enums and match: the compiler checks that every case is handled
+(enum Dir north east south west)
+
+(defn turn ((d : Dir)) : Dir
+  (match d
+    (north Dir.east)
+    (east Dir.south)
+    (south Dir.west)
+    (west Dir.north)))
+
+(defn arrow ((d : Dir)) : string
+  (match d
+    (north "^")
+    (south "v")
+    (_ "<>")))
+
+(let ((d Dir.north) (i 0))
+  (while (< i 5)
+    (println "%v %s" d (arrow d))
+    (set d (turn d))
+    (set i (+ i 1))))

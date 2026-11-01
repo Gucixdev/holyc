@@ -1,0 +1,9 @@
+tests/errors/xmacros.gael:2:1: error: name-of joins the parts of a name: (name-of "print-" x)
+tests/errors/xmacros.gael:4:1: error: name-of joins names, strings and ints; a list cannot be part of a name
+tests/errors/xmacros.gael:6:1: error: name-of made "a b", which is not a name: a name has no spaces, parentheses, quotes or ;, and does not start like a number
+tests/errors/xmacros.gael:8:1: error: name-of made "12", which is not a name: a name has no spaces, parentheses, quotes or ;, and does not start like a number
+tests/errors/xmacros.gael:10:1: error: string-of takes what to write as a string: (string-of x)
+tests/errors/xmacros.gael:12:1: error: name-of joins names, strings and ints; a float cannot be part of a name
+tests/errors/xmacros.gael:15:7: error: string-of is a built-in name
+tests/errors/xmacros.gael:14:1: error: unknown name x2
+tests/errors/xmacros.gael:16:10: error: unknown name s-q

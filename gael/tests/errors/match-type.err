@@ -1,0 +1,5 @@
+tests/errors/match-type.gael:2:36: error: match works on bool, int, string, enum and option values, not float
+tests/errors/match-type.gael:3:37: error: match on int: a pattern is an int like 0 or 42, or _
+tests/errors/match-type.gael:4:37: error: match on Dir: a pattern is one of north, south, or _
+tests/errors/match-type.gael:5:63: error: match: this arm is int, the arms above are string; every arm must give the same type
+tests/errors/match-type.gael:6:46: error: match on (option int): a pattern is (some name), none or _

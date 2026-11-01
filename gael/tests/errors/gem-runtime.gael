@@ -1,0 +1,3 @@
+; a runtime error in the code of a gem names the gem's file and line, not the program's
+(enable crash)
+(println "%d" (crash-div 0))

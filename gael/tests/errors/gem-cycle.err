@@ -1,0 +1,1 @@
+tests/errors/gems/loop-b.gael:1:1: error: gem loop-b requires loop-a, which needs loop-b first: they require each other

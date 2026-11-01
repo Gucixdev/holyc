@@ -1,0 +1,28 @@
+; Procedural generation with four gems that come with gael, ported from holyc: noise shapes the land, rng places the
+; trees, curve lays a road, easing fades the light in. The same seeds give the same map on every machine.
+(enable noise rng curve easing)
+
+(def width 48)
+(def height 12)
+(def trees (Rng.seed 7 0))
+
+(defn ground ((x : int) (y : int)) : string
+  (let ((h (fbm2 3 (/ (float x) 12.0) (/ (float y) 5.0) 4)))
+    (if (< h -0.3) "~"                          ; water
+      (if (< h -0.05) "."                       ; shore
+        (if (< h 0.35) (if (trees.chance 0.12) "T" ",")
+          "^")))))                              ; hills
+
+(defn road-y ((x : int)) : int                  ; a cubic bezier across the map, one y per column
+  (int (floor (+ 0.5 (bezier3 2.0 13.0 -2.0 9.0 (/ (float x) (float (- width 1))))))))
+
+(for (y 0 height)
+  (let ((row : (vec string) (vec)))
+    (for (x 0 width)
+      (push row (if (= y (road-y x)) "=" (ground x y))))
+    (println "%s" (join row ""))))
+
+(for (hour 0 7)                                 ; dawn: the light eases in, slow, then fast, then slow
+  (let ((bar : (vec string) (vec)) (light (ease-in-out-cubic (/ (float hour) 6.0))))
+    (for (_ 0 (int (floor (* light 20.0)))) (push bar "#"))
+    (println "%d:00 %s" (+ hour 4) (join bar ""))))

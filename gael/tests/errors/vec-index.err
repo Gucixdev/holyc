@@ -1,0 +1,1 @@
+tests/errors/vec-index.gael:3: runtime error: index 3 is outside a vec of 3

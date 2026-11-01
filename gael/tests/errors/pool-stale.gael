@@ -1,0 +1,6 @@
+; a handle whose element was removed is stale: get on it is a runtime error, not a read of whatever the slot holds now
+(struct Enemy (hp : int))
+(let ((enemies : (pool Enemy) (pool 8)) (e (spawn enemies (Enemy 10))))
+  (println "%v" (remove enemies e))
+  (spawn enemies (Enemy 20))
+  (println "%d" (get enemies e).hp))

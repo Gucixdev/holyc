@@ -1,0 +1,2 @@
+; a float converted to an int type it does not fit in stops the program
+(println "%d" (u8 (- 0.0 1.5)))

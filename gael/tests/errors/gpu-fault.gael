@@ -1,0 +1,6 @@
+; a gpu-each run that fails as the VM's loop would - an int divided by zero here - stops the program with the same
+; error and line on the GPU: the kernel marks the run failed, nothing comes back, and the VM runs the loop to say where
+(struct C (n : i32) (d : i32))
+(def v : (vec C) (vec (C 7 1) (C 9 0) (C 4 2)))
+(gpu-each (c v) (set c.n (/ c.n c.d)))
+(println "not reached")

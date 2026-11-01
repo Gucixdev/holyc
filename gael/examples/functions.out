@@ -1,0 +1,6 @@
+7 81 42
+(vec 11 100)
+clicked 2
+101 99
+(fn inc) (fn fn@12:11)
+a local shadows the function: 5

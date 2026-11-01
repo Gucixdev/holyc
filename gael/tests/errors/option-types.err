@@ -1,0 +1,5 @@
+tests/errors/option-types.gael:1:8: error: x is declared (option int), its value is (option string)
+tests/errors/option-types.gael:2:18: error: + works on numbers, not (option int)
+tests/errors/option-types.gael:3:7: error: f must return (option string), its body ends with (option int)
+tests/errors/option-types.gael:4:18: error: (option unit) holds nothing; use bool
+tests/errors/option-types.gael:5:10: error: an option type is (option type), like (option int)

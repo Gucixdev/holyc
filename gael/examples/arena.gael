@@ -1,0 +1,33 @@
+; An arena holds what is made while its body runs: strings, vecs, maps and pools. They come from one block that is
+; handed back all at once when the body ends, the way a game frees what one frame needed. Anything that has to outlive
+; the arena goes through keep, which copies it out; an int, a float or a bool just comes out.
+(struct Msg (text : string) (words : (vec string)))
+
+(def log : (vec string) (vec))
+
+; one frame: split a line, count its words, keep one line of log
+(defn frame ((n : int)) : int
+  (arena
+    (let ((words (split (format "a%d b%d c%d" n n n) " "))
+          (seen : (map string int) (map))
+          (msgs : (vec Msg) (vec)))
+      (for (w words) (insert seen w (len w)))
+      (push msgs (Msg (join words "+") words))
+      (push log (keep (format "frame %d: %s" n (get msgs 0).text)))
+      (len seen))))
+
+(let ((total 0))
+  (for (i 0 1000) (set total (+ total (frame i))))
+  (println "%d words in %d frames, the last: %s" total (len log) (get log 999)))
+
+; arenas nest; a vec of the outer one that grows while the inner one runs gets its bigger block from the heap
+(println "%d" (arena
+  (let ((names : (vec string) (vec)))
+    (for (i 0 3) (push names (format "outer %d" i)))
+    (arena
+      (for (i 0 100) (push names (keep (format "inner %d" i))))
+      0)
+    (len names))))
+
+; keep copies everything the value holds from the arena: a string held twice is copied once
+(println "%v" (arena (let ((s (format "shared %d" 1))) (keep (vec s s)))))

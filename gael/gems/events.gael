@@ -1,0 +1,109 @@
+(gem events :version "0.1.0")
+; Events with the tick they happen at, ported from holyc's event_queue.h: a kind (yours: an enum's value as an int,
+; say), the tick, and two values. Two holders:
+;
+;   (def log (EventLog))          ; what happened, in order - a run recorded, to play back the same way
+;   (log.add kind tick a b)       ; a tick before the last one stops the program: a log only goes forward
+;   (log.at tick)                 ; (vec Event): the events of one tick, found by halving
+;   (log.since tick)              ; the index of the first event at that tick or later
+;   (for (ev log) ...)            ; every event in order (EventLog.len and EventLog.get)
+;
+;   (def later (Schedule))        ; what will happen: events for coming ticks, in any order
+;   (later.add ev)                ; ev is an (Event kind tick a b)
+;   (later.due tick)              ; (vec Event): every event up to tick, taken out, by tick and then in the order added
+;   (len later)
+
+(struct Event (kind : int) (tick : int) (a : int) (b : int))
+
+(struct EventLog (items : (vec Event) (vec)))
+
+(defn EventLog.add ((log : EventLog) (kind : int) (tick : int) (a : int) (b : int)) : unit
+  (let ((n (len log.items)))
+    (assert (or (= n 0) (>= tick (get log.items (- n 1)).tick)) "an event log only goes forward: this tick is before the last one")
+    (push log.items (Event kind tick a b))))
+
+(defn EventLog.len ((log : EventLog)) : int (len log.items))
+(defn EventLog.get ((log : EventLog) (i : int)) : Event (get log.items i))
+
+(defn EventLog.since ((log : EventLog) (tick : int)) : int
+  (let ((lo 0) (hi (len log.items)))
+    (while (< lo hi)
+      (let ((mid (/ (+ lo hi) 2)))
+        (if (< (get log.items mid).tick tick) (set lo (+ mid 1)) (set hi mid))))
+    lo))
+
+(defn EventLog.at ((log : EventLog) (tick : int)) : (vec Event)
+  (let ((out : (vec Event) (vec)) (i (log.since tick)))
+    (while (and (< i (len log.items)) (= (get log.items i).tick tick))
+      (push out (get log.items i))
+      (set i (+ i 1)))
+    out))
+
+(struct EvPending (ev : Event) (order : int))
+(struct Schedule (heap : (vec EvPending) (vec)))
+
+(def ev--order 0)
+
+(defn ev--before ((x : EvPending) (y : EvPending)) : bool
+  (or (< x.ev.tick y.ev.tick) (and (= x.ev.tick y.ev.tick) (< x.order y.order))))
+
+(defn ev--swap ((v : (vec EvPending)) (i : int) (j : int)) : unit
+  (let ((x (get v i)))
+    (put v i (get v j))
+    (put v j x)))
+
+(defn Schedule.add ((s : Schedule) (ev : Event)) : unit
+  (push s.heap (EvPending ev ev--order))
+  (set ev--order (+ ev--order 1))
+  (let ((i (- (len s.heap) 1)) (going true))
+    (while (and going (> i 0))
+      (let ((up (/ (- i 1) 2)))
+        (if (ev--before (get s.heap i) (get s.heap up))
+          (do (ev--swap s.heap i up) (set i up))
+          (set going false))))))
+
+(defn ev--take ((s : Schedule)) : Event      ; the first one out; the heap is not empty
+  (let ((top (get s.heap 0)) (n (len s.heap)) (last (match (pop s.heap) ((some x) x) (none (get s.heap 0)))))
+    (when (> n 1)
+      (put s.heap 0 last)
+      (let ((i 0) (going true) (m (- n 1)))
+        (while going
+          (let ((l (+ (* 2 i) 1)) (r (+ (* 2 i) 2)) (best i))
+            (when (and (< l m) (ev--before (get s.heap l) (get s.heap best))) (set best l))
+            (when (and (< r m) (ev--before (get s.heap r) (get s.heap best))) (set best r))
+            (if (= best i)
+              (set going false)
+              (do (ev--swap s.heap i best) (set i best)))))))
+    top.ev))
+
+(defn Schedule.due ((s : Schedule) (tick : int)) : (vec Event)
+  (let ((out : (vec Event) (vec)))
+    (while (and (> (len s.heap) 0) (<= (get s.heap 0).ev.tick tick))
+      (push out (ev--take s)))
+    out))
+
+(defn Schedule.len ((s : Schedule)) : int (len s.heap))
+
+(@test "a log finds a tick by halving, and for goes through it in order"
+  (let ((log (EventLog)) (sum 0))
+    (log.add 1 0 10 0)
+    (log.add 2 3 11 0)
+    (log.add 3 3 12 0)
+    (log.add 4 7 13 0)
+    (assert (= (log.since 3) 1))
+    (assert (= (log.since 4) 3))
+    (assert (= (log.since 99) 4))
+    (assert (= (len (log.at 3)) 2))
+    (assert (= (len (log.at 5)) 0))
+    (for (ev log) (set sum (+ (* sum 2) ev.kind)))
+    (assert (= sum 26))))
+(@test "a schedule gives what is due by tick, ties in the order added"
+  (let ((s (Schedule)) (kinds : (vec int) (vec)))
+    (s.add (Event 1 5 0 0))
+    (s.add (Event 2 2 0 0))
+    (s.add (Event 3 5 0 0))
+    (s.add (Event 4 9 0 0))
+    (for (ev (s.due 5)) (push kinds ev.kind))
+    (assert (= (format "%v" kinds) "(vec 2 1 3)"))
+    (assert (= (len s) 1))
+    (assert (= (len (s.due 8)) 0))))

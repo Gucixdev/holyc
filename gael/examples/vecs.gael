@@ -1,0 +1,24 @@
+; a vec grows as it is pushed to; a vec of structs keeps each field of its elements in its own column (SoA)
+(struct Item (name : string) (count : int))
+(struct Tree (label : string) (kids : (vec Tree)))   ; a struct can hold a vec of itself
+
+(defn total ((items : (vec Item))) : int
+  (let ((sum 0))
+    (for (it items) (set sum (+ sum it.count)))
+    sum))
+
+(def bag (vec (Item "rope" 1) (Item "arrow" 20)))
+(push bag (Item :name "torch" :count 3))
+(put bag 0 (Item "rope" 2))
+(println "%d items, %d things, the last is %v" (len bag) (total bag) (get bag (- (len bag) 1)))
+
+(let ((squares : (vec int) (vec)))
+  (for (i 0 6) (push squares (* i i)))
+  (println "%v" squares)
+  (match (pop squares)
+    ((some top) (println "popped %d, %d left" top (len squares)))
+    (none (println "empty"))))
+
+(def root (Tree "root" (vec (Tree "a" (vec)) (Tree "b" (vec (Tree "c" (vec)))))))
+(println "%v" root)
+(println "root has %d kids, the second has %d" (len root.kids) (len (get root.kids 1).kids))

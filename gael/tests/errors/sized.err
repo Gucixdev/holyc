@@ -1,0 +1,13 @@
+tests/errors/sized.gael:1:13: error: 256 does not fit in u8 (0 to 255)
+tests/errors/sized.gael:2:13: error: -129 does not fit in i8 (-128 to 127)
+tests/errors/sized.gael:3:8: error: 18446744073709551615 does not fit in int; it fits a u64
+tests/errors/sized.gael:4:14: error: -1 does not fit in u64 (0 to 18446744073709551615)
+tests/errors/sized.gael:5:14: error: 1.0e39 does not fit in f32 (its largest is about 3.4e38)
+tests/errors/sized.gael:8:6: error: +: u8 and i32 do not mix; convert one, like (u8 x) or (i32 x)
+tests/errors/sized.gael:9:6: error: +: u8 and float do not mix; convert one, like (u8 x) or (float x)
+tests/errors/sized.gael:10:4: error: % works on ints only; this is an f32
+tests/errors/sized.gael:11:15: error: println: % code 1 wants a float, this value is u8
+tests/errors/sized.gael:12:11: error: match on u8: 300 does not fit in it (0 to 255)
+tests/errors/sized.gael:13:5: error: u8 converts a number, not string
+tests/errors/sized.gael:14:1: error: i16 takes one value: (i16 x)
+tests/errors/sized.gael:16:7: error: 300 does not fit in u8 (0 to 255)

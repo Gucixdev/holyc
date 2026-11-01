@@ -1,0 +1,1 @@
+(gem loop-b :requires (loop-a))

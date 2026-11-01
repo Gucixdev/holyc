@@ -1,0 +1,11 @@
+(enum Dir north east south west)
+(defn name ((d : Dir)) : string
+  (match d
+    (north "n")
+    (east "e")))
+(defn yes ((b : bool)) : int
+  (match b (true 1)))
+(defn opt ((x : (option int))) : int
+  (match x ((some v) v)))
+(defn count ((n : int)) : string
+  (match n (0 "zero") (1 "one")))

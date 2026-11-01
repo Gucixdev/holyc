@@ -1,0 +1,1 @@
+tests/errors/gem-owner.gael:3:7: error: ShapeBox.grow: ShapeBox is gem shapes's; a type's functions are declared in the gem that declares it

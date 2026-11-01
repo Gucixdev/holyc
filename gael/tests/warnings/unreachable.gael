@@ -1,0 +1,9 @@
+; What comes after a return in the same body, or after an exit, never runs.
+(defn f ((x : int)) : int
+  (when (< x 0)
+    (return 0)
+    (println "never"))
+  (* x 2))
+(println "%d %d" (f -1) (f 4))
+(exit 0)
+(println "after the exit")

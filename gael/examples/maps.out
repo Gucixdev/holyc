@@ -1,0 +1,6 @@
+rope: tool, 1.0 kg
+bread: food, 0.4 kg
+sword: weapon, 3.0 kg
+(some (Item :kind food :weight 0.4)) false
+2 left: (vec "rope" "sword")
+(map ("a" 3) ("b" 2) ("c" 1))

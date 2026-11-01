@@ -1,0 +1,6 @@
+; The heap is reserved as 1 GiB of address space (GAEL_HEAP changes that) and the system gives it pages only as they
+; are written, so a vec of five million ints (40 MB) just works
+(let ((v : (vec int) (vec)) (sum 0))
+  (for (i 0 5000000) (push v i))
+  (for (x v) (set sum (+ sum x)))
+  (println "%d ints, sum %d" (len v) sum))

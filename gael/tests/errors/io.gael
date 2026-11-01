@@ -1,0 +1,4 @@
+(println "%v" (args 1))
+(exit "x")
+(println "%b" (write-file "p"))
+(println "%v" (read-line "prompt"))

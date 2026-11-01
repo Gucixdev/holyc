@@ -1,0 +1,1 @@
+tests/window/not-a-window.gael:2: runtime error: canvas 0 is an image, not a window: open-window gives one with keys and a mouse

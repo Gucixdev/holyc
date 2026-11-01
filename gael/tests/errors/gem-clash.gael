@@ -1,0 +1,2 @@
+; two gems that provide the same thing cannot be on together
+(enable ecs-a ecs-b)

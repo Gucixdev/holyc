@@ -1,0 +1,18 @@
+; strings are views into one text arena: substr, split and trim make no copies
+(def csv "name, hp, mp\nknight, 120, 5\nmage , 60, 90\n")
+
+(defn cell ((line : string) (k : int)) : string
+  (trim (get (split line ",") k)))
+
+(let ((rows (split (trim csv) "\n")) (total 0))
+  (for (row rows)
+    (match (parse-int (cell row 1))
+      ((some hp) (set total (+ total hp)))
+      (none (println "header: %s" (join (split row ", ") " | ")))))
+  (println "%d rows, hp total %d" (len rows) total))
+
+(let ((s "gael, a language"))
+  (match (find s ",")
+    ((some at) (println "before the comma [%s], after it [%s]" (substr s 0 at) (trim (substr s (+ at 1) (len s)))))
+    (none (println "no comma")))
+  (println "the first byte is %d, %s" (byte s 0) (char (byte s 0))))

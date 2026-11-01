@@ -1,0 +1,1 @@
+tests/errors/string-full.gael:4: runtime error: out of memory (the heap is full)

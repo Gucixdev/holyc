@@ -1,0 +1,21 @@
+; Numbers with a size: i8, i16, i32, i64 (= int), u8, u16, u32, u64, f32, f64 (= float). Arithmetic stays in the
+; size and wraps around, a literal takes the size expected where it stands (and must fit), and nothing converts on its
+; own: (u8 x), (f32 x), (int x)... convert, ints wrapping around, a float to an int stopping when it does not fit.
+(struct Pixel (r : u8) (g : u8) (b : u8) (a : u8))
+(def max-u64 : u64 18446744073709551615)
+
+(defn blend ((x : u8) (y : u8)) : u8
+  (u8 (/ (+ (int x) (int y)) 2)))
+
+(let ((x : u8 250) (y : i8 -128) (z : i16 300) (w : u32 4000000000) (f : f32 0.1) (d : float 0.1))
+  (println "%d %d %d %d" (+ x 10) (- y 1) (* z 200) (+ w w))
+  (println "%f %f %v %v" f d (+ f f) (* f 3.0))
+  (println "%d %d %b %b" max-u64 (+ max-u64 1) (> max-u64 1) (< (u64 1) max-u64))
+  (println "%d %d %d" (/ max-u64 2) (% max-u64 10) (u8 -1))
+  (println "%d %d %d %d" (i8 200) (u16 70000) (int max-u64) (i32 4000000000))
+  (println "%d %v %v" (int 3.9) (u8 255.5) (f32 16777217))
+  (println "%v %d" (Pixel 255 128 0 255) (blend 255 250))
+  (println "%b %b" (< 0 x) (= 250 x))
+  (match x
+    (250 (println "two fifty"))
+    (_ (println "other"))))

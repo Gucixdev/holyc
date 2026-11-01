@@ -1,0 +1,97 @@
+; Strings made at run time, vecs and maps count their owners. Every value here is made at run time, so each copy,
+; drop and scope end below has to count right: the tests run it with GAEL_CHECK=1, which fails on anything left over.
+(struct Pet (name : string) (tags : (vec string)))
+(struct Home (owner : (option string)) (pets : (vec Pet)))
+
+(def greeting (format "hello %s" "world"))
+
+(defn named ((n : int)) : string (format "pet-%d" n))
+
+(defn pet ((n : int)) : Pet
+  (Pet (named n) (split (format "a%d,b%d" n n) ",")))
+
+(defn rename ((p : Pet) (to : string)) : Pet
+  (set p.name to)
+  p)
+
+(defn longest ((v : (vec string))) : string
+  (let ((best ""))
+    (for (s v) (when (> (len s) (len best)) (set best s)))
+    best))
+
+; variables, copies and new values for them
+(let ((a (named 1)) (b a))
+  (set a (named 2))
+  (println "%s %s" a b)
+  (let ((a (format "%s!" a)))
+    (println "%s" a))
+  (set greeting (format "%s, %s" greeting b))
+  (println "%s" greeting))
+
+; structs that hold strings and vecs; a field of a call's result; a field set inside a function
+(let ((p (pet 3)) (q (rename (pet 4) (named 40))))
+  (println "%v" p)
+  (println "%s %s" q.name (. (pet 5) name))
+  (println "%d tags, the last %s" (len p.tags) (get p.tags 1))
+  (set p.tags (vec (named 30)))
+  (println "%v" p.tags))
+
+; options and match: a binding of (some x) given a new value, strings matched
+(let ((o : (option string) (some (named 6))) (none-yet : (option string) none))
+  (match o
+    ((some s) (set s (format "%s?" s)) (println "%s" s))
+    (none (println "none")))
+  (println "%v %v" o none-yet)
+  (match (named 7)
+    ("pet-7" (println "seven"))
+    (_ (println "other"))))
+
+; vecs: put, pop, get, a vec of structs
+(let ((v (vec (named 8) (named 9) (named 10))) (pets : (vec Pet) (vec)))
+  (put v 0 (format "%s+" (get v 0)))
+  (match (pop v)
+    ((some s) (println "popped %s" s))
+    (none (println "empty")))
+  (push pets (pet 11))
+  (push pets (pet 12))
+  (put pets 0 (rename (get pets 0) (named 110)))
+  (println "%v" v)
+  (println "%s %s" (. (get pets 0) name) (longest (. (get pets 1) tags)))
+  (if (> (len v) 0) (println "kept %d" (len v))))
+
+; maps: new values for a key, lookups, removals, keys and values, a for over the keys
+(let ((m : (map string string) (map)))
+  (insert m (named 1) (named 100))
+  (insert m (named 1) (named 101))
+  (insert m (named 2) (named 200))
+  (println "%v" (lookup m (named 1)))
+  (println "%v %v" (remove m (named 2)) (remove m (named 3)))
+  (insert m (named 3) (format "%d" 300))
+  (println "%v %v %b" (keys m) (values m) (has m (named 3)))
+  (for (k m) (println "%s => %v" k (lookup m k))))
+
+; a home with an optional owner and pets, copied and changed
+(let ((h (Home (some (named 50)) (vec (pet 51)))) (h2 h))
+  (push h2.pets (pet 52))
+  (set h.owner none)
+  (println "%v" h)
+  (println "%d pets" (len h2.pets)))
+
+; strings in and out of builtins and pipes
+(let ((line (format "  %s  " (named 60))))
+  (println "[%s] [%s] %v" (trim line) (substr (trim line) 0 3) (find line "60"))
+  (println "%s" (join (split (format "%s,%s" (named 61) (named 62)) ",") "+"))
+  (println "%s" (chain (format "  %s " (named 63)) trim (substr 4 6)))
+  (println "%b %b" (= (named 64) (named 64)) (!= (named 64) (named 65))))
+
+; reads that only borrow a variable leave it holding its value
+(let ((s (named 70)) (v (vec (named 71))) (m : (map string int) (map)))
+  (insert m s 1)
+  (println "%b %b %b %d %d %d %b %v" (= s (named 70)) (!= s "x") (= s s) (len s) (byte s 0) (len v) (has m s) (lookup m s))
+  (println "%s %s %d" s (get v 0) (len m)))
+
+; a read is not borrowed when a later operand gives the variable a new value: the old value has to stay alive
+(def gs (named 90))
+(defn change () : int (set gs (named 91)) 0)
+(let ((s (named 80)))
+  (println "%d %d %s %s" (byte s (do (set s (named 81)) 0)) (byte gs (change)) s gs))

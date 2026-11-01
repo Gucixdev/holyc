@@ -1,0 +1,1 @@
+tests/errors/coroutine-unset.gael:3: runtime error: this coroutine was never started: a global read before its def ran

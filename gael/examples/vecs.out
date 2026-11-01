@@ -1,0 +1,5 @@
+3 items, 25 things, the last is (Item :name "torch" :count 3)
+(vec 0 1 4 9 16 25)
+popped 25, 5 left
+(Tree :label "root" :kids (vec (Tree :label "a" :kids (vec)) (Tree :label "b" :kids (vec (Tree :label "c" :kids (vec))))))
+root has 2 kids, the second has 1

@@ -1,0 +1,7 @@
+; a macro that refuses a use says why, with compile-error, at the place it is used
+(defmacro repeat
+  ((_ n body ...) (for (_ 0 n) body ...))
+  ((_) (compile-error "repeat takes a count and a body: (repeat 3 (println \"hi\"))")))
+(repeat 2 (println "hi"))
+(repeat)
+(compile-error 5)

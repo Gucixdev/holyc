@@ -1,0 +1,57 @@
+;; TIME
+(def x 41)
+;; TIME
+(+ x 1)
+;; TIME
+(defn sq ((n : int)) : int
+  (* n n))
+;; TIME
+(sq 12)
+;; TIME
+(sq 3)
+;; TIME
+"str"
+;; TIME
+(= 1.5 1.5)
+;; TIME
+(defn sq ((n : int)) : int (+ n 1))
+;; TIME
+(sq 3)
+;; TIME
+(struct P (x : int) (y : int))
+;; TIME
+(P 1 2)
+;; TIME
+(def p (P :y 5 :x 4))
+;; TIME
+p.y
+;; TIME
+(enum Light red green)
+;; TIME
+Light.green
+;; TIME
+(some (P 0 0))
+;; TIME
+(match (some 3) ((some v) (* v 2)) (none 0))
+;; TIME
+(struct P (x : int) (y : int))
+;; TIME
+p
+;; TIME
+(use "tests/repl.gael")
+;; TIME
+(width (Rect (Vec2) (Vec2 2.0 0.0)))
+;; TIME
+(use "tests/repl.gael")
+;; TIME, replaces width (tests/repl.gael:3)
+(defn width ((r : Rect)) : float 7.0)
+;; TIME
+(width (Rect (Vec2) (Vec2)))
+;; TIME
+(defmacro twice ((_ e) (do e e)))
+;; TIME
+(twice (println "hi"))
+;; TIME
+(defmacro twice ((_ e) (do e e e)))
+;; TIME
+(twice (println "ho"))

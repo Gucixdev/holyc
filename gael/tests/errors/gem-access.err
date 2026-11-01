@@ -1,0 +1,1 @@
+tests/errors/gems/sneaky.gael:2:24: error: gem sneaky uses ecs-a-spawn of gem ecs-a, which it does not require; add ecs-a to its :requires

@@ -1,0 +1,1 @@
+tests/window/bad-key.gael:2: runtime error: key-down?: no key "spacebar"; keys are letters, digits, f1 to f10, space, enter, escape, tab, backspace, minus, equal, up, down, left, right, shift, ctrl, alt

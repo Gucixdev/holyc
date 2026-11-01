@@ -1,0 +1,4 @@
+; a type's functions are declared in the gem that declares the type
+(enable shapes)
+(defn ShapeBox.grow ((b : ShapeBox)) : ShapeBox b)
+(let ((b (ShapeBox 2 3))) (println "%d" (b.area)))

@@ -1,0 +1,2 @@
+tests/errors/parens-missing.gael:4:20: error: a ')' is missing at the end of line 4: line 5 is indented as if the ( at 4:8 ended there
+tests/errors/parens-missing.gael:5:13: error: a ')' is missing at the end of line 5: line 6 is indented as if the ( at 3:1 ended there

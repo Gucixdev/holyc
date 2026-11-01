@@ -1,0 +1,6 @@
+; a type with a mistake in it is reported once; the code that uses it stays quiet
+(struct V (x : nosuch) (y : int))
+(def v (V 1 2))
+(println "%d" v.x)
+(enum D a "s" c)
+(println "%v" D.s)

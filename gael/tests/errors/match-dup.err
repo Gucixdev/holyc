@@ -1,0 +1,4 @@
+tests/errors/match-dup.gael:5:5: error: this arm never runs: an arm above already matches the same value
+tests/errors/match-dup.gael:7:5: error: this arm never runs: the _ arm above matches everything
+tests/errors/match-dup.gael:9:19: error: this arm never runs: an arm above already matches the same value
+tests/errors/match-dup.gael:11:31: error: this arm never runs: the arms above already cover every value

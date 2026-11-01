@@ -1,0 +1,2 @@
+(println "loaded")
+(defn half ((n : int)) : int (/ n 2.0))

@@ -1,0 +1,20 @@
+; a map keeps its entries in the order they went in; lookup and remove give an option
+(enum Kind weapon tool food)
+(struct Item (kind : Kind) (weight : float))
+
+(def stock (map ("rope" (Item Kind.tool 1.5)) ("bread" (Item Kind.food 0.4))))
+(insert stock "sword" (Item Kind.weapon 3.0))
+(insert stock "rope" (Item Kind.tool 1.0))          ; a key that is there gets the new value
+
+(for (name stock)
+  (match (lookup stock name)
+    ((some it) (println "%s: %v, %f kg" name it.kind it.weight))
+    (none (println "%s vanished" name))))
+
+(println "%v %b" (remove stock "bread") (has stock "bread"))
+(println "%d left: %v" (len stock) (keys stock))
+
+(let ((counts : (map string int) (map)))
+  (for (w (split "a b a c b a" " "))
+    (insert counts w (+ 1 (match (lookup counts w) ((some n) n) (none 0)))))
+  (println "%v" counts))

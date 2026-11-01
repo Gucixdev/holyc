@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# run - build gael when a source is newer than the binary, then run it with these arguments (none: the REPL)
+set -euo pipefail
+dir=$(dirname "${BASH_SOURCE[0]}")
+if [ ! -x "$dir/gael" ] || [ -n "$(find "$dir/src" -newer "$dir/gael" -print -quit)" ]; then "$dir/build"; fi
+exec "$dir/gael" "$@"

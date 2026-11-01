@@ -1,0 +1,1 @@
+tests/errors/use-twice.gael:2:6: error: hp is already defined (tests/errors/lib/defs.gael:1)

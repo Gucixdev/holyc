@@ -1,0 +1,16 @@
+; A local that is never read is a warning, and the program still runs. A name that starts with _ says it is on
+; purpose; a parameter may go unused (a hook or a callback has a fixed shape).
+(defn area ((w : int) (h : int) (unit-name : string)) : int
+  (let ((a (* w h)) (b 0) (_c 1) (d 0))
+    (set d 5)                                  ; a set alone does not read d
+    a))
+(defn first-or ((o : (option int)) (fallback : int)) : int
+  (match o ((some x) 0) (none fallback)))
+(for (i 0 2) (println "row"))
+(for (_ 0 2) (println "quiet"))
+(let ((v (vec 1 2)))
+  (for (e v) (println "item")))
+(let ((n 10) (add (fn ((x : int)) : int (+ x n)))) ; the fn reads n
+  (println "%d" (add 1)))
+(defmacro twice ((_ e) (let ((t e)) (+ e e)))) ; t is the macro's own: its use is not warned about
+(println "%d %d %d" (area 2 3 "m") (first-or (some 4) 7) (twice 2))

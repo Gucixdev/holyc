@@ -1,0 +1,2 @@
+tests/warnings/unreachable.gael:5:5: warning: this never runs: the return on line 4 comes first; remove it, or move it above
+tests/warnings/unreachable.gael:9:1: warning: this never runs: the exit on line 8 comes first; remove it, or move it above

@@ -1,0 +1,5 @@
+1 file, 3 files
+wc counted 3 lines
+(some 2.5) none
+true exits with 0, false with 1
+a color in hex: ff8800ff, -1 as an i32: ffffffff

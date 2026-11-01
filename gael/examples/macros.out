@@ -1,0 +1,13 @@
+early
+swap: 2 1
+my-or: false false true
+unless: runs
+cond: minus zero plus
+one: 1
+three: 3
+none: 0
+clicks: 2
+halve: 21, half here: 1000
+bump: 2
+reset: true new
+countdown: 0

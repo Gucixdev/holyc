@@ -1,0 +1,6 @@
+; a pool never grows: spawning into a full one is a runtime error
+(let ((ids : (pool int) (pool 2)))
+  (spawn ids 1)
+  (spawn ids 2)
+  (println "full: %d" (len ids))
+  (spawn ids 3))

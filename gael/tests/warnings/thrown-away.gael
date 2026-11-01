@@ -1,0 +1,12 @@
+; A value worked out and thrown away is a warning. A call is not one, since it may do something, and neither is an
+; and or an or of commands, which run as bash's && and || do. The dropped copies of the strings must still be let go.
+(def v (vec (format "a%d" 1) (format "b%d" 2)))
+(defn shout ((s : string)) : string (println "%s!" s) s)
+(get v 1)
+(when true (get v 0))
+(+ 1 2)
+(len v)
+(shout "hey")
+(and (run "true") (run "true"))
+(= (get v 0) "a1")
+(println "%v" v)

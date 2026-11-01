@@ -1,0 +1,3 @@
+tests/errors/none-type.gael:1:10: error: none needs to know its option type here; give it one, like (let ((x : (option int) none)) ...)
+tests/errors/none-type.gael:2:18: error: none is an option, but int is expected here
+tests/errors/none-type.gael:3:21: error: some needs a value; this is unit

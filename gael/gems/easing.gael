@@ -1,0 +1,66 @@
+(gem easing :version "0.1.0")
+; Blends and easing curves, ported from holyc's easing.h. Each curve takes t from 0 to 1 and gives 0 at 0 and 1 at 1;
+; scale the result to what moves: (lerp from to (ease-out-cubic t)).
+;
+;   (lerp a b t) (lerp-clamped a b t) (unlerp a b x)     ; a + (b - a) t; t kept in [0, 1]; the t that gives x
+;   (step edge x) (smooth t) (smoothstep e0 e1 x)       ; 0 or 1; 3t^2 - 2t^3; smooth of x put in [0, 1] over e0..e1
+;   (ease-in-quad t) (ease-out-quad t) (ease-in-out-quad t), and the same for cubic, sine and back
+
+(defn easing--clamp01 ((t : float)) : float (if (< t 0.0) 0.0 (if (> t 1.0) 1.0 t)))
+
+(defn lerp ((from : float) (to : float) (t : float)) : float (+ from (* (- to from) t)))
+(defn lerp-clamped ((from : float) (to : float) (t : float)) : float (lerp from to (easing--clamp01 t)))
+(defn unlerp ((from : float) (to : float) (x : float)) : float
+  (if (= from to) 0.0 (/ (- x from) (- to from))))
+
+(defn step ((edge : float) (x : float)) : float (if (< x edge) 0.0 1.0))
+(defn smooth ((t : float)) : float (* t t (- 3.0 (* 2.0 t))))
+(defn smoothstep ((e0 : float) (e1 : float) (x : float)) : float
+  (smooth (easing--clamp01 (unlerp e0 e1 x))))
+
+(defn ease-in-quad ((t : float)) : float (* t t))
+(defn ease-out-quad ((t : float)) : float (* t (- 2.0 t)))
+(defn ease-in-out-quad ((t : float)) : float
+  (if (< t 0.5)
+    (* 2.0 t t)
+    (let ((u (+ (* -2.0 t) 2.0))) (- 1.0 (/ (* u u) 2.0)))))
+
+(defn ease-in-cubic ((t : float)) : float (* t t t))
+(defn ease-out-cubic ((t : float)) : float (let ((u (- 1.0 t))) (- 1.0 (* u u u))))
+(defn ease-in-out-cubic ((t : float)) : float
+  (if (< t 0.5)
+    (* 4.0 t t t)
+    (let ((u (+ (* -2.0 t) 2.0))) (- 1.0 (/ (* u u u) 2.0)))))
+
+(defn ease-in-sine ((t : float)) : float (- 1.0 (cos (* t 1.5707963267948966))))
+(defn ease-out-sine ((t : float)) : float (sin (* t 1.5707963267948966)))
+(defn ease-in-out-sine ((t : float)) : float (/ (- (- (cos (* 3.141592653589793 t)) 1.0)) 2.0))
+
+(defn ease-in-back ((t : float)) : float (- (* 2.70158 t t t) (* 1.70158 t t)))
+(defn ease-out-back ((t : float)) : float
+  (let ((u (- t 1.0))) (+ 1.0 (* 2.70158 u u u) (* 1.70158 u u))))
+(defn ease-in-out-back ((t : float)) : float
+  (let ((c2 (* 1.70158 1.525)))
+    (if (< t 0.5)
+      (let ((u (* 2.0 t))) (/ (* u u (- (* (+ c2 1.0) u) c2)) 2.0))
+      (let ((u (- (* 2.0 t) 2.0))) (/ (+ (* u u (+ (* (+ c2 1.0) u) c2)) 2.0) 2.0)))))
+
+@test (defn easing--near ((a : float) (b : float)) : bool (let ((d (- a b))) (< (* d d) 1.0e-24)))
+(@test "every curve goes from 0 at 0 to 1 at 1"
+  (for (f (vec smooth ease-in-quad ease-out-quad ease-in-out-quad ease-in-cubic ease-out-cubic ease-in-out-cubic
+               ease-in-sine ease-out-sine ease-in-out-sine ease-in-back ease-out-back ease-in-out-back))
+    (assert (easing--near (f 0.0) 0.0))
+    (assert (easing--near (f 1.0) 1.0))))
+(@test "the in-out curves are halfway at the half"
+  (for (f (vec smooth ease-in-out-quad ease-in-out-cubic ease-in-out-sine ease-in-out-back))
+    (assert (easing--near (f 0.5) 0.5))))
+(@test "lerp, unlerp, step, smoothstep"
+  (assert (= (lerp 2.0 6.0 0.25) 3.0))
+  (assert (= (unlerp 2.0 6.0 3.0) 0.25))
+  (assert (= (unlerp 1.0 1.0 5.0) 0.0))
+  (assert (= (lerp-clamped 2.0 6.0 2.0) 6.0))
+  (assert (= (step 0.5 0.4) 0.0))
+  (assert (= (step 0.5 0.5) 1.0))
+  (assert (= (smoothstep 0.0 2.0 1.0) 0.5))
+  (assert (= (smoothstep 0.0 2.0 -1.0) 0.0))
+  (assert (= (smoothstep 0.0 2.0 3.0) 1.0)))

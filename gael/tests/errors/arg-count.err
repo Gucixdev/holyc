@@ -1,0 +1,1 @@
+tests/errors/arg-count.gael:2:15: error: double takes 1 argument, got 2

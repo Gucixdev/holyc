@@ -1,0 +1,20 @@
+=> 42 : int
+=> 144 : int
+=> 9 : int
+=> str : string
+=> true : bool
+=> 4 : int
+=> (P :x 1 :y 2) : P
+=> 5 : int
+=> green : Light
+=> (some (P :x 0 :y 0)) : (option P)
+=> 6 : int
+=> (P :x 4 :y 5) : P
+tests/repl.gael ran
+=> 2.0 : float
+=> 7.0 : float
+hi
+hi
+ho
+ho
+ho

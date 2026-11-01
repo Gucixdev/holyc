@@ -1,0 +1,7 @@
+; A vec that holds a node that holds the same vec is a cycle: counting owners never frees it. With GAEL_CHECK=1 (the
+; tests set it) the program reports it when it ends
+(struct Node (name : string) (kids : (vec Node)))
+
+(let ((root (Node "root" (vec))))
+  (push root.kids root)
+  (println "%d kid" (len root.kids)))

@@ -1,0 +1,12 @@
+; gems next to the program: inventory is a folder (main.gael uses items.gael) and requires ecs, which ecs-flat provides
+(enable inventory ecs-flat)
+
+(@test "a requirement met by the gem that provides it"
+  (let ((hero (ecs-spawn "hero")))
+    (inv-give hero (InvItem "sword" 3.5))
+    (inv-give hero (InvItem "rope" 1.0))
+    (assert (= (inv-weight hero) 4.5))
+    (assert (= (ecs-name hero) "hero"))))
+
+(@test "an empty bag weighs nothing"
+  (assert (= (inv-weight (ecs-spawn "cat")) 0.0)))

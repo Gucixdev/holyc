@@ -1,0 +1,8 @@
+; gael test runs the defs, not the rest of the top level, then each test in a run of its own: a failure stops only it
+(defn add ((a : int) (b : int)) : int (+ a b))
+(def table (vec 1 2 3))
+(println "the program's own run, which gael test jumps over")
+(@test "add adds" (assert (= (add 1 2) 3)))
+(@test "the defs ran" (assert (= (len table) 3)))
+(@test "this one fails" (assert (= (add 2 2) 5)))
+(@test "the rest still runs" (@debug (println "  debug output while working")) (assert true))

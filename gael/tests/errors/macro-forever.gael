@@ -1,0 +1,2 @@
+(defmacro forever ((_ x) (forever x)))
+(println "%d" (forever 1))

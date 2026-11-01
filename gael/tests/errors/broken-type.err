@@ -1,0 +1,2 @@
+tests/errors/broken-type.gael:2:16: error: unknown type nosuch
+tests/errors/broken-type.gael:5:11: error: a variant is a plain name, like north

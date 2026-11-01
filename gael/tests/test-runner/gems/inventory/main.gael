@@ -1,0 +1,16 @@
+(gem inventory :version "0.2.0" :requires (ecs) :excludes (inventory-legacy))
+; a gem of more than one file is a folder: main.gael starts with the manifest and uses the rest
+(use "items.gael")
+
+(def inv-bags : (map int (vec InvItem)) (map))
+
+(defn inv-give ((e : int) (item : InvItem)) : unit
+  (match (lookup inv-bags e)
+    ((some bag) (push bag item))
+    (none (insert inv-bags e (vec item))))
+  (println "%s gets a %s" (ecs-name e) item.name))   ; ecs-name: from whichever gem provides ecs
+
+(defn inv-weight ((e : int)) : float
+  (match (lookup inv-bags e)
+    ((some bag) (bag-weight bag))
+    (none 0.0)))

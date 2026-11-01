@@ -1,0 +1,18 @@
+; Handles are plain values: they compare with =, live in structs and work as map keys. Here a tree of nodes lives in a
+; pool, and each node knows its parent by handle.
+(struct Node (name : string) (parent : (option (handle Node))))
+
+(let ((nodes : (pool Node) (pool 16))
+      (root (spawn nodes (Node "root" none)))
+      (kid (spawn nodes (Node (format "kid of %s" "root") (some root))))
+      (depth : (map (handle Node) int) (map)))
+  (insert depth root 0)
+  (insert depth kid 1)
+  (let ((grandkid (spawn nodes (Node "grandkid" (some kid)))))
+    (insert depth grandkid 2)
+    (for (h nodes)
+      (let ((n (get nodes h)))
+        (match n.parent
+          ((some p) (println "%s, depth %v, is a child of %s" n.name (lookup depth h) (get nodes p).name))
+          (none (println "%s is the root" n.name)))))
+    (println "%b %b %v" (= kid kid) (= kid root) grandkid)))

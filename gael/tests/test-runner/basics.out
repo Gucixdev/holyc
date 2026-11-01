@@ -1,0 +1,6 @@
+ok add adds
+ok the defs ran
+FAIL this one fails (tests/test-runner/basics.gael:7)
+  debug output while working
+ok the rest still runs
+3 passed, 1 failed

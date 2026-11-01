@@ -1,0 +1,1 @@
+tests/errors/gems/bad-key.gael:1:14: error: unknown manifest key :needs; the keys are :version, :requires, :provides and :excludes

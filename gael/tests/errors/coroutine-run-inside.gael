@@ -1,0 +1,4 @@
+; run-coroutines and step-coroutines are the main program's: a coroutine pauses with sleep or yield
+(defn inner () : int (run-coroutines) 1)
+(coroutine (inner))
+(println "not reached")

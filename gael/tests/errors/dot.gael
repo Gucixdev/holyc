@@ -1,0 +1,8 @@
+(struct Vec2 (x : float) (y : float))
+(struct Body (pos : Vec2))
+(defn mk ((x : float)) : Body (Body (Vec2 x x)))
+(println "%f" (mk 1.0).nope)
+(println "%f" (mk 1.0).pos.x.y)
+(println "%d" (len "ab").x)
+(. 1)
+(println "%d" (mk 1.0).pos.x)

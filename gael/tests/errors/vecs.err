@@ -1,0 +1,13 @@
+tests/errors/vecs.gael:14:23: error: (vec unit) holds nothing; count with an int
+tests/errors/vecs.gael:2:9: error: push: the vec holds int, this value is string
+tests/errors/vecs.gael:3:8: error: get: the index is string, it must be int
+tests/errors/vecs.gael:4:10: error: put: the vec holds int, this value is float
+tests/errors/vecs.gael:5:6: error: pop: the first value must be a vec, this is int
+tests/errors/vecs.gael:6:8: error: vec: element 2 is string, the vec holds int
+tests/errors/vecs.gael:7:10: error: an empty vec needs to know what it holds; give it a type, like (let ((v : (vec int) (vec))) ...)
+tests/errors/vecs.gael:8:9: error: for: (x v) goes over a vec, the keys of a map or the handles of a pool, this is int; a range is (i from to)
+tests/errors/vecs.gael:9:11: error: for: a range ends at an int, this is string
+tests/errors/vecs.gael:10:6: error: for takes (x v) or (i from to), then a body: (for (i 0 10) (println "%d" i))
+tests/errors/vecs.gael:11:6: error: len takes a string, a vec, a map or a pool, not int
+tests/errors/vecs.gael:12:6: error: = compares int, float, bool, string and enum values, not (vec int)
+tests/errors/vecs.gael:13:1: error: push takes 2 values: (push v x)

@@ -1,0 +1,2 @@
+(use "lib/defs.gael")
+(def hp 5)

@@ -1,0 +1,6 @@
+tests/errors/minmax.gael:2:15: error: min takes two or more values: (min a b)
+tests/errors/minmax.gael:3:15: error: abs takes one value: (abs x)
+tests/errors/minmax.gael:4:15: error: clamp takes a value and its bounds: (clamp x lo hi)
+tests/errors/minmax.gael:5:20: error: min takes values of one type, these are int and float; convert one, like (float x) or (int x)
+tests/errors/minmax.gael:6:20: error: abs works on numbers, not string
+tests/errors/minmax.gael:8:15: error: max on P calls P.compare, which is not there: (defn P.compare ((a : P) (b : P)) : int ...), below 0 when a comes first

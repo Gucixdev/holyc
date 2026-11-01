@@ -1,0 +1,3 @@
+(use "geometry.gael") ; a path is relative to the file that uses it
+(struct Rect (min : Vec2) (max : Vec2))
+(defn width ((r : Rect)) : float (- r.max.x r.min.x))

@@ -1,0 +1,6 @@
+(enum Dir north south)
+(defn f ((x : float)) : int (match x (_ 1)))
+(defn g ((n : int)) : int (match n ("one" 1) (_ 0)))
+(defn h ((d : Dir)) : int (match d (up 1) (_ 0)))
+(defn k ((o : (option int))) : int (match o ((some v) "text") (none 0)))
+(defn m ((o : (option int))) : int (match o (5 1) (_ 0)))

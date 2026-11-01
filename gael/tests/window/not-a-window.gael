@@ -1,0 +1,2 @@
+(def c (new-canvas 8 8))
+(println "space: %b" (key-down? c "space"))

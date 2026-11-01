@@ -1,0 +1,11 @@
+@exprot (def a 1)
+@export (defn f () 1)
+@export
+(def b @export)
+(@frob 1)
+(@test 5)
+(defn g () (@test "inside" 1))
+(@warn 5)
+(@err "one" "two")
+@test 5
+@test (@test "x" (assert true))

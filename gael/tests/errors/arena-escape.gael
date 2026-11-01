@@ -1,0 +1,10 @@
+; a function called inside an arena keeps strings made there in a global: when the arena ends they are still held,
+; which is a runtime error at the arena (the compiler cannot see it through the call)
+(def cache : (vec string) (vec))
+(defn remember ((s : string)) (push cache s))
+(println "before")
+(arena
+  (remember (format "x%d" 1))
+  (remember (format "y%d" 2))
+  0)
+(println "never")

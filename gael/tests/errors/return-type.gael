@@ -1,0 +1,2 @@
+(defn answer () : int
+  "forty-two")

@@ -1,0 +1,1 @@
+tests/errors/shift-range.gael:1: runtime error: a shift by 64 does not fit a 64-bit int

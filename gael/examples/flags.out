@@ -1,0 +1,14 @@
+flags 67 of 200, first true true false false
+popped false, 199 left
+alive 65 visible 26 targets 19
+(Unit :name "u70!" :alive true :hp 70 :visible true :target (some true))
+(vec true false true)
+(Unit :name "p42" :alive true :hp 42 :visible true :target none) false
+has false true
+(vec true false true)
+kept (vec true true false true)
+(W :on false :a true :label "w69" :b false :tags (vec "t69"))
+(W :on true :a false :label "five" :b true :tags (vec))
+on tags 35
+(W :on true :a true :label "x" :b true :tags (vec "y")) 71
+(W :on true :a false :label "pw2" :b false :tags (vec))

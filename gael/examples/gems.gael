@@ -1,0 +1,19 @@
+; Gems: packages by name. (enable name...) turns each one on: gems/NAME.gael, or a folder gems/NAME/ whose main.gael
+; uses the rest, found next to the program, in gael's own folder (~/.gael) or next to the gael binary, where the gems
+; that come with gael are. A gem comes after the gems its manifest requires: wfc requires rng, so rng is on as well.
+; Only the gems named are read, so many installed gems cost nothing at start.
+(enable geometry wfc)
+
+(def a (Vec2 1.0 2.0))                          ; geometry: vectors and boxes, and + - * = on them
+(def b (Vec2 4.0 6.0))
+(def box (Rect (Vec2) (Vec2 4.0 2.0)))
+(println "a + b = %v, from a to b %f" (+ a b) (a.distance b))
+(println "box %f by %f around %v, a inside: %b" (box.width) (box.height) (box.center) (box.contains? a))
+
+(def w (Wfc.new 8 4 2))                         ; wfc: two tiles, each may only touch the other
+(w.allow-all 0 1)
+(w.fix 0 0 0)
+(when (w.solve (Rng.seed 1 0) 1)                ; Rng is from rng, which wfc brought
+  (for (y 0 4)
+    (for (x 0 8) (print "%s" (if (= (w.tile x y) 0) "#" ".")))
+    (println "")))

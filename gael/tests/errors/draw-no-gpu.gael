@@ -1,0 +1,2 @@
+(def c (new-canvas 8 8))
+(println "not reached")

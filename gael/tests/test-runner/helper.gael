@@ -1,0 +1,7 @@
+(gem helper :version "0.1.0")
+; gael test on a gem's main file turns the gem on from that file and runs its own tests; @test before a form keeps the
+; form for the tests
+(defn helper-double ((x : int)) : int (* 2 x))
+
+@test (defn helper--sample () : int 21)
+(@test "helper doubles" (assert (= (helper-double (helper--sample)) 42)))

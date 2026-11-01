@@ -1,0 +1,13 @@
+; where the compiler sees a value made in an arena go somewhere that outlives it, that is a compile error
+(def log : (vec string) (vec))
+(def name : string "")
+(let ((outer : (map string int) (map)) (s "x"))
+  (arena
+    (set name (format "n%d" 1))
+    (push log (format "l%d" 1))
+    (insert outer (format "k%d" 1) 1)
+    (set s (keep (format "fine %d" 2)))
+    (let ((inner : (vec string) (vec)))
+      (push inner (format "fine %d" 3)))
+    (format "r%d" 1)))
+(keep 1 2)

@@ -1,0 +1,17 @@
+; files, standard input, arguments and the environment
+; ./test runs it as: gael examples/io.gael one two < examples/io.in, with TMPDIR set to its own folder
+(def dir (match (getenv "TMPDIR") ((some d) d) (none "/tmp")))
+(def path (format "%s/gael-io-example.txt" dir))
+
+(println "arguments: %v" (args))
+(println "written: %b" (write-file path "first\nsecond\n"))
+(match (read-file path)
+  ((some text) (println "read back: %v" (split (trim text) "\n")))
+  (none (println "could not read it")))
+(println "a missing file: %v" (read-file (format "%s/no-such-file" dir)))
+
+(let ((n 0))
+  (while (match (read-line)
+           ((some line) (do (println "line %d: %s" (+ n 1) (trim line)) (set n (+ n 1)) true))
+           (none false)))
+  (println "%d lines on stdin" n))

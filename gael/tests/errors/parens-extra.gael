@@ -1,0 +1,4 @@
+; One ')' too many after the defn, and one in the middle of a line with nothing open.
+(defn f ((x : int)) : int
+  (+ x 1)))
+(println "%d" (f 1))) (println "x")

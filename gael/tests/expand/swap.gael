@@ -1,0 +1,7 @@
+(defmacro swap
+  ((_ a b) (let ((tmp a)) (set a b) (set b tmp))))
+(defmacro unless
+  ((_ c body ...) (when (not c) body ...)))
+(let ((x 1) (y 2))
+  (swap x y)
+  (unless (< x y) (println "x %d is not below y %d now" x y)))

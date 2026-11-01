@@ -1,0 +1,1 @@
+tests/errors/format.gael:1:22: error: println: % code 1 wants an int, this value is float

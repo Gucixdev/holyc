@@ -1,0 +1,34 @@
+; Wave function collapse from the wfc gem: five tiles and which may touch which - sea by sand, sand by grass, grass
+; by forest, forest by mountains - and the grid fills itself so that every tile only ever touches the ones allowed.
+; The border is pinned to sea first, so the land comes out an island. The same seed gives the same island.
+(enable rng wfc)
+
+(def SEA 0)
+(def SAND 1)
+(def GRASS 2)
+(def FOREST 3)
+(def HILL 4)
+(def glyphs (vec "~" "." "," "T" "^"))
+
+(def width 44)
+(def height 13)
+(def w (Wfc.new width height 5))
+(for (t 0 5) (w.allow-all t t))                 ; each tile next to its own kind
+(w.allow-all SEA SAND)
+(w.allow-all SAND GRASS)
+(w.allow-all GRASS FOREST)
+(w.allow-all FOREST HILL)
+(w.weight SEA 0.2)                              ; how often each is picked when a cell is decided
+(w.weight SAND 0.4)
+(w.weight GRASS 5.0)
+(w.weight FOREST 4.0)
+(w.weight HILL 3.0)
+(for (x 0 width) (w.fix x 0 SEA) (w.fix x (- height 1) SEA))
+(for (y 0 height) (w.fix 0 y SEA) (w.fix (- width 1) y SEA))
+
+(if (w.solve (Rng.seed 2026 0) 20)
+  (for (y 0 height)
+    (let ((row : (vec string) (vec)))
+      (for (x 0 width) (push row (get glyphs (w.tile x y))))
+      (println "%s" (join row ""))))
+  (println "no grid in 20 tries"))

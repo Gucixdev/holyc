@@ -1,0 +1,2 @@
+(def w (open-window "keys" 64 48))
+(println "space bar: %b" (key-down? w "spacebar"))

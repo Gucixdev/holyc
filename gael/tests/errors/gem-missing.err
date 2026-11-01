@@ -1,0 +1,1 @@
+tests/errors/gem-missing.gael:1:9: error: there is no gem nowhere: no gems/nowhere.gael or gems/nowhere/main.gael here, in gael's folder or with gael itself

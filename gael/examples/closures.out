@@ -1,0 +1,7 @@
+6 10
+1 2 3
+hello, ada!
+123
+(vec "[warn] low fuel" "[warn] no ammo")
+0 1 4 9 
+(fn fn@6:3) (fn twice)

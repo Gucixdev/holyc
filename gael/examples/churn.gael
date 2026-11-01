@@ -1,0 +1,18 @@
+; Every round makes 64 strings of about 110 bytes, a vec and a map, and lets them go. Nothing holds them after the
+; round, so they are freed and their memory is used again: in total the rounds make more than the heap of 32 MiB
+; (churn.env) holds.
+(def pad (let ((s "")) (for (_ 0 99) (set s (format "%s." s))) s))
+
+(defn row ((round : int)) : (vec string)
+  (let ((v : (vec string) (vec)))
+    (for (i 0 64) (push v (format "cell-%d-%d %s" round i pad)))
+    v))
+
+(let ((bytes 0) (entries 0))
+  (for (round 0 5000)
+    (let ((v (row round))
+          (m : (map string int) (map)))
+      (for (cell v) (insert m cell (len cell)))
+      (set entries (+ entries (len m)))
+      (set bytes (+ bytes (len (join v ","))))))
+  (println "%d entries, %d bytes joined" entries bytes))

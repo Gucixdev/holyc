@@ -1,0 +1,8 @@
+tests/errors/types-decl.gael:1:36: error: Node cannot hold a Node, not even in an option: its size would have no end; (vec Node) can
+tests/errors/types-decl.gael:2:24: error: Inner is declared below; declare a type above the structs that use it
+tests/errors/types-decl.gael:4:25: error: field a twice
+tests/errors/types-decl.gael:5:18: error: a field cannot be unit
+tests/errors/types-decl.gael:5:29: error: unknown type nosuch
+tests/errors/types-decl.gael:6:7: error: enum Empty needs at least one variant: (enum Dir north south)
+tests/errors/types-decl.gael:7:17: error: variant a twice
+tests/errors/types-decl.gael:8:7: error: Inner is already a type

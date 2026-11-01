@@ -1,0 +1,8 @@
+(struct Node (value : int) (next : (option Node)))
+(struct Outer (inner : Inner))
+(struct Inner (n : int))
+(struct Pair (a : int) (a : int))
+(struct Bad (u : unit) (q : nosuch))
+(enum Empty)
+(enum Twice a b a)
+(defn Inner () 1)

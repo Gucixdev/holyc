@@ -1,0 +1,12 @@
+tests/errors/coroutines.gael:3:7: error: poll takes a coroutine, which (coroutine (f ...)) makes; this is int
+tests/errors/coroutines.gael:4:8: error: sleep takes seconds as a float, like (sleep 0.5); this is int
+tests/errors/coroutines.gael:5:12: error: coroutine takes a call of a function by its name: (coroutine (patrol goblin))
+tests/errors/coroutines.gael:6:12: error: coroutine takes a call of a function by its name: (coroutine (patrol goblin))
+tests/errors/coroutines.gael:7:15: error: f: argument 1 is string, it must be int
+tests/errors/coroutines.gael:8:1: error: yield takes nothing: (yield)
+tests/errors/coroutines.gael:9:8: error: done? takes a coroutine, which (coroutine (f ...)) makes; this is (vec int)
+tests/errors/coroutines.gael:10:34: error: + works on numbers, not (option int)
+tests/errors/coroutines.gael:11:6: error: u is declared (coroutine unit), its value is (coroutine int)
+tests/errors/coroutines.gael:12:1: error: poll gives what a coroutine's function returns, and this one returns nothing; (done? co) says whether it ended
+tests/errors/coroutines.gael:13:2: error: gael never waits: (poll co) gives (option T) at once, none while the coroutine runs
+tests/errors/coroutines.gael:14:2: error: gael has no async: (coroutine (f x)) starts f as a coroutine, and nothing waits for it

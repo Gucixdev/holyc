@@ -1,0 +1,1 @@
+tests/errors/gpu-fault.gael:5: runtime error: division by zero

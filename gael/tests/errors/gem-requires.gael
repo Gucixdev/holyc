@@ -1,0 +1,2 @@
+; fsm requires store, and no gem that provides it is on
+(enable fsm)

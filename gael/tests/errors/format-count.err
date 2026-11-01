@@ -1,0 +1,1 @@
+tests/errors/format-count.gael:1:10: error: println: the format has 2 % codes but 1 value follows

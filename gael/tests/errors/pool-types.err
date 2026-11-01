@@ -1,0 +1,11 @@
+tests/errors/pool-types.gael:6:9: error: get: a (pool Particle) takes a (handle Particle), this is int
+tests/errors/pool-types.gael:7:9: error: get: a (pool Enemy) takes a (handle Enemy), this is (handle Particle)
+tests/errors/pool-types.gael:8:8: error: spawn: the first value must be a pool, this is (vec int)
+tests/errors/pool-types.gael:9:7: error: push works on a vec; a pool takes (spawn p x)
+tests/errors/pool-types.gael:10:6: error: pop works on a vec; take an element out of a pool with (remove p h)
+tests/errors/pool-types.gael:11:9: error: insert works on a map; a pool takes (spawn p x)
+tests/errors/pool-types.gael:12:7: error: keys works on a map; go over a pool's handles with (for (h p) ...)
+tests/errors/pool-types.gael:13:10: error: a pool needs to know what it holds; give it a type, like (def ps : (pool Particle) (pool 1000))
+tests/errors/pool-types.gael:14:9: error: remove: the first value must be a map or a pool, this is (vec int)
+tests/errors/pool-types.gael:15:9: error: for: (x v) goes over a vec, the keys of a map or the handles of a pool, this is int; a range is (i from to)
+tests/errors/pool-types.gael:16:6: error: len takes a string, a vec, a map or a pool, not int

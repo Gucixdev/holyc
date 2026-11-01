@@ -1,0 +1,20 @@
+; drawing on a canvas, on the GPU: a pixel in the middle of each shape is its color on any GPU (the edges may vary),
+; and the PNG is as long as its size makes it. ./test runs this with GAEL_WGPU set
+(def c (new-canvas 64 48))
+(draw-clear c 0x202030ff)
+(draw-rect c 4.0 4.0 20.0 10.0 0xff0000ff)
+(draw-circle c 40.0 24.0 10.0 0x00ff00ff)
+(draw-line c 0.0 40.0 63.0 40.0 2.0 0x0000ffff)
+(draw-rect c 30.0 2.0 20.0 6.0 0xffffff80)              ; half see-through, on the background
+(println "shown: %b" (show-frame c))
+(println "rect %x circle %x line %x background %x" (canvas-pixel c 10 8) (canvas-pixel c 40 24) (canvas-pixel c 30 40)
+         (canvas-pixel c 60 2))
+(println "blended %x" (canvas-pixel c 40 4))
+(draw-clear c 0x000000ff)                              ; a new frame: the clear comes first
+(draw-circle c 32.0 24.0 4.0 0xffcc00ff)
+(println "after a clear %x %x" (canvas-pixel c 32 24) (canvas-pixel c 10 8))
+(def path (format "%s/shapes.png" (match (getenv "TMPDIR") ((some d) d) (none "/tmp"))))
+(println "saved: %b" (save-png c path))
+(match (read-file path)
+  ((some png) (println "%s, %d bytes" (substr png 1 4) (len png)))
+  (none (println "no file")))

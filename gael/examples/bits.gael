@@ -1,0 +1,16 @@
+; The logic of bools has words: and, or, not, nand, nor (and, or, nand and nor stop at the first answer), xor and xnor
+; (true when an odd number of values are true, and the opposite). The bits of ints have functions too: bit-and, bit-or,
+; bit-xor, bit-not, shl and shr - shr keeps the sign of a signed type - and the result stays in its type. Ints can be
+; written in hex (0xff) and binary (0b1010).
+(println "%b %b %b %b %b" (and true false) (or true false) (not true) (nand true false) (nor false false))
+(println "%b %b %b %b" (xor true false) (xor true true) (xor true true true) (xnor true false))
+
+(def solid : u8 0b0001)
+(def water : u8 0b0010)
+(def lava : u8 0b0100)
+
+(let ((tile : u8 (bit-or solid lava)) (x : u8 200) (y : i8 -8))
+  (println "%b %b %d" (!= (bit-and tile lava) 0) (!= (bit-and tile water) 0) (bit-and tile (bit-not lava)))
+  (println "%d %d %d %d" (bit-and x 0x0f) (bit-or x 1) (bit-xor x 0xff) (bit-not x))
+  (println "%d %d %d %d" (shl x 1) (shr x 3) (shr y 1) (shl y 4))
+  (println "%d %d %d" (shl 1 62) (shr -16 2) (u64 0xffffffffffffffff)))

@@ -1,0 +1,2 @@
+(gem crash)
+(defn crash-div ((n : int)) : int (/ 10 n))

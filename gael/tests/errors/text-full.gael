@@ -1,0 +1,3 @@
+; a string is built in the text arena (as big as the heap: 32 MiB here) before it moves to the heap; one longer than
+; that is a runtime error, not a crash
+(println "never %d" (len (sh "head -c 40000000 /dev/zero")))

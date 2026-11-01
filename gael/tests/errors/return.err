@@ -1,0 +1,8 @@
+tests/errors/return.gael:1:1: error: return is for the body of a function, a defn or a fn
+tests/errors/return.gael:2:23: error: return cannot be in the middle of an expression with values already worked out; put it where a statement goes, like (when c (return x))
+tests/errors/return.gael:3:25: error: return cannot leave an arena; let the arena end, then return
+tests/errors/return.gael:4:19: error: this function returns unit, so its return takes no value: (return)
+tests/errors/return.gael:5:18: error: this function returns a value: (return x)
+tests/errors/return.gael:6:26: error: return: this function returns int, the value is string
+tests/errors/return.gael:8:27: error: return cannot be among the fields of a struct being made
+tests/errors/return.gael:9:18: error: return takes one value, or none in a function that returns unit

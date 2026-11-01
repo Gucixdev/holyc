@@ -1,0 +1,11 @@
+tests/errors/maps.gael:10:21: error: a map's key is an int, a bool, a string or an enum value, not float
+tests/errors/maps.gael:11:14: error: a map type is (map key value), like (map string int)
+tests/errors/maps.gael:2:11: error: insert: the keys are string, this one is int
+tests/errors/maps.gael:3:15: error: insert: the values are int, this one is string
+tests/errors/maps.gael:4:9: error: lookup: the first value must be a map or a pool, this is int
+tests/errors/maps.gael:5:7: error: a map's key is an int, a bool, a string or an enum value, not float
+tests/errors/maps.gael:6:15: error: map: key 2 is int, the keys are string
+tests/errors/maps.gael:6:17: error: map: value 2 is string, the values are int
+tests/errors/maps.gael:7:10: error: an empty map needs to know what it holds; give it a type, like (let ((m : (map string int) (map))) ...)
+tests/errors/maps.gael:8:6: error: a map entry is (key value), like (map ("a" 1) ("b" 2))
+tests/errors/maps.gael:9:1: error: has takes 2 values: (has m key)

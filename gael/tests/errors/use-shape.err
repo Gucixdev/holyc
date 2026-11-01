@@ -1,0 +1,3 @@
+tests/errors/use-shape.gael:1:1: error: use takes one file name: (use "lib.gael")
+tests/errors/use-shape.gael:2:1: error: use takes one file name: (use "lib.gael")
+tests/errors/use-shape.gael:3:16: error: use is only allowed at the top level of a file

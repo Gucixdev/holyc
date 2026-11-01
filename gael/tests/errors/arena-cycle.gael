@@ -1,0 +1,6 @@
+; a cycle made in an arena keeps itself alive, so the arena cannot tell it from a value kept outside
+(struct Node (name : string) (kids : (vec Node)))
+(arena
+  (let ((root (Node (format "root %d" 1) (vec))))
+    (push root.kids root)
+    (len root.kids)))

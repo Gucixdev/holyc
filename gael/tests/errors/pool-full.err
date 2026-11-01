@@ -1,0 +1,1 @@
+tests/errors/pool-full.gael:6: runtime error: the pool is full (2 elements)

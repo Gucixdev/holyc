@@ -1,0 +1,45 @@
+; Two gems together: guards are entities of the ecs gem, and each one's mood is a hierarchical state machine of the
+; hfsm gem. A state is a value of an enum, so it sits in a column like any component. chase is inside alert, which is
+; inside alive: going from calm to chase enters alert on the way, and dying leaves everything up to alive.
+(enable ecs hfsm)
+
+(hfsm Mood (e : Game)
+  (alive -) (calm alive) (alert alive) (chase alert) (dead -)
+  :enter ((alert (println "  %s looks around" (e.name)))
+          (chase (println "  %s gives chase" (e.name)))
+          (dead (println "  %s is down" (e.name))))
+  :exit ((alert (println "  %s stands down" (e.name)))))
+
+(ecs-world Game
+  (components (name : string "") (x : float 0.0) (hp : int 3) (mood : Mood Mood.calm))
+  (tags guard))
+
+(defn hire ((name : string) (x : float)) : Game
+  (let ((e (Game.spawn)))
+    (e.set-name name)
+    (e.set-x x)
+    (e.set-hp 3)
+    (e.set-mood (Mood.start Mood.calm e))
+    (e.tag Game-guard)
+    e))
+
+(def ann (hire "Ann" 2.0))
+(def bob (hire "Bob" 9.0))
+
+(defn think ((thief : float)) : unit           ; a system: each guard's mood follows how close the thief is
+  (ecs-each Game (e x mood) :with (guard)
+    (let ((d (if (> x thief) (- x thief) (- thief x))))
+      (when (mood.in? Mood.alive)
+        (set mood (mood.go (if (< d 3.0) Mood.chase (if (< d 6.0) Mood.alert Mood.calm)) e))))))
+
+(defn hurt () : unit                            ; a guard at 0 hp goes down
+  (ecs-each Game (e hp mood) :with (guard)
+    (when (and (<= hp 0) (mood.in? Mood.alive))
+      (set mood (mood.go Mood.dead e)))))
+
+(for (thief (vec 14.0 7.0 4.0 20.0))
+  (println "the thief at %f" thief)
+  (think thief))
+(bob.set-hp 0)
+(hurt)
+(println "Ann is %v, Bob is %v; Bob alive: %b" (ann.mood) (bob.mood) (Mood.in? (bob.mood) Mood.alive))

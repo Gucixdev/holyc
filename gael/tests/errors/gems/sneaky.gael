@@ -1,0 +1,2 @@
+(gem sneaky)
+(defn sneaky () : int (ecs-a-spawn))

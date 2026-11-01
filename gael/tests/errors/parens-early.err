@@ -1,0 +1,1 @@
+tests/errors/parens-early.gael:3:15: error: a ')' too many at the end of line 3: line 4 is indented as part of the ( at 3:3, which it would close; remove it

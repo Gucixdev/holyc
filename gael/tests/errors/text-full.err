@@ -1,0 +1,1 @@
+tests/errors/text-full.gael:3: runtime error: out of memory for strings (the text arena is full)

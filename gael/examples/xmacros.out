@@ -1,0 +1,9 @@
+(vec "red" "green" "blue")
+green: 65280
+red is 16711680
+blue is 255
+check failed: (= (+ 2 2) 5)
+Stats-hp 30, Stats-mp 12
+n-squared 49
+(* 6 7) => 42
+(string-of "a" 1 (b "c")) => a1(b "c")

@@ -1,0 +1,9 @@
+; and / or stop at the first answer: the second call never runs
+(defn loud ((label : string) (value : bool)) : bool
+  (println "  evaluated %s" label)
+  value)
+
+(println "and: %b" (and (loud "a" false) (loud "b" true)))
+(println "or: %b" (or (loud "c" true) (loud "d" false)))
+(println "not: %b, compare strings: %b" (not true) (= "gael" "gael"))
+(when (> (len "gael") 3) (println "len works"))

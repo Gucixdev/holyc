@@ -1,0 +1,5 @@
+; (use "file") compiles that file first, once, even when two files use it; its top level runs first
+(use "lib/geometry.gael")
+(use "lib/shapes.gael")
+(def r (Rect (Vec2 1.0 1.0) (add origin (Vec2 4.0 3.0))))
+(println "width %f, %v" (width r) r)

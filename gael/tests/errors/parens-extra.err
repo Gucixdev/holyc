@@ -1,0 +1,2 @@
+tests/errors/parens-extra.gael:3:11: error: a ')' too many at the end of line 3: nothing is open there; remove it
+tests/errors/parens-extra.gael:4:21: error: unexpected ')': nothing is open here; remove it

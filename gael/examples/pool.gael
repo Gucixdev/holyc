@@ -1,0 +1,30 @@
+; A pool has a fixed number of slots. spawn puts an element into a free slot and gives back a handle; the handle stays
+; good until its element is removed. After that get on it is an error and lookup gives none, even once the slot holds
+; a new element: a handle remembers the generation its slot had.
+(enable geometry)                               ; Vec2, and + on it
+(struct Particle (pos : Vec2) (vel : Vec2) (life : int) (name : string))
+
+(def particles : (pool Particle) (pool 4))
+
+(defn emit ((n : int)) : (handle Particle)
+  (spawn particles (Particle (Vec2 0.0 0.0) (Vec2 (float n) 1.0) n (format "p%d" n))))
+
+; one step: every particle moves and ages, the ones whose life ran out are removed
+(defn step ()
+  (for (h particles)
+    (let ((p (get particles h)))
+      (if (<= p.life 1)
+          (remove particles h)
+          (put particles h (Particle (+ p.pos p.vel) p.vel (- p.life 1) p.name))))))
+
+(let ((a (emit 1)) (b (emit 2)) (c (emit 3)))
+  (println "%d of 4: %v %v %v" (len particles) a b c)
+  (step)
+  (println "after a step: %d left, a there: %b" (len particles) (has particles a))
+  (match (lookup particles b)
+    ((some p) (println "%s at %v, %d to go" p.name p.pos p.life))
+    (none (println "b is gone")))
+  (let ((d (emit 4)))
+    (println "%v took the slot of %v; a gives %v" d a (lookup particles a)))
+  (for (h particles) (println "%v %s" h (get particles h).name))
+  (println "%v" particles))

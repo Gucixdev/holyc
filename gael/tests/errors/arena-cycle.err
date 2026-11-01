@@ -1,0 +1,1 @@
+tests/errors/arena-cycle.gael:3: runtime error: 1 string and 1 vec made in this arena are still held when it ends (kept outside it, or in a cycle); (keep x) copies a value out

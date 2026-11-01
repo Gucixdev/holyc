@@ -1,0 +1,14 @@
+tests/errors/gpu.gael:7:23: error: gpu-each: p.y is float; a GPU works on f32, i32 and u32: make the field f32 (or i32, u32)
+tests/errors/gpu.gael:8:24: error: gpu-each: p.on is a bool, which a vec keeps as one bit and a GPU cannot take; make the field u32, 0 or 1
+tests/errors/gpu.gael:9:23: error: gpu-each: the body sets the fields of the element and its own variables; total is outside the GPU
+tests/errors/gpu.gael:10:27: error: gpu-each: helper is a function of the program, and a GPU kernel calls none; write what it does in the body
+tests/errors/gpu.gael:11:18: error: gpu-each: println does not run on a GPU; the body has let, set, if, when, do, arithmetic, comparisons, logic, bits, math and min, max, abs, clamp
+tests/errors/gpu.gael:12:27: error: gpu-each: write the type of k - on its own 2 would be 64-bit, and a GPU works on 32-bit numbers: (k : i32 2)
+tests/errors/gpu.gael:13:34: error: gpu-each: count is int; what the GPU reads from around is f32, i32 or u32, like (def dt : f32 0.016)
+tests/errors/gpu.gael:14:18: error: gpu-each: for does not run on the GPU yet; the body runs once per element, so a loop over the elements is the gpu-each itself
+tests/errors/gpu.gael:15:18: error: gpu-each inside gpu-each: the body already runs once per element; use one
+tests/errors/gpu.gael:16:32: error: gpu-each: float is 64-bit, and a GPU works on 32-bit numbers: f32, i32, u32
+tests/errors/gpu.gael:17:23: error: gpu-each: p.name is string; a GPU works on f32, i32 and u32: make the field f32 (or i32, u32)
+tests/errors/gpu.gael:18:25: error: gpu-each: i is the element's index; it cannot be set
+tests/errors/gpu.gael:19:1: error: gpu-each takes the element, the vec and a body: (gpu-each (p particles) (set p.x (+ p.x p.vx)))
+tests/errors/gpu.gael:20:1: error: gpu-each takes the element, the vec and a body: (gpu-each (p particles) (set p.x (+ p.x p.vx)))

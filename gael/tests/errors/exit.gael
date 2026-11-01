@@ -1,0 +1,4 @@
+(println "to stdout")
+(eprintln "to stderr: %d" 42)
+(exit 1)
+(println "never")

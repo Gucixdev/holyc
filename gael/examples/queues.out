@@ -1,0 +1,9 @@
+job render, priority 1
+job physics, priority 1
+job audio, priority 2
+job save, priority 3
+job log, priority 0
+tick 1: kind 1 on 7 (0)
+tick 3: kind 2 on 7 (5)
+tick 3: kind 2 on 7 (2)
+3 events logged; 2 at tick 3, the first of them at 1

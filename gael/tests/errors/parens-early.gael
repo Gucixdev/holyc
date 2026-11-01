@@ -1,0 +1,4 @@
+; The let is closed on line 3, but line 4 is indented as part of it: that ')' is one too many.
+(defn f ((x : int)) : int
+  (let ((y 1)))
+    (+ x y)))

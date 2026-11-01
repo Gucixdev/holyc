@@ -1,0 +1,3 @@
+(gem shapes)
+(struct ShapeBox (w : int) (h : int))
+(defn ShapeBox.area ((b : ShapeBox)) : int (* b.w b.h))

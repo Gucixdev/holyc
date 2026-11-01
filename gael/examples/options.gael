@@ -1,0 +1,18 @@
+; an option is a value or none, and match is the only way to get the value out
+(defn safe-div ((a : int) (b : int)) : (option int)
+  (if (= b 0) none (some (/ a b))))
+
+(defn report ((r : (option int))) : unit
+  (match r
+    ((some v) (println "got %d" v))
+    (none (println "nothing"))))
+
+(defn day ((name : string)) : (option int)
+  (match name
+    ("mon" (some 1))
+    ("tue" (some 2))
+    (_ none)))
+
+(report (safe-div 10 2))
+(report (safe-div 1 0))
+(println "%v %v %v" (day "tue") (day "sun") (some "text"))

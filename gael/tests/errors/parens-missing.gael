@@ -1,0 +1,6 @@
+; Two ')' are missing, one inside the let's bindings: line 5's indentation shows the bindings ended on line 4, and
+; line 6's that the defn ended on line 5, so each message names the line to add one at.
+(defn f ((x : int)) : int
+  (let ((y (+ x 1))
+    (* y 2))
+(println "%d" (f 3))

@@ -1,0 +1,9 @@
+x 1.5 y 1.5 vy 0.0 bounces 2
+x 2.5 y 2.5 vy 0.0 bounces 1
+x 3.5 y 3.5 vy 2.0 bounces 1
+x 4.5 y 3.5 vy 4.0 bounces 1
+x 5.5 y 2.5 vy 6.0 bounces 1
+x 6.5 y 0.5 vy 6.0 bounces 1
+x 7.5 y 1.5 vy -6.0 bounces 0
+x 8.5 y 3.5 vy -6.0 bounces 0
+(Ball :x 1.5 :y 3.5 :vx 0.5 :vy -6.0 :bounces 0)

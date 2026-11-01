@@ -1,0 +1,1 @@
+tests/errors/draw-no-gpu.gael:1: runtime error: drawing needs a GPU, and there is none (GAEL_GPU=0)

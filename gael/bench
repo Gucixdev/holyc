@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# bench - time gael against other languages on the same programs, and write the numbers down.
+#
+#   ./bench                 every benchmark in benchmarks/, with every language installed here
+#   ./bench fib nbody       only these benchmarks
+#   RUNS=3 ./bench          fewer timed runs (default 10, after WARMUP=1 untimed run)
+#   LANGS="gael gdscript python" ./bench    only these languages
+#   GODOT=/path/to/godot ./bench            the Godot binary for GDScript (default: godot4 or godot on PATH)
+#
+# benchmarks/NAME.gael is the program; NAME.c, .py, .lua, .scm, .lisp, .js and .gd do the same thing in C (gcc -O2),
+# Python, Lua 5.4 and LuaJIT, Guile, Chez Scheme and Chicken (csc -O2), SBCL and Node, and GDScript (Godot,
+# headless). NAME.guile.scm and NAME.chez.scm stand in for NAME.scm where those two need their own code (hash
+# tables). Every program prints one line, which must equal NAME.expected; a language whose output differs is reported
+# as wrong and not timed. "start" is an empty program: the time a language takes to start and stop. Godot starts a
+# whole engine, so the gdscript column is its time minus its own start, the godot column the whole run.
+#
+# Wall time per run: hyperfine when it is installed, else date in a loop; the table shows the median in ms. Memory: the
+# maximum resident set of one run, with /usr/bin/time when it is installed. C and Chicken are compiled before timing.
+# The results are printed and appended to benchmarks/RESULTS.md with the date, the commit and the machine. Caches
+# (Guile's compiled files, Godot's settings) go to a temp folder, not the real home.
+set -u
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
+case "${1:-}" in -h | --help) sed -n '2,/^set -u/{/^set -u/d;s/^# \{0,1\}//;p}' "$0"; exit 0 ;; esac
+unset GAEL_CHECK
+runs=${RUNS:-10} warmup=${WARMUP:-1}
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/gael-bench.XXXXXX") || exit 1
+trap 'rm -rf -- "$tmp"' EXIT
+export HOME="$tmp/home" XDG_CACHE_HOME="$tmp/cache" XDG_DATA_HOME="$tmp/data" XDG_CONFIG_HOME="$tmp/config"
+mkdir -p "$HOME"
+./build || exit 1
+
+# the languages: name, then the command that runs a file (FILE), in the order of the table's columns
+have() { command -v "$1" > /dev/null 2>&1; }
+lua=; for c in lua5.4 lua; do have "$c" && "$c" -v 2>&1 | grep -q 'Lua 5.4' && { lua=$c; break; }; done
+chez=; for c in chez chezscheme scheme; do have "$c" && "$c" --version 2>&1 | grep -qE '^[0-9]+\.[0-9]' && { chez=$c; break; }; done
+godot=${GODOT:-}; [ -n "$godot" ] || for c in godot4 godot; do have "$c" && { godot=$(command -v "$c"); break; }; done
+langs=() cmds=() exts=()
+add() { langs+=("$1"); exts+=("$2"); cmds+=("$3"); }
+add gael gael "$PWD/gael FILE"
+have gcc && add c c "COMPILED"
+have python3 && add python py "python3 FILE"
+[ -n "$lua" ] && add lua lua "$lua FILE"
+have luajit && add luajit lua "luajit FILE"
+have guile && add guile scm "guile FILE"
+[ -n "$chez" ] && add chez scm "$chez --script FILE"
+have csc && add chicken scm "COMPILED"
+have sbcl && add sbcl lisp "sbcl --script FILE"
+have node && add node js "node FILE"
+[ -n "$godot" ] && add godot gd "$godot --headless --script FILE"
+if [ -n "${LANGS:-}" ]; then # only the asked ones; gdscript comes from the godot column
+	keep=() kcmds=() kexts=()
+	want=" $LANGS "
+	[[ "$want" == *" gdscript "* ]] && want+="godot "
+	for i in "${!langs[@]}"; do
+		[[ "$want" == *" ${langs[i]} "* ]] || continue
+		keep+=("${langs[i]}") kcmds+=("${cmds[i]}") kexts+=("${exts[i]}")
+	done
+	langs=("${keep[@]}") cmds=("${kcmds[@]}") exts=("${kexts[@]}")
+fi
+
+names=("$@")
+if [ "${#names[@]}" = 0 ]; then
+	names=(start)
+	for f in benchmarks/*.gael; do n=${f##*/}; n=${n%.gael}; [ "$n" = start ] || names+=("$n"); done
+fi
+
+# source NAME LANG EXT: the file LANG runs for NAME, empty when it has none
+source_of() {
+	local f="benchmarks/$1.$2.$3"
+	[ "$2" = guile ] || [ "$2" = chez ] || [ "$2" = chicken ] || f=
+	[ -n "$f" ] && [ -f "$f" ] && { echo "$PWD/$f"; return; }
+	f="benchmarks/$1.$3"
+	[ -f "$f" ] && echo "$PWD/$f"
+}
+
+# command NAME I: the command line of language I for benchmark NAME (compiling it first when needed), empty if none
+command_of() {
+	local src
+	src=$(source_of "$1" "${langs[$2]}" "${exts[$2]}") || return
+	[ -n "$src" ] || return
+	case "${langs[$2]}" in
+	c) gcc -O2 -o "$tmp/$1-c" "$src" -lm 2> "$tmp/cc.log" && echo "$tmp/$1-c" ;;
+	chicken) csc -O2 -o "$tmp/$1-chicken" "$src" > "$tmp/csc.log" 2>&1 && echo "$tmp/$1-chicken" ;;
+	*) echo "${cmds[$2]//FILE/$src}" ;;
+	esac
+}
+
+# timing CMD: median, min and max wall time in ms, one line
+timing() {
+	if have hyperfine; then
+		# shellcheck disable=SC2086 # the command is split into words on purpose
+		hyperfine -N --style none --runs "$runs" --warmup "$warmup" --export-csv "$tmp/h.csv" -- "$1" > /dev/null 2>&1 &&
+			awk -F, 'NR == 2 { printf "%.1f %.1f %.1f\n", $4 * 1000, $7 * 1000, $8 * 1000 }' "$tmp/h.csv"
+		return
+	fi
+	local i t0 t1
+	: > "$tmp/t"
+	# shellcheck disable=SC2086
+	for ((i = 0; i < warmup; i++)); do $1 > /dev/null 2>&1; done
+	for ((i = 0; i < runs; i++)); do
+		t0=$(date +%s%N)
+		# shellcheck disable=SC2086
+		$1 > /dev/null 2>&1
+		t1=$(date +%s%N)
+		echo $(((t1 - t0) / 1000)) >> "$tmp/t"
+	done
+	sort -n "$tmp/t" | awk '{ a[NR] = $1 } END { m = NR % 2 ? a[(NR + 1) / 2] : (a[NR / 2] + a[NR / 2 + 1]) / 2
+		printf "%.1f %.1f %.1f\n", m / 1000, a[1] / 1000, a[NR] / 1000 }'
+}
+
+# rss CMD: the maximum resident set of one run, in MB
+rss() {
+	[ -x /usr/bin/time ] || { echo -; return; }
+	# shellcheck disable=SC2086
+	/usr/bin/time -f %M -o "$tmp/rss" $1 > /dev/null 2>&1 && awk '{ printf "%.0f\n", $1 / 1024 }' "$tmp/rss" || echo -
+}
+
+declare -A median rssmb
+for n in "${names[@]}"; do
+	[ -f "benchmarks/$n.gael" ] || { echo "no benchmark $n (benchmarks/$n.gael)" >&2; continue; }
+	for i in "${!langs[@]}"; do
+		l=${langs[i]}
+		cmd=$(command_of "$n" "$i") || cmd=
+		[ -n "$cmd" ] || { median[$n,$l]=-; rssmb[$n,$l]=-; continue; }
+		# shellcheck disable=SC2086
+		got=$($cmd 2> /dev/null | grep -v '^Godot Engine v' | sed '/^$/d' | tail -n 1)
+		if [ "$got" != "$(cat "benchmarks/$n.expected")" ]; then
+			echo "$n $l: wrong output: ${got:-(nothing)}" >&2
+			median[$n,$l]=wrong
+			rssmb[$n,$l]=-
+			continue
+		fi
+		read -r med lo hi < <(timing "$cmd")
+		median[$n,$l]=$med
+		rssmb[$n,$l]=$(rss "$cmd")
+		printf '%-10s %-8s %9s ms (%s to %s)  %s MB\n' "$n" "$l" "$med" "$lo" "$hi" "${rssmb[$n,$l]}" >&2
+	done
+done
+
+# the tables: a row per benchmark, a column per language
+cols=("${langs[@]}")
+[[ " ${langs[*]} " == *" godot "* ]] && cols+=(gdscript)
+for n in "${names[@]}"; do # gdscript: godot's time without the engine's own start
+	g=${median[$n,godot]:--} s=${median[start,godot]:--}
+	if [[ "$g" =~ ^[0-9.]+$ && "$s" =~ ^[0-9.]+$ ]]; then median[$n,gdscript]=$(awk -v g="$g" -v s="$s" 'BEGIN { d = g - s; printf "%.1f", d < 0 ? 0 : d }'); else median[$n,gdscript]=-; fi
+	rssmb[$n,gdscript]=${rssmb[$n,godot]:--}
+done
+table() { # table ARRAY UNIT
+	local -n arr=$1
+	printf '| %s |' "$2"; printf ' %s |' "${cols[@]}"; echo
+	printf '|---|'; printf -- '---:|%.0s' "${cols[@]}"; echo
+	for n in "${names[@]}"; do
+		[ -f "benchmarks/$n.gael" ] || continue
+		printf '| %s |' "$n"
+		for l in "${cols[@]}"; do printf ' %s |' "${arr[$n,$l]:--}"; done
+		echo
+	done
+}
+cpu=$(awk -F': ' '/^model name/ { print $2; exit }' /proc/cpuinfo 2> /dev/null)
+mem=$(awk '/^MemTotal/ { printf "%.0f GB", $2 / 1048576 }' /proc/meminfo 2> /dev/null)
+version() { "$@" 2>&1 | sed '/^$/d' | head -n 1; }
+{
+	echo
+	echo "## $(date -u +%Y-%m-%d) $(git rev-parse --short HEAD 2> /dev/null)"
+	echo
+	echo "${cpu:-unknown CPU}, $(nproc 2> /dev/null || echo ?) cores, ${mem:-?}; $runs runs after $warmup warmup, median wall time."
+	echo
+	for l in "${langs[@]}"; do
+		case $l in
+		gael) v="gael $(git rev-parse --short HEAD 2> /dev/null)" ;;
+		c) v=$(version gcc --version) ;;
+		python) v=$(version python3 --version) ;;
+		lua) v=$(version "$lua" -v | sed 's/ *Copyright.*//') ;;
+		luajit) v=$(version luajit -v | sed 's/ -- .*//') ;;
+		guile) v=$(version guile --version) ;;
+		chez) v="Chez Scheme $(version "$chez" --version)" ;;
+		chicken) v="Chicken $(version csc -release)" ;;
+		sbcl) v=$(version sbcl --version) ;;
+		node) v="Node $(version node --version)" ;;
+		godot) v="Godot $(version "$godot" --headless --version)" ;;
+		esac
+		echo "- $l: $v"
+	done
+	echo
+	table median ms
+	echo
+	table rssmb MB
+} | tee -a benchmarks/RESULTS.md

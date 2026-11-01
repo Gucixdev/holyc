@@ -1,0 +1,11 @@
+; A struct can hold options of itself inside a vec: the option's size is known once the struct is
+(struct Node (n : int) (kids : (vec (option Node))))
+
+(let ((root (Node 1 (vec))))
+  (push root.kids (some (Node 2 (vec))))
+  (push root.kids none)
+  (println "%v" root)
+  (for (kid root.kids)
+    (match kid
+      ((some k) (println "kid %d" k.n))
+      (none (println "no kid")))))

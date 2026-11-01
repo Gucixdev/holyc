@@ -1,0 +1,1 @@
+tests/errors/return-type.gael:1:7: error: answer must return int, its body ends with string

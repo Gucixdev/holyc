@@ -1,0 +1,2 @@
+; two files that use each other
+(use "lib/cycle-b.gael")

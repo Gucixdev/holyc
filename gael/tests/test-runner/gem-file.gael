@@ -1,0 +1,5 @@
+(gem gem-file :version "0.1.0" :requires (helper))
+; the gem it requires comes from the same folder first (tests/test-runner/helper.gael), and that gem's tests do not run
+(defn quadruple ((x : int)) : int (helper-double (helper-double x)))
+
+(@test "uses the gem it requires" (assert (= (quadruple 3) 12)))

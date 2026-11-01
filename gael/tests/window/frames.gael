@@ -1,0 +1,13 @@
+; a window on Wayland, drawn on the GPU: ./test runs this when there is a compositor (WAYLAND_DISPLAY) and wgpu
+(def w (open-window "gael test" 160 120))
+(def shown 0)
+(for (i 0 30)
+  (draw-clear w 0x202030ff)
+  (draw-circle w (+ 20.0 (* 4.0 (float i))) 60.0 12.0 0xff8800ff)
+  (draw-rect w 4.0 4.0 40.0 20.0 0x00ff00ff)
+  (when (show-frame w) (set shown (+ shown 1))))
+(println "frames shown: %d" shown)
+(println "space down: %b, left button down: %b" (key-down? w "space") (mouse-down? w 1))
+(def c (new-canvas 8 8))                               ; a canvas next to the window still draws
+(draw-clear c 0x336699ff)
+(println "canvas %x" (canvas-pixel c 4 4))

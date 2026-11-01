@@ -1,0 +1,5 @@
+tests/errors/dot.gael:4:24: error: Body has no field nope; its fields are pos
+tests/errors/dot.gael:5:24: error: pos.x is float, it has no fields
+tests/errors/dot.gael:6:26: error: the value is int, it has no fields
+tests/errors/dot.gael:7:1: error: a field of an expression is (expr).name, or (. expr name)
+tests/errors/dot.gael:8:15: error: println: % code 1 wants an int, this value is float

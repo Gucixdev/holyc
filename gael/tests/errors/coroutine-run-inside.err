@@ -1,0 +1,1 @@
+tests/errors/coroutine-run-inside.gael:2: runtime error: the main program runs the coroutines, not a coroutine: a coroutine pauses with sleep or yield

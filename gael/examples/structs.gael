@@ -1,0 +1,18 @@
+; structs are values: copied when passed or stored, nothing is allocated
+(struct Vec2 (x : float) (y : float))
+(struct Body (name : string) (pos : Vec2) (vel : Vec2))
+
+(defn add ((a : Vec2) (b : Vec2)) : Vec2
+  (Vec2 (+ a.x b.x) (+ a.y b.y)))
+
+(defn step ((b : Body) (dt : float)) : Body
+  (set b.pos (add b.pos (Vec2 (* b.vel.x dt) (* b.vel.y dt))))
+  b)
+
+; fields in order, or by name in any order
+(def ball (Body :name "ball" :pos (Vec2 0.0 10.0) :vel (Vec2 :y -2.0 :x 1.5)))
+
+(let ((later (step (step ball 0.5) 0.5)))
+  (println "%s moved to %f, %f" later.name later.pos.x later.pos.y)
+  (println "%v" later))
+(println "the original is still at %v" ball.pos)

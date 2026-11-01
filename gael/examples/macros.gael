@@ -1,0 +1,63 @@
+; Macros as in Scheme's syntax-rules: a rule is (pattern template), the first rule whose pattern matches a use
+; rewrites it, and the compiler type-checks what comes out. They are hygienic: a name the template binds never
+; captures one from the use, and a name the template uses freely means what it means at the top level.
+
+(defmacro swap                                 ; tmp is the template's own, so the tmp below is another variable
+  ((_ a b) (let ((tmp a)) (set a b) (set b tmp))))
+
+(defmacro unless                               ; body ... takes the rest of the forms
+  ((_ c body ...) (when (not c) body ...)))
+
+(defmacro cond                                 ; the rules are tried in order; the last one uses cond again
+  ((_ (:else body ...)) (do body ...))         ; :else is a keyword, so it matches only itself
+  ((_ (c body ...)) (when c body ...))
+  ((_ (c body ...) clause ...) (if c (do body ...) (cond clause ...))))
+
+(defmacro my-or                                ; t is bound inside; the t of the use is another variable
+  ((_) false)
+  ((_ e) e)
+  ((_ e rest ...) (let ((t e)) (if t t (my-or rest ...)))))
+
+(defmacro table                                ; ... inside ...: one println per row, one sum per row
+  ((_ (name v ...) ...) (do (println "%s: %d" name (+ 0 0 v ...)) ...)))
+
+(defmacro defcounter                           ; at the top level a macro can make globals and functions
+  ((_ name step) (do (def name 0) (defn step () : unit (set name (+ name 1))))))
+
+(defmacro reset! ((_ v) (set v (format "%s" "new"))))
+
+(defn half ((x : int)) : int (/ x 2))
+(defmacro halve ((_ e) (half e)))              ; half is the global function, wherever halve is used
+
+(defn succ ((x : int)) : int (+ x 1))
+(defmacro bump ((_ v) (set v (succ v))))       ; a macro can set the variable it is given
+
+(defn sign ((x : int)) : string
+  (cond ((< x 0) "minus") ((= x 0) "zero") (:else "plus")))
+
+(defn countdown ((n : int)) : int              ; a call at the end of a cond is still a tail call
+  (cond ((= n 0) 0) (:else (countdown (- n 1)))))
+
+(defcounter clicks click!)
+(early)                                        ; a macro can be used above its definition
+(defmacro early ((_) (println "early")))
+
+(let ((tmp 1) (other 2))
+  (swap tmp other)
+  (println "swap: %d %d" tmp other))
+(let ((t false))
+  (println "my-or: %b %b %b" (my-or) (my-or t) (my-or false t true)))
+(unless false (println "unless: runs"))
+(println "cond: %s %s %s" (sign -5) (sign 0) (sign 7))
+(table ("one" 1) ("three" 1 2) ("none"))
+(click!)
+(click!)
+(println "clicks: %d" clicks)
+(let ((half 1000))                             ; a local named like the function the macro calls
+  (println "halve: %d, half here: %d" (halve 42) half))
+(let ((n 1))
+  (bump n)
+  (println "bump: %d" n))
+(let ((s (format "%s-%d" "old" 1)))            ; the old s is read before the set in the macro replaces it
+  (println "reset: %b %s" (= s (do (reset! s) "old-1")) s))
+(println "countdown: %d" (countdown 1000000))

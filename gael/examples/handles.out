@@ -1,0 +1,4 @@
+root is the root
+kid of root, depth (some 1), is a child of root
+grandkid, depth (some 2), is a child of kid of root
+true false (handle 2 1)

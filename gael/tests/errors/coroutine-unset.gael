@@ -1,0 +1,3 @@
+; the coroutine runs at once, while the def that keeps it is still being made, so the global is not set yet
+(def later : (coroutine int) (coroutine (look)))
+(defn look () : int (match (poll later) ((some v) v) (none 0)))

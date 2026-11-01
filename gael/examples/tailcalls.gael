@@ -1,0 +1,37 @@
+; A call that is the last thing a function does takes over its frame, as in Scheme: these recurse a million times,
+; far past the few thousand frames the VM has for calls that must come back.
+
+(defn count ((n : int) (acc : int)) : int          ; the else branch of an if
+  (if (= n 0) acc (count (- n 1) (+ acc 1))))
+
+(defn even? ((n : int)) : bool (if (= n 0) true (odd? (- n 1))))   ; two functions calling each other
+(defn odd? ((n : int)) : bool (if (= n 0) false (even? (- n 1))))
+
+(def ticks 0)
+(defn spin ((n : int)) : unit                       ; a loop written as recursion: the end of a when
+  (when (> n 0)
+    (set ticks (+ ticks 1))
+    (spin (- n 1))))
+
+(defn clip ((s : string)) : string (substr s 0 (if (> (len s) 3) 3 (len s))))
+(defn shout ((n : int) (o : (option string))) : int ; a match arm, with a new string handed on each time
+  (match o
+    ((some s) (if (= n 0) (len s) (shout (- n 1) (some (format "%s!" (clip s))))))
+    (none (shout n (some "hey")))))
+
+(defn steps ((n : int) (names : (vec string))) : int ; a let body: its locals are let go before the jump
+  (let ((label (format "step %d of %d" n (len names))))
+    (if (> n 0) (steps (- n 1) names) (len label))))
+
+(defn bounce ((f : (fn (int int) int)) (n : int) (acc : int)) : int  ; through a function value
+  (if (= n 0) acc (f (- n 1) (+ acc 2))))
+(def hop : (fn (int int) int) (fn ((n : int) (acc : int)) : int (bounce back n acc)))
+(defn back ((n : int) (acc : int)) : int (bounce hop n acc))
+
+(spin 1000000)
+(println "count %d" (count 1000000 0))
+(println "even %b, odd %b" (even? 1000001) (odd? 1000001))
+(println "ticks %d" ticks)
+(println "shout %d" (shout 1000000 none))
+(println "steps %d" (steps 1000000 (vec "a" "b")))
+(println "bounce %d" (back 1000000 0))

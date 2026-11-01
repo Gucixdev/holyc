@@ -1,0 +1,1 @@
+tests/errors/if-cond.gael:1:5: error: if: the condition is int, it must be bool

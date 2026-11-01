@@ -1,0 +1,11 @@
+tick 0: 3 alive
+  goblin at 9.0 with 30 hp
+  imp at 3.0 with 20 hp
+tick 1: 3 alive
+  goblin at 8.0 with 30 hp
+  imp at 2.0 with 10 hp
+  imp burns up
+tick 2: 2 alive
+  goblin at 7.0 with 30 hp
+imp alive false, ghost alive true, goblin burning false
+goblin hp 20, hero at (Vec2 :x 0.0 :y 0.0)

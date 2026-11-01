@@ -1,0 +1,28 @@
+; Two gems that come with gael, ported from holyc: pqueue, a priority queue (1 comes out first, 0 after everything,
+; ties in the order they went in), and events - a log of what happened, by tick, and a schedule of what will.
+(enable pqueue events)
+
+(def names (vec "save" "render" "audio" "log" "physics"))
+(def jobs (PQ))                                 ; an item is an id - here an index into names - and a priority
+(jobs.push 0 3)
+(jobs.push 1 1)
+(jobs.push 2 2)
+(jobs.push 3 0)                                 ; no priority: after everything else
+(jobs.push 4 1)                                 ; the same priority as render: after it
+(while (> (len jobs) 0)
+  (match (jobs.pop)
+    ((some j) (println "job %s, priority %d" (get names j.id) j.priority))
+    (none (println "none left"))))
+
+(def SPAWN 1)
+(def HIT 2)
+(def later (Schedule))                          ; added in any order, due by tick
+(later.add (Event HIT 3 7 5))                   ; at tick 3, hit entity 7 for 5
+(later.add (Event SPAWN 1 7 0))
+(later.add (Event HIT 3 7 2))                   ; tick 3 as well: after the first hit
+(def log (EventLog))                            ; what happened, to play back
+(for (tick 0 5)
+  (for (ev (later.due tick))
+    (println "tick %d: kind %d on %d (%d)" tick ev.kind ev.a ev.b)
+    (log.add ev.kind tick ev.a ev.b)))
+(println "%d events logged; %d at tick 3, the first of them at %d" (len log) (len (log.at 3)) (log.since 3))

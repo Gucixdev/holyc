@@ -1,0 +1,10 @@
+tests/errors/shell.gael:1:7: error: pipe: a command is int, it must be a string
+tests/errors/shell.gael:2:1: error: pipe-in takes the text and at least one command: (pipe-in text "sort")
+tests/errors/shell.gael:3:1: error: chain takes a value and at least one step: (chain x (f a) g)
+tests/errors/shell.gael:4:10: error: a step of chain is a function name or a call without its first value, like (split "\n")
+tests/errors/shell.gael:5:6: error: and takes bool values, this one is string; (run "cmd") is true when a command succeeds
+tests/errors/shell.gael:6:8: error: > orders numbers, not string
+tests/errors/shell.gael:7:1: error: append-file takes 2 values: (append-file path text)
+tests/errors/shell.gael:8:5: error: or takes bool values, this one is int
+tests/errors/shell.gael:9:1: error: $$ is not a node path, which is $Name or $Name/Child; the process id is (pid)
+tests/errors/shell.gael:10:1: error: $ is not a node path, which is $Name or $Name/Child; the process id is (pid)

@@ -1,0 +1,2 @@
+(def w (open-window "nowhere" 64 48))
+(println "not reached")

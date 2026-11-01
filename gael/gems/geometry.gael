@@ -1,0 +1,79 @@
+(gem geometry :version "0.1.0")
+; Vectors in 2D and 3D and axis-aligned boxes, after holyc's mathx.h, with the operator hooks, so (+ a b), (- a b),
+; (* v 2.0), (- v) and (= a b) work on them.
+;
+;   (Vec2 1.0 2.0) (Vec2)                 ; x and y, 0.0 when left out
+;   (+ a b) (- a b) (* v k) (- v) (= a b)
+;   (a.dot b) (v.length) (v.length2) (v.normal) (a.distance b) (a.lerp b t)
+;   (Vec3 x y z) the same, and (a.cross b)
+;   (Rect min max)                        ; a box from its two corners
+;   (r.width) (r.height) (r.center) (r.contains? p) (r.overlaps? s)
+
+(struct Vec2 (x : float 0.0) (y : float 0.0))
+(defn Vec2.add ((a : Vec2) (b : Vec2)) : Vec2 (Vec2 (+ a.x b.x) (+ a.y b.y)))
+(defn Vec2.sub ((a : Vec2) (b : Vec2)) : Vec2 (Vec2 (- a.x b.x) (- a.y b.y)))
+(defn Vec2.mul ((a : Vec2) (k : float)) : Vec2 (Vec2 (* a.x k) (* a.y k)))
+(defn Vec2.negate ((a : Vec2)) : Vec2 (Vec2 (- a.x) (- a.y)))
+(defn Vec2.equal ((a : Vec2) (b : Vec2)) : bool (and (= a.x b.x) (= a.y b.y)))
+(defn Vec2.dot ((a : Vec2) (b : Vec2)) : float (+ (* a.x b.x) (* a.y b.y)))
+(defn Vec2.length2 ((a : Vec2)) : float (Vec2.dot a a))
+(defn Vec2.length ((a : Vec2)) : float (sqrt (Vec2.dot a a)))
+(defn Vec2.normal ((a : Vec2)) : Vec2 (let ((l (Vec2.length a))) (if (= l 0.0) a (Vec2 (/ a.x l) (/ a.y l)))))
+(defn Vec2.distance ((a : Vec2) (b : Vec2)) : float (Vec2.length (Vec2.sub a b)))
+(defn Vec2.lerp ((a : Vec2) (b : Vec2) (t : float)) : Vec2 (Vec2 (+ a.x (* (- b.x a.x) t)) (+ a.y (* (- b.y a.y) t))))
+
+(struct Vec3 (x : float 0.0) (y : float 0.0) (z : float 0.0))
+(defn Vec3.add ((a : Vec3) (b : Vec3)) : Vec3 (Vec3 (+ a.x b.x) (+ a.y b.y) (+ a.z b.z)))
+(defn Vec3.sub ((a : Vec3) (b : Vec3)) : Vec3 (Vec3 (- a.x b.x) (- a.y b.y) (- a.z b.z)))
+(defn Vec3.mul ((a : Vec3) (k : float)) : Vec3 (Vec3 (* a.x k) (* a.y k) (* a.z k)))
+(defn Vec3.negate ((a : Vec3)) : Vec3 (Vec3 (- a.x) (- a.y) (- a.z)))
+(defn Vec3.equal ((a : Vec3) (b : Vec3)) : bool (and (= a.x b.x) (= a.y b.y) (= a.z b.z)))
+(defn Vec3.dot ((a : Vec3) (b : Vec3)) : float (+ (* a.x b.x) (* a.y b.y) (* a.z b.z)))
+(defn Vec3.cross ((a : Vec3) (b : Vec3)) : Vec3
+  (Vec3 (- (* a.y b.z) (* a.z b.y)) (- (* a.z b.x) (* a.x b.z)) (- (* a.x b.y) (* a.y b.x))))
+(defn Vec3.length2 ((a : Vec3)) : float (Vec3.dot a a))
+(defn Vec3.length ((a : Vec3)) : float (sqrt (Vec3.dot a a)))
+(defn Vec3.normal ((a : Vec3)) : Vec3
+  (let ((l (Vec3.length a))) (if (= l 0.0) a (Vec3 (/ a.x l) (/ a.y l) (/ a.z l)))))
+(defn Vec3.distance ((a : Vec3) (b : Vec3)) : float (Vec3.length (Vec3.sub a b)))
+(defn Vec3.lerp ((a : Vec3) (b : Vec3) (t : float)) : Vec3 (Vec3.add a (Vec3.mul (Vec3.sub b a) t)))
+
+(struct Rect (min : Vec2 (Vec2)) (max : Vec2 (Vec2)))
+(defn Rect.width ((r : Rect)) : float (- r.max.x r.min.x))
+(defn Rect.height ((r : Rect)) : float (- r.max.y r.min.y))
+(defn Rect.center ((r : Rect)) : Vec2 (Vec2.lerp r.min r.max 0.5))
+(defn Rect.contains? ((r : Rect) (p : Vec2)) : bool
+  (and (>= p.x r.min.x) (<= p.x r.max.x) (>= p.y r.min.y) (<= p.y r.max.y)))
+(defn Rect.overlaps? ((a : Rect) (b : Rect)) : bool
+  (and (<= a.min.x b.max.x) (>= a.max.x b.min.x) (<= a.min.y b.max.y) (>= a.max.y b.min.y)))
+
+@test (defn geometry--near ((a : float) (b : float)) : bool (let ((d (- a b))) (< (* d d) 1.0e-24)))
+(@test "Vec2 arithmetic and its functions"
+  (let ((a (Vec2 1.0 2.0)) (b (Vec2 4.0 6.0)))
+    (assert (= (+ a b) (Vec2 5.0 8.0)))
+    (assert (= (- b a) (Vec2 3.0 4.0)))
+    (assert (= (* a 2.0) (Vec2 2.0 4.0)))
+    (assert (= (- a) (Vec2 -1.0 -2.0)))
+    (assert (= (a.dot b) 16.0))
+    (assert (= (a.distance b) 5.0))
+    (assert (= (a.lerp b 0.5) (Vec2 2.5 4.0)))))
+(@test "a normal is one long, and zero stays zero"
+  (assert (geometry--near ((Vec2 3.0 4.0).normal).x 0.6))
+  (assert (geometry--near ((Vec2.normal (Vec2 -2.0 7.0)).length) 1.0))
+  (assert (= ((Vec2).normal) (Vec2)))
+  (assert (= ((Vec3).normal) (Vec3))))
+(@test "Vec3 cross goes by the right hand"
+  (let ((x (Vec3 1.0 0.0 0.0)) (y (Vec3 0.0 1.0 0.0)))
+    (assert (= (x.cross y) (Vec3 0.0 0.0 1.0)))
+    (assert (= (y.cross x) (Vec3 0.0 0.0 -1.0)))
+    (assert (= ((Vec3 1.0 2.0 2.0).length) 3.0))
+    (assert (= (+ x y) (Vec3 1.0 1.0 0.0)))))
+(@test "Rect: size, center, edges count as inside"
+  (let ((r (Rect (Vec2) (Vec2 4.0 2.0))))
+    (assert (= (r.width) 4.0))
+    (assert (= (r.height) 2.0))
+    (assert (= (r.center) (Vec2 2.0 1.0)))
+    (assert (r.contains? (Vec2 4.0 2.0)))
+    (assert (not (r.contains? (Vec2 4.5 1.0))))
+    (assert (r.overlaps? (Rect (Vec2 3.0 1.0) (Vec2 9.0 9.0))))
+    (assert (not (r.overlaps? (Rect (Vec2 5.0 0.0) (Vec2 6.0 1.0)))))))

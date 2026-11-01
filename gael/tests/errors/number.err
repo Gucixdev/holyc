@@ -1,0 +1,5 @@
+tests/errors/number.gael:2:15: error: 1e3 is not a number; a float has digits on both sides of its point: 1.0e3
+tests/errors/number.gael:3:15: error: .5 is not a number; a float has digits on both sides of its point: 0.5
+tests/errors/number.gael:4:15: error: 12abc is not a number; an int is written 42, a float 4.2 or 4.2e3
+tests/errors/number.gael:6:15: error: 1e-9 is not a number; a float has digits on both sides of its point: 1.0e-9
+tests/errors/number.gael:7:15: error: 5. is not a number; a float has digits on both sides of its point: 5.0

@@ -1,0 +1,1 @@
+tests/errors/macro-forever.gael:2:15: error: macros expanded too often in this file: does forever expand into itself forever?

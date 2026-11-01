@@ -1,0 +1,52 @@
+(gem noise :version "0.1.0")
+; Gradient noise, ported from holyc's gradient.h: Ken Perlin's improved noise on a square grid in 2D - a hash of each
+; corner picks one of 8 directions, the dot products blend with the quintic 6t^5 - 15t^4 + 10t^3 - so it is 0 at
+; every whole point and smooth between. A seed gives another field; the same seed, the same field on every machine.
+;
+;   (noise2 seed x y)                     ; about -1 to 1
+;   (fbm2 seed x y octaves)               ; the sum of octaves of it, each twice as fine and half as strong: terrain
+
+(defn noise--hash ((seed : int) (ix : int) (iy : int)) : int
+  (let ((h (bit-xor (u32 seed) (* (u32 ix) 0x27d4eb2d) (* (u32 iy) 0x165667b1))))
+    (set h (* (bit-xor h (shr h 15)) 0x85ebca6b))
+    (set h (* (bit-xor h (shr h 13)) 0xc2b2ae35))
+    (int (bit-xor h (shr h 16)))))
+
+(defn noise--dot ((seed : int) (ix : int) (iy : int) (dx : float) (dy : float)) : float
+  (let ((d 0.7071067811865476))
+    (match (bit-and (noise--hash seed ix iy) 7)
+      (0 dx) (1 (* (+ dx dy) d)) (2 dy) (3 (* (+ (- dx) dy) d))
+      (4 (- dx)) (5 (* (- (- dx) dy) d)) (6 (- dy)) (_ (* (- dx dy) d)))))
+
+(defn noise--fade ((t : float)) : float (* t t t (+ (* t (- (* t 6.0) 15.0)) 10.0)))
+(defn noise--mix ((a : float) (b : float) (t : float)) : float (+ a (* t (- b a))))
+
+(defn noise2 ((seed : int) (x : float) (y : float)) : float
+  (let ((x0 (int (floor x))) (y0 (int (floor y))))
+    (let ((sx (- x (float x0))) (sy (- y (float y0))))
+      (let ((n00 (noise--dot seed x0 y0 sx sy))
+            (n10 (noise--dot seed (+ x0 1) y0 (- sx 1.0) sy))
+            (n01 (noise--dot seed x0 (+ y0 1) sx (- sy 1.0)))
+            (n11 (noise--dot seed (+ x0 1) (+ y0 1) (- sx 1.0) (- sy 1.0)))
+            (u (noise--fade sx))
+            (v (noise--fade sy)))
+        (noise--mix (noise--mix n00 n10 u) (noise--mix n01 n11 u) v)))))
+
+(defn fbm2 ((seed : int) (x : float) (y : float) (octaves : int)) : float
+  (let ((sum 0.0) (amp 1.0) (freq 1.0))
+    (for (o 0 octaves)
+      (set sum (+ sum (* amp (noise2 (+ seed o) (* x freq) (* y freq)))))
+      (set amp (* amp 0.5))
+      (set freq (* freq 2.0)))
+    sum))
+
+@test (defn noise--near ((a : float) (b : float)) : bool (let ((d (- a b))) (< (* d d) 1.0e-24)))
+(@test "0 at every whole point"
+  (for (x -3 4) (for (y -3 4) (assert (= (noise2 7 (float x) (float y)) 0.0)))))
+(@test "the values a C version gives"
+  (assert (noise--near (noise2 1 0.5 0.5) 0.176776695296637))
+  (assert (noise--near (noise2 7 3.25 -1.75) -0.222365375177128))
+  (assert (noise--near (noise2 -3 -0.3 12.9) 0.141276334291682))
+  (assert (noise--near (noise2 2 100.1 0.7) -0.212044378005258)))
+(@test "fbm of one octave is the noise itself"
+  (assert (= (fbm2 3 0.3 0.7 1) (noise2 3 0.3 0.7))))

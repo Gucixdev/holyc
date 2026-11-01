@@ -1,0 +1,28 @@
+pet-2 pet-1
+pet-2!
+hello world, pet-1
+(Pet :name "pet-3" :tags (vec "a3" "b3"))
+pet-40 pet-5
+2 tags, the last b3
+(vec "pet-30")
+pet-6?
+(some "pet-6") none
+seven
+popped pet-10
+(vec "pet-8+" "pet-9")
+pet-110 a12
+kept 2
+(some "pet-101")
+(some "pet-200") none
+(vec "pet-1" "pet-3") (vec "pet-101" "300") true
+pet-1 => (some "pet-101")
+pet-3 => (some "300")
+(Home :owner none :pets (vec (Pet :name "pet-51" :tags (vec "a51" "b51")) (Pet :name "pet-52" :tags (vec "a52" "b52"))))
+2 pets
+[pet-60] [pet] (some 6)
+pet-61+pet-62
+63
+true true
+true true true 6 112 1 true (some 1)
+pet-70 pet-71 1
+112 112 pet-81 pet-91

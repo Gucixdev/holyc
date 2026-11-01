@@ -1,0 +1,8 @@
+; $Name/Child is a node path, as in GDScript: a value of type NodePath. It compares with = and is a map key; what it
+; points at comes with the scene tree.
+(def player : NodePath $Player)
+(let ((hp : (map NodePath int) (map)))
+  (insert hp $Player 100)
+  (insert hp $Enemies/Goblin 30)
+  (println "%v %v %b %b" player $Enemies/Goblin (= player $Player) (= player $Player/Sprite))
+  (for (p hp) (println "%v: %v" p (lookup hp p))))

@@ -1,0 +1,23 @@
+; every form a gpu-each body takes, as gael -g writes it in WGSL; ./test compares that with forms.wgsl, and with
+; GAEL_WGPU set it runs this on the GPU and on the VM and compares what they print
+(struct V (x : f32) (y : f32))
+(struct Cell (pos : V) (n : i32) (bits : u32) (w : f32))
+(def cells : (vec Cell) (vec))
+(for (k 0 5) (push cells (Cell (V (f32 (float k)) (f32 (* 0.5 (float k)))) (i32 (- k 2)) (u32 (* k 3)) 1.0)))
+(def scale : f32 2.0)
+(def bias : i32 -3)
+
+(gpu-each (c cells i)
+  (let ((a : f32 (* c.pos.x scale))
+        (b (min a 3.0 c.pos.y))
+        (k : i32 (i32 i)))
+    (set c.w (+ (max a b) (abs (- c.pos.y 1.0)) (clamp c.pos.x 0.5 2.5)))
+    (if (and (> k 1) (not (= c.n 0)))
+      (set c.n (+ (* c.n bias) (% k 2)))
+      (set c.n (- c.n)))
+    (when (or (< a 1.0) (xor (> k 3) (>= b 1.0)))
+      (set c.bits (bit-or (shl c.bits 2) (bit-and (u32 k) 1))))
+    (set c.bits (bit-xor c.bits (shr (bit-not 0) 28)))
+    (set c.pos.y (if (nand (> a 0.0) (< a 8.0)) -1.0 (floor (/ a 2.0))))
+    (set c.pos.x (sqrt (* c.pos.x c.pos.x)))))
+(for (c cells) (println "%v" c))

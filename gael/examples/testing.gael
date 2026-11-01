@@ -1,0 +1,18 @@
+; Tests sit next to the code they test: (@test "name" body...) at the top level, with assert inside. gael FILE runs
+; the program and leaves the tests be; gael test FILE runs the defs and then each test, and says ok or FAIL for each.
+; (@warn "...") and (@err "...") are marks for the tools - gael -x lists them - and (@debug ...) is code for while
+; working on the program; a release build leaves out everything that starts with @.
+
+(defn clamp ((x : int) (lo : int) (hi : int)) : int
+  (if (< x lo) lo (if (> x hi) hi x)))
+
+(defn words ((s : string)) : int (len (split (trim s) " ")))
+
+(@test "clamp keeps a value inside" (assert (= (clamp 5 0 10) 5)))
+(@test "clamp cuts both ends"
+  (assert (= (clamp -3 0 10) 0) "below the low end")
+  (assert (= (clamp 42 0 10) 10) "above the high end"))
+(@test "words counts the words" (assert (= (words "  one two three ") 3)))
+
+(@warn "words counts two spaces in a row as an empty word")
+(println "clamp 15 into 0..10: %d, words in \"a b\": %d" (clamp 15 0 10) (words "a b"))

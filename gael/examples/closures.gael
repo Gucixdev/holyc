@@ -1,0 +1,42 @@
+; A (fn ...) can use the locals of the code around it: it keeps a copy of each, made when the fn is made (as a
+; GDScript lambda does). Setting one inside changes the fn's own copy, which stays from call to call; a vec, a map or
+; a pool is a reference, so the fn and the code around it share what is in it.
+
+(defn adder ((k : int)) : (fn (int) int)
+  (fn ((x : int)) : int (+ x k)))
+
+(defn counter () : (fn () int)                     ; the copy of n belongs to the fn: a counter
+  (let ((n 0))
+    (fn () : int (set n (+ n 1)) n)))
+
+(defn greeter ((greeting : string)) : (fn (string) string)
+  (let ((mark (format "%s" "!")))
+    (fn ((name : string)) : string (format "%s, %s%s" greeting name mark))))
+
+(defn logger ((log : (vec string)) (tag : string)) : (fn (string) unit)
+  (fn ((line : string)) : unit (push log (format "[%s] %s" tag line))))
+
+(defn curry3 ((a : int)) : (fn (int) (fn (int) int))   ; a fn in a fn hands a in
+  (fn ((b : int)) : (fn (int) int)
+    (fn ((c : int)) : int (+ (* a 100) (* b 10) c))))
+
+(defn twice ((f : (fn (int) int)) (x : int)) : int (f (f x)))
+
+(def add5 (adder 5))
+(def next-id (counter))
+(def log : (vec string) (vec))
+(def warn (logger log "warn"))
+
+(println "%d %d" (add5 1) (twice add5 0))
+(println "%d %d %d" (next-id) (next-id) (next-id))
+(println "%s" ((greeter "hello") "ada"))
+(println "%d" (((curry3 1) 2) 3))
+(warn "low fuel")
+(warn "no ammo")
+(println "%v" log)
+
+(let ((squares : (vec (fn () int)) (vec)))          ; each fn keeps the i of its own turn
+  (for (i 0 4) (push squares (fn () : int (* i i))))
+  (for (f squares) (print "%d " (f)))
+  (println ""))
+(println "%v %v" add5 twice)

@@ -1,0 +1,1 @@
+tests/errors/gem-off.gael:3:16: error: fsm-make is in gem fsm, which is off; (enable fsm) turns it on

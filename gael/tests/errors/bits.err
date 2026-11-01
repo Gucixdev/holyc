@@ -1,0 +1,11 @@
+tests/errors/bits.gael:1:10: error: bit-and works on ints, not float
+tests/errors/bits.gael:1:14: error: bit-and works on ints, not float
+tests/errors/bits.gael:2:16: error: bit-or: u8 and i8 do not mix; convert one, like (u8 x) or (i8 x)
+tests/errors/bits.gael:3:1: error: bit-not takes one int
+tests/errors/bits.gael:4:8: error: shl: the count is float, it must be int
+tests/errors/bits.gael:5:1: error: shr takes an int and a count: (shr x 3)
+tests/errors/bits.gael:6:11: error: xor takes bool values, this one is int
+tests/errors/bits.gael:7:1: error: xnor takes two or more values
+tests/errors/bits.gael:8:7: error: nand takes bool values, this one is int
+tests/errors/bits.gael:9:1: error: bit-xor takes two or more ints
+tests/errors/bits.gael:10:15: error: 0x100 does not fit in u8 (0 to 255)

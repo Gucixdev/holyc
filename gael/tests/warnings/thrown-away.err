@@ -1,0 +1,5 @@
+tests/warnings/thrown-away.gael:5:1: warning: the value of (get v 1) is thrown away; use it, or remove it
+tests/warnings/thrown-away.gael:6:12: warning: the value of (get v 0) is thrown away; use it, or remove it
+tests/warnings/thrown-away.gael:7:1: warning: the value of (+ 1 2) is thrown away; use it, or remove it
+tests/warnings/thrown-away.gael:8:1: warning: the value of (len v) is thrown away; use it, or remove it
+tests/warnings/thrown-away.gael:11:1: warning: the value of (= (get v 0) "a1") is thrown away; use it, or remove it

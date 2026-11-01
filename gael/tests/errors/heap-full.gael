@@ -1,0 +1,4 @@
+; vecs, maps and the strings made at run time live on the heap (32 MiB here, see heap-full.env); a program that holds
+; more than that gets a runtime error, not a crash
+(let ((v : (vec int) (vec)) (i 0))
+  (while true (push v i) (set i (+ i 1))))
