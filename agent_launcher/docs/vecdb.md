@@ -1,7 +1,7 @@
 # vecdb: notes on top of vecindex
 
 `src/vecdb.c` sits on vecindex's `src/store.c`, `src/hdict.c` (open-addressing hash dictionaries, i64 and string
-keys) and `src/lex.c` (BM25 term dictionary + postings); `$VECINDEX/src` is on the include path.
+keys) and `src/lex.c` (BM25 term dictionary + postings); `../vecindex/src` is on the include path.
 
 * **Hash dictionary inside the index** - `src/store.c` keeps an id -> row map, so
   `store_has/get_vec/set_meta/get_meta`, delete and replace are O(1) instead of a scan.
@@ -20,7 +20,7 @@ keys) and `src/lex.c` (BM25 term dictionary + postings); `$VECINDEX/src` is on t
 ## vecdb benchmarks
 
 `bench/vbench.c` (synthetic, any N), `bench/vbench_wiki.c` (real Simple English Wikipedia:
-`bzcat simplewiki-latest-pages-articles.xml.bz2 | python3 "$VECINDEX"/py/wikiprep.py > wiki.rec`, then
+`bzcat simplewiki-latest-pages-articles.xml.bz2 | python3 ../vecindex/py/wikiprep.py > wiki.rec`, then
 `.build/vbench_wiki wiki.rec`); vecindex's `bench/vcmp.c` + `py/vcmp_turbovec.py` compare its store with turbovec on
 identical vectors.
 
@@ -34,7 +34,7 @@ identical vectors.
 | ms / query | 1.6 | 2.3 | 3.7 |
 
 The store underneath (the TurboQuant-style scan, IVF, self-tuning, live ingest, rows past RAM, stemming, the
-SQuAD retrieval benchmark) is documented in vecindex: `docs/store.md`.
+SQuAD retrieval benchmark) is documented in [vecindex/docs/store.md](../../vecindex/docs/store.md).
 
 ## Persistence
 
@@ -66,7 +66,7 @@ the rerank server is unavailable or fails - always an optional refinement, never
 Self-test: `./run` (`RERANK_DEMO`), degrades gracefully (prints a skip message, does not fail the run) when
 no torch-capable Python is reachable.
 
-**Measured effect**, not just "we added an API": against vecindex's `bench/real_val.c` SQuAD benchmark data (its `docs/store.md`),
+**Measured effect**, not just "we added an API": against vecindex's `bench/real_val.c` SQuAD benchmark data ([store.md](../../vecindex/docs/store.md)),
 on the 871/1000 questions where the gold passage is already somewhere in the raw top-10 cosine neighbours (a
 reranker can only reorder what retrieval already found - the other 129 are retrieval misses, unaffected by
 any reranking and reported separately), `cross-encoder/ms-marco-MiniLM-L-6-v2` reranking those 10 candidates:

@@ -6,8 +6,10 @@ hybrid search. It runs inside a program in any language through its C API (`incl
 static library), or as `vserv`, a small epoll server (Unix and TCP sockets, a binary protocol and HTTP/1.1, TLS 1.2
 through the vendored BearSSL). Nothing beyond libc, libm and pthreads (and BearSSL for TLS).
 
-It used to live in [holyc](https://github.com/Gucixdev/holyc) as `ragdb/`; its history came along. The note database
-and agent memory that grew on top of it went back to holyc as `agent_launcher/`, which uses vecindex as a library.
+It is part of [holyc](https://github.com/Gucixdev/holyc): it lived there as `ragdb/`, was its own repository
+(github.com/Gucixdev/vecindex) from 2026-10-17 to 2026-11-01 and came back as `vecindex/`, history included. The note
+database and agent memory that grew on top of it are [`../agent_launcher`](../agent_launcher), which uses vecindex as a
+library.
 
 ## Layout
 
@@ -42,7 +44,7 @@ part of `LAYER.c`, which includes it; it is not compiled on its own.
 ## Build and test
 
 ```sh
-git clone https://github.com/Gucixdev/vecindex && cd vecindex
+git clone https://github.com/Gucixdev/holyc && cd holyc/vecindex
 ./run            # self-tests, sanitizer, thread and crash-safety tests, the server end to end (needs bash and gcc)
 ./run stress     # plus the churn / oracle stress tests
 tools/cross      # the core tests for aarch64, armv7, riscv64 and s390x under qemu (needs their gcc and qemu-user)

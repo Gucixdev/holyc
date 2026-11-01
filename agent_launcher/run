@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run - build and test agent_launcher: the note database (vecdb), agent memory (mem.c with its rule engine) and the
-# cross-encoder re-rank, all on top of vecindex's store. Needs a vecindex checkout ($VECINDEX, default
-# ../../vecindex): its src/ goes on the include path, nothing is copied out of it. Each binary goes to .build/.
+# cross-encoder re-rank, all on top of vecindex's store. Builds against holyc's vecindex/ ($VECINDEX, default
+# ../vecindex): its src/ goes on the include path, nothing is copied out of it. Each binary goes to .build/.
 #   ./run          every test
 #   ./run bench    also bench/mbench.c (mem.c timings, the mem_consolidate cost-vs-N sweep)
 #   ./run stress   also tests/mstress.c (mem.c churn with invariant checks)
@@ -9,8 +9,8 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 mode=${1:-}     # saved: the loops below reuse the positional parameters
 
-VECINDEX=${VECINDEX:-../../vecindex}
-[[ -f $VECINDEX/src/store.c ]] || { echo "run: no vecindex checkout at $VECINDEX (git clone https://github.com/Gucixdev/vecindex, or set VECINDEX)" >&2; exit 2; }
+VECINDEX=${VECINDEX:-../vecindex}
+[[ -f $VECINDEX/src/store.c ]] || { echo "run: no vecindex checkout at $VECINDEX (it is holyc's vecindex/; set VECINDEX for another copy)" >&2; exit 2; }
 CC="${CC:-gcc}"
 CFLAGS=(-std=c89 -pedantic -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200112L -O2 -march=native -Isrc -I"$VECINDEX/src")
 GNU=(-std=gnu99 -Isrc -I"$VECINDEX/src")

@@ -193,5 +193,5 @@ the exact-cosine baseline use different tie-breaking, so being *at* the ceiling 
 relative to what a mid-tier 118M-param embedder can retrieve - it does **not** say retrieval quality is
 state-of-the-art, since a stronger embedder would raise the 87.1% ceiling itself, which this benchmark cannot
 show on its own. A cross-encoder second pass over the top hits closes part of that gap without a new embedder
-(measured on this data in holyc's `agent_launcher`: gold@1 62.1% -> 81.5% where it has room to help); see
+(measured on this data in [`agent_launcher`](../../agent_launcher): gold@1 62.1% -> 81.5% where it has room to help); see
 [comparison.md](comparison.md) for the full picture.
