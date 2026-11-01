@@ -362,6 +362,17 @@ i32 lex_search(const Lex *x, const char *query, i32 qlen, i32 k, i64 *out_ids, f
             ++p;
             while (hs_next(&x->terms, &cur, &key, &kl, &val))
                 if (kl >= n && memcmp(key, tok, (size_t)n) == 0) lex_acc_term_(x, val, acc, touched, &ntouched, avgdl);
+            {   /* the terms are stems ("genome" is stored as "genom"), so a typed word longer than its stem would find
+                 * nothing: its own stem counts too, unless the loop above already took it (it starts with the typed text) */
+                char st[LEX_MAXTOK + 1];
+                i32 sn;
+                memcpy(st, tok, (size_t)n);
+                sn = lex_stem_(st, n);
+                if (sn > 0) {
+                    i32 id = hs_get(&x->terms, st, sn);
+                    if (id >= 0 && !(sn >= n && memcmp(st, tok, (size_t)n) == 0)) lex_acc_term_(x, id, acc, touched, &ntouched, avgdl);
+                }
+            }
             continue;
         }
         n = lex_stem_(tok, n);

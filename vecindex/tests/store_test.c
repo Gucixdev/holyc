@@ -665,10 +665,12 @@ static i32 sd_sums_(Arena *a)
     else {
         f32 v[SDX_DIM];
         i64 hits[4]; f32 hsc[4];
-        sdx_flip_(path, 64 + (u64)700 * SDX_DIM * 4 + 10);       /* row 700 (id 5700): v9 rows start at byte 64 */
-        if (store_get_vec(l, 5700, v) != 0 || memcmp(v, ref + SDX_DIM, sizeof(v)) != 0) { print_cstr("  sums: healing a row read after the load FAILED\n"); ok = 0; }
-        store_integrity(l, &nb, &bad, &fx, &rb, &rh, &jdm);
-        if (rh != 1 || rb != 0) { print_cstr("  sums: the healed row was not counted\n"); ok = 0; }
+        if (l->map) {   /* a store that is not mapped (a big-endian CPU) holds its rows in memory and never reads them back from the file */
+            sdx_flip_(path, 64 + (u64)700 * SDX_DIM * 4 + 10);   /* row 700 (id 5700): v9 rows start at byte 64 */
+            if (store_get_vec(l, 5700, v) != 0 || memcmp(v, ref + SDX_DIM, sizeof(v)) != 0) { print_cstr("  sums: healing a row read after the load FAILED\n"); ok = 0; }
+            store_integrity(l, &nb, &bad, &fx, &rb, &rh, &jdm);
+            if (rh != 1 || rb != 0) { print_cstr("  sums: the healed row was not counted\n"); ok = 0; }
+        } else print_cstr("  sums: the store is not mapped here (a big-endian CPU) - healing a row on read is not checked\n");
         store_add(l, x + (size_t)5 * SDX_DIM, 7777);                /* a row only in memory, then a bit of it flips */
         STORE_VEC(l, l->count - 1)[3] += 0.25f;
         if (store_get_vec(l, 7777, v) == 0) { print_cstr("  sums: a row damaged in memory was served\n"); ok = 0; }

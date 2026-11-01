@@ -229,7 +229,12 @@ static void vf_search_(void)
     for (i = 0; i < vf_nhit; ++i) free(vf_hit[i].text);
     vf_nhit = vf_sel = vf_top = 0;
     if (vf_ql == 0) return;
-    vf_nhit = store_search_hybrid(vf_s, (const f32 *)0, vf_q, vf_ql, vf_k, ids, sc);
+    {   char q[sizeof(vf_q) + 2];                      /* the word being typed counts as a prefix: "zebr" -> "zebr*" */
+        i32 ql = vf_ql;
+        memcpy(q, vf_q, (size_t)ql);
+        if (ql > 0 && q[ql - 1] != ' ' && q[ql - 1] != '*') q[ql++] = '*';
+        vf_nhit = store_search_hybrid(vf_s, (const f32 *)0, q, ql, vf_k, ids, sc);
+    }
     for (i = 0; i < vf_nhit; ++i) {
         i32 n = store_get_text(vf_s, ids[i], (char *)0, 0);
         vf_hit[i].id = ids[i]; vf_hit[i].score = sc[i];
