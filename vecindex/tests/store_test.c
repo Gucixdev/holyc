@@ -527,6 +527,203 @@ static i32 sd_cascade_(Arena *a)
     return ok;
 }
 
+/* ---- integrity: BLAKE3, the block digests and Reed-Solomon parity of the file, the journal's frames ---- */
+static void sdx_flip_(const char *path, u64 off)
+{
+    FILE *f = fopen(path, "r+b");
+    int c;
+    if (!f) return;
+    if (fseeko(f, (off_t)off, SEEK_SET) == 0 && (c = fgetc(f)) != EOF && fseeko(f, (off_t)off, SEEK_SET) == 0) fputc(c ^ 0x5a, f);
+    fclose(f);
+}
+static u8 *sdx_slurp_(const char *path, size_t *n)
+{
+    FILE *f = fopen(path, "rb");
+    u8 *b = (u8 *)0;
+    long len;
+    *n = 0;
+    if (!f) return b;
+    if (fseek(f, 0, SEEK_END) == 0 && (len = ftell(f)) > 0 && fseek(f, 0, SEEK_SET) == 0 && (b = (u8 *)malloc((size_t)len)) != 0
+        && fread(b, 1, (size_t)len, f) == (size_t)len) *n = (size_t)len;
+    fclose(f);
+    return b;
+}
+static void sdx_spit_(const char *path, const u8 *b, size_t n)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    if (fwrite(b, 1, n, f) != n) print_cstr("  (write failed)\n");
+    fclose(f);
+}
+static i32 sdx_trailer_(const char *path, SSum *z)
+{
+    int fd = open(path, O_RDONLY);
+    struct stat st;
+    u8 t[SSUM_TRL];
+    i32 r = -1;
+    if (fd < 0) return -1;
+    if (fstat(fd, &st) == 0 && ssum_read_(fd, t, SSUM_TRL, (u64)st.st_size - SSUM_TRL) == 0) r = ssum_parse_(z, t, (u64)st.st_size);
+    close(fd);
+    return r;
+}
+static i32 sdx_same_(RagStore *l, const f32 *ref, i32 nref)          /* rows 0, 700, 1400, ... read back unchanged */
+{
+    f32 v[24];
+    i32 i;
+    for (i = 0; i < nref; ++i) if (store_get_vec(l, 5000 + 700 * i, v) != 0 || memcmp(v, ref + i * 24, sizeof(v)) != 0) return 0;
+    return 1;
+}
+
+#define SDX_N 3000
+#define SDX_DIM 24
+static i32 sd_sums_(Arena *a)
+{
+    static const char *hx[] = {        /* length, digest: the reference implementation's, input byte i = i mod 251 */
+        "0", "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+        "1", "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213",
+        "63", "e9bc37a594daad83be9470df7f7b3798297c3d834ce80ba85d6e207627b7db7b",
+        "64", "4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98",
+        "65", "de1e5fa0be70df6d2be8fffd0e99ceaa8eb6e8c93a63f2d8d1c30ecb6b263dee",
+        "1023", "10108970eeda3eb932baac1428c7a2163b0e924c9a9e25b35bba72b28f70bd11",
+        "1024", "42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7",
+        "1025", "d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444",
+        "2048", "e776b6028c7cd22a4d0ba182a8bf62205d2ef576467e838ed6f2529b85fba24a",
+        "2049", "5f4d72f40d7a5f82b15ca2b2e44b1de3c2ef86c426c95c1af0b6879522563030",
+        "3072", "b98cb0ff3623be03326b373de6b9095218513e64f1ee2edd2525c7ad1e5cffd2",
+        "4097", "9b4052b38f1c5fc8b1f9ff7ac7b27cd242487b3d890d15c96a1c25b8aa0fb995",
+        "8193", "bab6c09cb8ce8cf459261398d2e7aef35700bf488116ceb94a36d0f5f1b7bc3b",
+        "31744", "62b6960e1a44bcc1eb1a611a8d6235b6b4b78f32e7abc4fb4c6cdcce94895c47",
+        "102400", "bc3e3d41a1146b069abffad3c0d44860cf664390afce4d9661f7902e7943e085",
+        (const char *)0 };
+    const char *path = "/tmp/store_demo_sums.vxi", *bare = "/tmp/store_demo_sums_bare.vxi";
+    char *jn = store_jname_(path, ".j"), *jd = store_jname_(path, ".j.damaged"), hex[65];
+    f32 *x = (f32 *)malloc((size_t)SDX_N * SDX_DIM * sizeof(f32)), ref[5 * SDX_DIM];
+    u8 *buf = (u8 *)malloc(102400), *clean, h[32];
+    size_t clen;
+    RagStore *s, *l;
+    SSum z;
+    i64 nb, bad, fx, r1, r2, f1;
+    i32 i, e, ok = 1, jdm;
+    u32 st = 4242u;
+    struct stat sst;
+
+    for (i = 0; i < 102400; ++i) buf[i] = (u8)(i % 251);
+    for (i = 0; hx[i]; i += 2) {
+        b3_hash(buf, (size_t)atoi(hx[i]), h);
+        for (e = 0; e < 32; ++e) sprintf(hex + 2 * e, "%02x", (unsigned)h[e]);
+        if (strcmp(hex, hx[i + 1]) != 0) { print_cstr("  blake3: the digest of "); print_cstr(hx[i]); print_cstr(" bytes FAILED\n"); ok = 0; }
+    }
+    b3_hash("abc", 3, h);
+    for (e = 0; e < 32; ++e) sprintf(hex + 2 * e, "%02x", (unsigned)h[e]);
+    if (strcmp(hex, "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85") != 0) { print_cstr("  blake3: abc FAILED\n"); ok = 0; }
+
+    /* a store over several blocks, parity 1 for every 2 blocks: block b and b + G share a group */
+    remove(path); remove(jn); remove(jd); remove(bare);
+    for (i = 0; i < SDX_N * SDX_DIM; ++i) x[i] = sd_f_(&st);
+    s = store_new(a, SDX_DIM);
+    if (store_set_parity(s, 2, 1) != 0 || store_set_parity(s, 0, 1) != -1 || store_set_parity(s, 2, 65) != -1) ok = 0;
+    for (i = 0; i < SDX_N; ++i) store_add(s, x + (size_t)i * SDX_DIM, 5000 + i);
+    store_build(s);
+    if (store_save(s, path) != 0 || sdx_trailer_(path, &z) != 0 || z.k != 2 || z.m != 1 || z.N < 5) {
+        print_cstr("  sums: the trailer of a saved store FAILED\n"); store_destroy(s); free(x); free(buf); free(jn); free(jd); return 0;
+    }
+    store_destroy(s);
+    clean = sdx_slurp_(path, &clen);
+    l = store_load(a, path);
+    if (!l) ok = 0;
+    else {
+        store_integrity(l, &nb, &bad, &fx, &jdm);
+        if (nb != (i64)(z.N + z.P) || bad || fx || jdm) { print_cstr("  sums: a clean load FAILED\n"); ok = 0; }
+        for (i = 0; i < 5; ++i) store_get_vec(l, 5000 + 700 * i, ref + i * SDX_DIM);
+        store_destroy(l);
+    }
+    if (store_scrub(path, 0, &fx) != 0) { print_cstr("  sums: a clean scrub FAILED\n"); ok = 0; }
+
+    /* one damaged block of rows: rebuilt at load, written back, the rows as they were */
+    sdx_flip_(path, ((u64)1 << 16) + 1000);
+    l = store_load(a, path);
+    if (!l) { print_cstr("  sums: a load with one damaged block FAILED\n"); ok = 0; }
+    else {
+        store_integrity(l, &nb, &bad, &fx, &jdm);
+        if (bad != 1 || fx != 1 || !sdx_same_(l, ref, 5)) { print_cstr("  sums: rebuilding a damaged block FAILED\n"); ok = 0; }
+        store_destroy(l);
+    }
+    if (store_scrub(path, 0, &fx) != 0) { print_cstr("  sums: the rebuilt block was not written back\n"); ok = 0; }
+
+    /* two damaged blocks of one group, parity 1: the rows are lost - the load says so instead of serving them */
+    sdx_spit_(path, clean, clen);
+    sdx_flip_(path, ((u64)1 << 16) + 1000);
+    sdx_flip_(path, ((u64)(1 + z.G) << 16) + 2000);
+    l = store_load(a, path);
+    if (l || !*store_load_error()) { print_cstr("  sums: refusing damage beyond repair FAILED\n"); ok = 0; }
+    if (l) store_destroy(l);
+    if (store_scrub(path, 1, &fx) != 2 || fx != 0) { print_cstr("  sums: a scrub of damage beyond repair FAILED\n"); ok = 0; }
+
+    /* a damaged copy of the trailer, of the table, a damaged parity block: the load uses the other copy, a scrub mends */
+    sdx_spit_(path, clean, clen);
+    sdx_flip_(path, (u64)clen - 60);
+    sdx_flip_(path, z.ta + 5);
+    sdx_flip_(path, (z.N << 16) + 7);
+    l = store_load(a, path);
+    if (!l || !sdx_same_(l, ref, 5)) { print_cstr("  sums: loading past damaged copies FAILED\n"); ok = 0; }
+    if (l) store_destroy(l);
+    r1 = store_scrub(path, 1, &f1);
+    r2 = store_scrub(path, 0, &fx);
+    if (r1 != 3 || f1 != 3 || r2 != 0) { print_cstr("  sums: a scrub mending the copies and the parity FAILED\n"); ok = 0; }
+
+    /* the data without its checksums: refused, loaded only unchecked; a scrub finds no table */
+    sdx_spit_(bare, clean, (size_t)z.D);
+    l = store_load(a, bare);
+    if (l) { print_cstr("  sums: a v9 file without checksums was loaded\n"); ok = 0; store_destroy(l); }
+    store_set_verify(0);
+    l = store_load_ro(a, bare);
+    store_set_verify(2);
+    if (!l || store_count(l) != SDX_N) { print_cstr("  sums: loading it unchecked FAILED\n"); ok = 0; }
+    if (l) store_destroy(l);
+    if (store_scrub(bare, 0, &fx) != -3) { print_cstr("  sums: a scrub without a table FAILED\n"); ok = 0; }
+
+    /* the journal: every record in a frame with its CRC. A damaged frame in the middle: replay stops before it and a
+     * copy is kept; a torn tail: cut quietly, no copy */
+    sdx_spit_(path, clean, clen);
+    remove(jn);
+    l = store_load(a, path);
+    if (l) {
+        for (i = 0; i < 10; ++i) store_add(l, x + (size_t)i * SDX_DIM, 9000 + i);
+        store_sync(l, path);
+        store_destroy(l);
+    }
+    sdx_flip_(jn, 20 + 5 * (9 + 17 + 4 * SDX_DIM) + 30);           /* VXJ3 header 20 bytes; 'A' frames of 9 + 17 + 4 dim */
+    l = store_load(a, path);
+    if (!l) ok = 0;
+    else {
+        store_integrity(l, &nb, &bad, &fx, &jdm);
+        if (!jdm || !store_has(l, 9004) || store_has(l, 9005) || stat(jd, &sst) != 0) { print_cstr("  journal: a damaged frame FAILED\n"); ok = 0; }
+        store_destroy(l);
+    }
+    remove(jd); remove(jn);
+    sdx_spit_(path, clean, clen);
+    l = store_load(a, path);
+    if (l) {
+        for (i = 0; i < 3; ++i) store_add(l, x + (size_t)i * SDX_DIM, 9100 + i);
+        store_sync(l, path);
+        store_destroy(l);
+    }
+    if (truncate(jn, (off_t)(20 + 3 * (9 + 17 + 4 * SDX_DIM) - 10)) != 0) ok = 0;
+    l = store_load(a, path);
+    if (!l) ok = 0;
+    else {
+        store_integrity(l, &nb, &bad, &fx, &jdm);
+        if (jdm || !store_has(l, 9101) || store_has(l, 9102) || stat(jd, &sst) == 0) { print_cstr("  journal: a torn tail FAILED\n"); ok = 0; }
+        store_destroy(l);
+    }
+    if (ok) print_cstr("  integrity: BLAKE3 matches the reference; damaged blocks rebuilt from Reed-Solomon parity and written\n"
+                       "             back; damage beyond repair refused; copies of the trailer and table mended by a scrub;\n"
+                       "             a damaged journal frame stops replay with a copy kept, a torn tail does not\n");
+    remove(path); remove(jn); remove(jd); remove(bare);
+    free(clean); free(x); free(buf); free(jn); free(jd);
+    return ok;
+}
+
 int main(void)
 {
     static Arena arena;
@@ -1138,7 +1335,7 @@ int main(void)
         store_set_meta(j, 9000 + 3, 42);
         if (store_sync(j, "/tmp/store_demo_j.vxi") != 0) ok = 0;            /* journal flush only */
         want_live = store_count(j);
-        g = fopen("/tmp/store_demo_j.vxi.j", "ab"); if (g) { fwrite("\x41\x01\x02", 1, 3, g); fclose(g); }   /* torn record */
+        g = fopen("/tmp/store_demo_j.vxi.j", "ab"); if (g) { fwrite("\x47\x01\x02", 1, 3, g); fclose(g); }   /* a torn frame */
         jl = store_load(a, "/tmp/store_demo_j.vxi");
         if (!jl) ok = 0;
         else {
@@ -1147,6 +1344,7 @@ int main(void)
             print_cstr("  journal: live "); print_i64(store_count(jl)); print_cstr(" of "); print_i64(want_live);
             print_cstr(", replayed adds found "); print_i64(hit); print_cstr("/60, deleted still visible "); print_i64(gone); print_cstr("\n");
             if (store_count(jl) != want_live || hit < 55 || gone != 0) ok = 0;
+            { i32 jd = 1; store_integrity(jl, (i64 *)0, (i64 *)0, (i64 *)0, &jd); if (jd) { print_cstr("  journal: a torn tail taken for damage\n"); ok = 0; } }
             store_destroy(jl);
         }
         store_destroy(j);
@@ -1207,6 +1405,7 @@ int main(void)
     if (!sd_tiers_(a)) ok = 0;
     if (!sd_batches_(a)) ok = 0;
     if (!sd_cascade_(a)) ok = 0;
+    if (!sd_sums_(a)) ok = 0;
     print_cstr(ok ? "  OK\n" : "  FAIL\n");
     print_flush();
     arena_free(a);

@@ -406,6 +406,11 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
             store_tiers(c->t->s, &hot, &cold);
             p = vs_str_(p, " hot="); p = vs_i64_(p, hot); p = vs_str_(p, " cold="); p = vs_i64_(p, cold);
             p = vs_str_(p, " memory="); p = vs_i64_(p, (i64)c->t->s->mem_tier); }
+        {   i64 nb, bad, fx;
+            i32 jd;
+            store_integrity(c->t->s, &nb, &bad, &fx, &jd);
+            p = vs_str_(p, " damaged="); p = vs_i64_(p, bad); p = vs_str_(p, " rebuilt="); p = vs_i64_(p, fx);
+            p = vs_str_(p, jd ? " journal=damaged" : " journal=ok"); }
         vs_line_reply_(w, c, o, p);
     } else if (VS_CMD("build")) { vs_build_(c); vs_line_reply_(w, c, o, vs_str_(o, "ok")); }
     else if (VS_CMD("save")) { if (vs_save_(c) == 0) vs_line_reply_(w, c, o, vs_str_(o, "ok")); else VS_LINE_ERR("save failed"); }
@@ -413,6 +418,13 @@ static i32 vs_line_(VsWorker *w, VsConn *c)
         i32 r = vs_snapshot_(c);
         if (r == 0) vs_line_reply_(w, c, o, vs_str_(o, "ok started"));
         else VS_LINE_ERR(r == 1 ? "busy" : "snapshot failed");
+    } else if (VS_CMD("scrub")) {                             /* every block of the file checked, damage rebuilt */
+        i64 fx = 0, r;
+        double t0 = vs_now_();
+        r = store_scrub(c->t->path, 1, &fx);
+        vs_log_(c, r != 0, "scrub file=%s damaged=%.0f rebuilt=%.0f ms=%.0f", c->t->path, (double)r, (double)fx, (vs_now_() - t0) * 1e3);
+        if (r < 0) VS_LINE_ERR(r == -2 ? "this file has no checksums (written before v9)" : "scrub failed");
+        else { p = vs_str_(o, "ok damaged="); p = vs_i64_(p, r); p = vs_str_(p, " rebuilt="); p = vs_i64_(p, fx); vs_line_reply_(w, c, o, p); }
     } else if (VS_CMD("begin")) {
         const char *why = *vs_word_(a) ? "usage: begin" : vs_begin_(c);
         if (why) VS_LINE_ERR(why); else vs_line_reply_(w, c, o, vs_str_(o, "ok"));

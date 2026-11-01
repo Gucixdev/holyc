@@ -23,7 +23,7 @@ tools/gen --check
 
 QDEPS=(src/q1.c src/q2.c src/q3.c src/q4.c src/q5.c src/qmix.c src/q4fs.c src/vsimd.h)
 ENG=("${QDEPS[@]}" src/ivf.c src/hnsw.c src/engine*.c)
-STORE=("${ENG[@]}" src/store*.c src/hdict.c src/lex.c src/tq*.c)
+STORE=("${ENG[@]}" src/store*.c src/hdict.c src/lex.c src/blake3.c src/tq*.c)
 
 fail=0
 for name in hdict lex q1 q2 q3 q4 q5 qmix q4fs hnsw ivf simd engine store ${1:+$1}; do

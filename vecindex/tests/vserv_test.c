@@ -348,6 +348,9 @@ int main(int argc, char **argv)
         fd = connect_unix(); fd2 = connect_unix();
         check(ask(fd, "stats\n", r, sizeof(r)) > 0 && strstr(r, " hot=") && strstr(r, " cold=") && strstr(r, " memory=0"),
               "stats: hot=, cold= and memory=0");
+        check(strstr(r, " damaged=0 rebuilt=0 journal=ok") != NULL, "stats: damaged=0 rebuilt=0 journal=ok");
+        check(ask(fd, "scrub\n", r, sizeof(r)) > 0 && !strncmp(r, "ok damaged=0 rebuilt=0", 22) && log_has("scrub file="),
+              "scrub: ok damaged=0 rebuilt=0, and a line in the log");
         check(ask(fd, "use acme\n", r, sizeof(r)) > 0 && !strncmp(r, "err this server has one store", 29), "use on a server of one store -> err");
         for (i = 7001; i <= 7003; ++i) { vline(line, "add", i, i); ask(fd, line, r, sizeof(r)); }
         n0 = count_of(fd);

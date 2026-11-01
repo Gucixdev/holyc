@@ -36,6 +36,7 @@ part of `LAYER.c`, which includes it; it is not compiled on its own.
 | `ivf.c`, `hnsw.c`, `engine.c`, `engine_disk.c` | the k-means coarse router, the HNSW graph router, the adaptive engine and its file format |
 | `tq.c`, `tq_scan.c`, `tq_add.c` | the rotated 4-bit / 2-bit fast-scan index: build, scan, rows added after the build |
 | `hdict.c`, `lex.c` | hash dictionaries; the term dictionary, postings and BM25 |
+| `blake3.c`, `store_sum.c` | BLAKE3; the file's block digests, Reed-Solomon parity, the checks at load and the scrub |
 | `store.c`, `store_tune.c`, `store_live.c`, `store_search.c`, `store_text.c`, `store_disk.c` | the vector store: rows, ids, build; self-tuning; live mode; search; texts, id ranges and hybrid search; the file and its journal |
 | `vecindex.c` | the C API of `include/vecindex.h` over the store |
 | `vfind.c` | search a store's texts as you type, like fzf; Enter opens the whole document |
@@ -123,6 +124,7 @@ section; `./run`, `./run stress`, `./run bench` and `./run real_val` reproduce t
 | C API | `include/vecindex.h`, only `vi_*` exported | `tests/api_test.c` against the shared and the static library; Python, Go and Rust bindings run by hand ([docs/api.md](docs/api.md)) |
 | Concurrency | a readers-writer lock, TSan-clean, the store's live thread too | the store self-test under TSan in `./run` (it found two real races in live mode, fixed) |
 | Adversarial stress | invariant checks, not just "doesn't crash" | `tests/stress.c` (churn against an oracle, edge cases) in `./run stress` |
+| Integrity | every 64 KiB block of the file with a BLAKE3 digest, Reed-Solomon parity (any 2 damaged blocks of 32 rebuilt, groups interleaved), the table of digests twice; checked at load and by `scrub`, damage rebuilt and written back, damage beyond repair refused; every journal record with a CRC-32C | tests written, not yet run: `tests/store_test.c` (BLAKE3 against the reference implementation's digests, one damaged block rebuilt, two in one group refused, damaged copies and parity mended by a scrub, a damaged journal frame against a torn tail), `tests/api_test.c`, `tests/vserv_test.c` |
 | Memory errors | the store self-test under ASan and UBSan | in `./run`; not yet run |
 | Static analysis | clang analyzer + clang-tidy across the core, findings triaged by hand | 2 real (unreachable) issues fixed, the rest traced and confirmed false positives |
 | Scale | measured to the breaking point | store: 100M vectors (d=96, 2-bit + int8) ingested, built and searched in a 5.84 GiB cgroup on 2 cores; the old store was OOM-killed between 7M and 8M |

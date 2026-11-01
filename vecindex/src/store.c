@@ -146,6 +146,10 @@ static void store_prefetch_row_(const f32 *row, i32 dim)
 #define STORE_VERSION8 8            /* v8: v7 + texts (flags bit 1): after the meta column, the heap's length (u64),
                                      * each row's text offset | length << 40 (u64), then the heap; written only by a
                                      * store that holds texts */
+#define STORE_VERSION9 9            /* v9: the v7/v8 layout (texts: flags bit 1), then block digests, Reed-Solomon
+                                     * parity and two copies of the table of digests and its trailer (store_sum.c) */
+#define STORE_SUM_K 32              /* data blocks a parity group, by default */
+#define STORE_SUM_M 2               /* parity blocks a group, by default: any 2 damaged blocks of the 32 come back */
 
 /* ---- column chunks ---- */
 #define STORE_CSHIFT 16                           /* 65536 rows a chunk */
@@ -248,6 +252,9 @@ typedef struct {
     pthread_rwlock_t lock;
     void    *map;           /* store_load's private copy-on-write mapping of the file (columns and tq point in) */
     size_t   map_len;
+    i64      sum_blocks, sum_bad, sum_fixed;   /* what the load's checks found (store_integrity) */
+    i32      sum_k, sum_m;  /* parity of the files this store writes (store_set_parity) */
+    i32      jdamaged;      /* the journal had a damaged record or header: its copy is PATH.j.damaged */
 
     i32      idmap_ok;      /* 0: nsorted / ids_h / dup are rebuilt on the next lookup (after a load or a compaction) */
     i32      nsorted;       /* rows [0, nsorted) carry strictly increasing ids: found by binary search, nothing stored */
@@ -779,6 +786,7 @@ RagStore *store_new(Arena *a, i32 dim)
     pthread_cond_init(&s->mt_cv, (const pthread_condattr_t *)0);
     pthread_mutex_init(&s->snap_mu, (const pthread_mutexattr_t *)0);
     pthread_mutex_init(&s->jsync_mu, (const pthread_mutexattr_t *)0);
+    s->sum_k = STORE_SUM_K; s->sum_m = STORE_SUM_M;
     s->snap_last = 2;
     s->spill_fd = -1;
     s->spill_min = STORE_SPILL_MIN;
@@ -1125,21 +1133,20 @@ void store_set_goal(RagStore *s, EngGoal g)
     pthread_rwlock_unlock(&s->lock);
 }
 
+static void store_jframe_(RagStore *s, const void *const *part, const size_t *plen, i32 np);   /* store_batch.c */
+
 /* One journal record, under the write lock: 'A' (add) and 'P' (put: replace) id meta vec[dim] (the normalised row),
- * 'D' id, 'M' id meta, 'R' lo hi (a range of ids deleted). It goes to the journal and, while a snapshot is being
- * written over the journal's own file, to that file's journal too. */
+ * 'D' id, 'M' id meta, 'R' lo hi (a range of ids deleted), in a frame with its CRC-32C. It goes to the journal and,
+ * while a snapshot is being written over the journal's own file, to that file's journal too. */
 static void store_jrec_(RagStore *s, u8 op, i64 id, i64 meta, const f32 *vec)
 {
-    FILE *fs[2];
-    i32 i;
-    ++s->jseq;
-    fs[0] = s->jf; fs[1] = s->jf2;
-    for (i = 0; i < 2; ++i) {
-        if (!fs[i]) continue;
-        fwrite(&op, 1, 1, fs[i]); fwrite(&id, 8, 1, fs[i]);
-        if (op != 'D') fwrite(&meta, 8, 1, fs[i]);
-        if (op == 'A' || op == 'P') fwrite(vec, sizeof(f32), (size_t)s->dim, fs[i]);
-    }
+    const void *pt[4];
+    size_t pl[4];
+    i32 np = 0;
+    pt[np] = &op; pl[np++] = 1; pt[np] = &id; pl[np++] = 8;
+    if (op != 'D') { pt[np] = &meta; pl[np++] = 8; }
+    if (op == 'A' || op == 'P') { pt[np] = vec; pl[np++] = sizeof(f32) * (size_t)s->dim; }
+    store_jframe_(s, pt, pl, np);
 }
 
 /* one more row at the end, under the write lock (vec is finite; store_reserve_ already made room): normalised into
@@ -1420,5 +1427,7 @@ void store_build(RagStore *s)
 #include <nmmintrin.h>      /* the CRC-32C instruction, for the batches' journal records */
 #endif
 #include "store_batch.c"
+
+#include "store_sum.c"
 
 #include "store_disk.c"

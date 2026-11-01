@@ -89,6 +89,14 @@ commit sync                   ok 3
 `commit sync` replies once it is on the disk (commits that arrive during an fsync share the next one). `abort`, or
 closing the connection, drops it. A tenant cannot be switched while a batch is open.
 
+Every file carries BLAKE3 digests of its 64 KiB blocks and Reed-Solomon parity (2 blocks for every 32, groups
+interleaved: [api.md](api.md#integrity-checksums-reed-solomon-parity-scrub)). At start the server checks every
+data block, rebuilds damaged ones and writes them back, and says so on stderr (for a tenant, in the log: `check file=...
+blocks= damaged= rebuilt= journal=`); a file with damage beyond the parity in its rows does not start. `scrub` on the
+line protocol reads every block of the current store's file from the disk, rebuilds and rewrites what it can, logs
+`scrub file= damaged= rebuilt= ms=` and replies `ok damaged=N rebuilt=M`; `stats` ends with `damaged= rebuilt=
+journal=ok|damaged`, what the load found. A cron line that runs `scrub` weekly is the ZFS habit.
+
 There is no replication inside the server. A copy of the store is the file plus its journal, both written atomically
 (`rename`), so `rsync` or `cp` of the two at any moment is a consistent backup; a standby machine that replays them
 starts in milliseconds (mmap). A snapshot to another path (`store_snapshot` / `vi_snapshot` with a path) writes a

@@ -257,6 +257,33 @@ and the CRC matches. Without `sync` the batch is on the disk at the next `vi_syn
 with it, `vi_batch_commit` returns once an fsync covers it, and commits that arrive while an fsync runs share the
 next one. A journal with batches in it needs this version of vecindex or a later one to be replayed.
 
+## Integrity: checksums, Reed-Solomon parity, scrub
+
+Every file is written in 64 KiB blocks, each with a BLAKE3 digest. The blocks are dealt into groups of at most 32 -
+block b into group b mod G, so a damaged run of neighbouring blocks spreads over many groups - and every group gets 2
+Reed-Solomon parity blocks (GF(2^8), a Cauchy matrix): any 2 damaged blocks of a group are rebuilt, about 6% more
+disk. The table of digests and the trailer that vouches for it (its BLAKE3 and a CRC-32C) are written twice, 4 KiB
+apart at least. `vi_set_parity(db, data, parity)` changes the group for the files the store writes from then on.
+
+`vi_open` checks every data block before it reads anything, the header included. A damaged block is rebuilt from its
+group, confirmed by its digest and written back to the file (unless the store was opened read-only). When a group has
+more damage than parity: inside the saved index, the index is built again from the rows; anywhere else (rows, ids,
+tags, texts) `vi_open` fails and `vi_open_error()` says where, rather than serving rows that are not the ones written.
+`vi_integrity` reports what the open found. Checking every block reads the whole file once; `vi_set_verify(1)` (or
+`VECINDEX_VERIFY=1`) checks only the header's blocks, for stores too large to read at every start - then run
+`vi_scrub`, which reads every block, the parity and both copies of the table from the disk, and with `repair` rebuilds
+and rewrites what it can, beside a store that has the file open. `VECINDEX_VERIFY=0` opens a file whose checksums are
+gone.
+
+The journal frames every record with its length and CRC-32C. A frame that fails its CRC with more journal after it is
+damage, not a crash: replay stops there as for a torn tail, a copy of the whole journal is kept as `PATH.j.damaged`,
+and `vi_integrity` says so. A zero-filled tail (a file system that grew the file without the bytes landing) counts as
+torn.
+
+What this does not cover: a page that rots on the disk after it was checked and is read again before the next scrub
+(the store maps its file; pages read back from the disk later are not checked again), and damage beyond the parity.
+Files written by an older version (v8 and before) load as before, without checks, until the next save writes v9.
+
 A snapshot costs memory for the pages the parent changes while the child writes, up to a second copy of whatever is
 rewritten meanwhile. Under strict overcommit (`vm.overcommit_memory=2`) `fork` can fail for a store larger than the
 free commit limit; `vi_snapshot` then returns -1 and nothing changes.

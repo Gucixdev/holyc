@@ -13,7 +13,9 @@ replication, a line protocol beside binary and HTTP, system logs instead of user
 the C ABI and the protocols, i64 ids, one CPU knob, texts with chunk ranges, vfind.
 
 Done, not run: memory tiers (hot codes in RAM, cold rows on disk, mlock), tenants (`vserv DIR`, `vi_dir_*`), write
-batches (all or none, CRC-32C journal records, fsync on commit), the cascade (1-bit scan, 4-bit shortlist, exact
+batches (all or none, CRC-32C journal records, fsync on commit), integrity (BLAKE3 digests of every 64 KiB block, Reed-Solomon parity - 2 for every
+32 blocks, interleaved - the table of digests twice, checks at load that rebuild and write back, a scrub, a CRC-32C on
+every journal record, `vi_scrub`, `vserv` `scrub`), the cascade (1-bit scan, 4-bit shortlist, exact
 re-rank: `vi_set_cascade`, `vserv -C`, bench methods `vecindex-cascade` and `-i8`; `tests/store_test.c` checks the
 derived 1-bit codes against a 1-bit build byte for byte, added rows, recall against the 4-bit scan, the file), the
 store self-test under ASan and UBSan in `./run`.
@@ -32,7 +34,8 @@ Open:
   finished a run; Qdrant's TurboQuant mode, the RaBitQ engines (Milvus, LanceDB) and USearch are not in it yet;
   a graph index at very high recall
 - streaming chunking; lazy loading beyond what mmap and tenants opened on first use already do
-- checksums per block, ZFS-style: cryptographic (BLAKE3 or SHA-256) to catch bitrot, checked on read and by a scrub
+- integrity, next: pages read back from the disk after the load are not checked again (a scrub is); SIMD for BLAKE3
+  and the GF(2^8) parity; parity encoding on several threads inside a snapshot child
 - versioning: older snapshots kept and readable
 - compression of rows and texts
 - building the index from the quantized vectors, without a full-precision pass, to cut serving cost

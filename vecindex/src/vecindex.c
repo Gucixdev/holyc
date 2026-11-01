@@ -141,6 +141,25 @@ static i32 vi_len_(const char *text, int len) { return len < 0 ? (text ? (i32)st
 VI_API void vi_set_aggression(vi_db *db, float a) { store_set_aggression(db->s, a); }
 
 VI_API int vi_set_memory(vi_db *db, int tier) { return store_set_memory(db->s, (i32)tier); }
+VI_API int vi_set_parity(vi_db *db, int data, int parity) { return store_set_parity(db->s, (i32)data, (i32)parity); }
+VI_API void vi_set_verify(int level) { store_set_verify((i32)level); }
+VI_API const char *vi_open_error(void) { return store_load_error(); }
+VI_API void vi_integrity(vi_db *db, vi_i64 *blocks, vi_i64 *bad, vi_i64 *fixed, int *journal_damaged)
+{
+    i64 b, d, f;
+    i32 j;
+    store_integrity(db->s, &b, &d, &f, &j);
+    if (blocks) *blocks = (vi_i64)b;
+    if (bad) *bad = (vi_i64)d;
+    if (fixed) *fixed = (vi_i64)f;
+    if (journal_damaged) *journal_damaged = (int)j;
+}
+VI_API vi_i64 vi_scrub(const char *path, int repair, vi_i64 *fixed)
+{
+    i64 f = 0, r = store_scrub(path, (i32)repair, &f);
+    if (fixed) *fixed = (vi_i64)f;
+    return (vi_i64)r;
+}
 
 VI_API void vi_memory(vi_db *db, vi_i64 *hot, vi_i64 *cold)
 {

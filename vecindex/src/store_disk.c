@@ -35,12 +35,16 @@ static int store_goal_r_(FILE *f, EngGoal *g)
     return 0;
 }
 
-/* ---- the journal: PATH.j = 'VXJ2' dim(i32) stamp(u64), then records A/P/D/M/R (store_jrec_), Q (store_jrec_text_)
- * and G (a batch: its length, CRC-32C and records, store_batch.c), in the host's byte order. The stamp is the one in
- * the header of the file it belongs to (v7), so a journal is replayed only onto that file. A file from before v7 has
- * no stamp: its journal is 'VXJ1' base_live(i32) base_bytes(i64) dim(i32), matched on rows and file size. ---- */
+/* ---- the journal: PATH.j = 'VXJ3' dim(i32) stamp(u64) and their CRC-32C, then frames 'G' len(u32) crc(u32)
+ * records[len]: one record (A/P/D/M/R from store_jrec_, Q from store_jrec_text_) or a whole batch (store_batch.c), in
+ * the host's byte order. The stamp is the one in the header of the file it belongs to (v7+), so a journal is replayed
+ * only onto that file. A frame whose CRC fails with more journal after it is damage, not a torn tail: replay stops
+ * there as for a tail, and a copy of the journal is kept as PATH.j.damaged. 'VXJ2' (no header CRC, records not
+ * framed) still replays. A file from before v7 has no stamp: its journal is 'VXJ1' base_live(i32) base_bytes(i64)
+ * dim(i32), matched on rows and file size. ---- */
 #define STORE_JMAGIC  0x314a5856u
 #define STORE_JMAGIC2 0x324a5856u
+#define STORE_JMAGIC3 0x334a5856u
 
 /* flush a stdio file all the way to the disk */
 static i32 store_fsync_(FILE *f)
@@ -92,12 +96,18 @@ static u64 store_stamp_new_(void)
     return v ? v : 1;
 }
 
-/* a journal's header: VXJ2 for a stamped file, VXJ1 for an older one; 0 or -1 */
+/* a journal's header: VXJ3 for a stamped file, VXJ1 for an older one; 0 or -1 */
 static i32 store_jhead_(FILE *f, i32 dim, u64 stamp, i32 live, i64 bytes)
 {
-    u32 m = stamp ? STORE_JMAGIC2 : STORE_JMAGIC;
+    u32 m = stamp ? STORE_JMAGIC3 : STORE_JMAGIC;
     if (fwrite(&m, 4, 1, f) != 1) return -1;
-    if (stamp) return fwrite(&dim, 4, 1, f) == 1 && fwrite(&stamp, 8, 1, f) == 1 ? 0 : -1;
+    if (stamp) {
+        u8 b[12];
+        u32 crc;
+        memcpy(b, &dim, 4); memcpy(b + 4, &stamp, 8);
+        crc = store_crc32c_(b, 12);
+        return fwrite(b, 1, 12, f) == 12 && fwrite(&crc, 4, 1, f) == 1 ? 0 : -1;
+    }
     return fwrite(&live, 4, 1, f) == 1 && fwrite(&bytes, 8, 1, f) == 1 && fwrite(&dim, 4, 1, f) == 1 ? 0 : -1;
 }
 
@@ -145,41 +155,62 @@ static i32 store_jrec_play_(RagStore *s, FILE *f, u8 op, f32 *vec, char **txt, i
     return 0;
 }
 
-/* A batch, 'G' len crc records[len] (its op already read): applied only when all of it is there and its CRC-32C
- * matches - nothing of a torn or damaged one. 0, or -1 (the journal's good part ends before it). */
+/* A frame, 'G' len crc records[len] (its op already read): applied only when all of it is there and its CRC-32C
+ * matches - nothing of a torn or damaged one. 0; -1 torn (the journal ends inside it); -2 damaged (all of it there,
+ * the CRC or a record wrong). */
 static i32 store_jgroup_play_(RagStore *s, FILE *f, f32 *vec, char **txt, i32 *txcap)
 {
     u32 n, crc;
     u8 *g, op;
     FILE *m;
     i32 r = 0;
-    if (fread(&n, 4, 1, f) != 1 || fread(&crc, 4, 1, f) != 1 || (size_t)n > STORE_BATCH_MAX) return -1;
+    if (fread(&n, 4, 1, f) != 1 || fread(&crc, 4, 1, f) != 1) return -1;
+    if ((size_t)n > STORE_BATCH_MAX) return -2;
     if (n == 0) return 0;
     if (!(g = (u8 *)malloc((size_t)n))) return -1;
-    if (fread(g, 1, (size_t)n, f) != (size_t)n || store_crc32c_(g, (size_t)n) != crc || !(m = fmemopen(g, (size_t)n, "rb"))) {
-        free(g);
-        return -1;
-    }
+    if (fread(g, 1, (size_t)n, f) != (size_t)n) { free(g); return -1; }
+    if (store_crc32c_(g, (size_t)n) != crc) { free(g); return -2; }
+    if (!(m = fmemopen(g, (size_t)n, "rb"))) { free(g); return -1; }
     while (fread(&op, 1, 1, m) == 1)                             /* the CRC vouched for the bytes: these are whole */
-        if (store_jrec_play_(s, m, op, vec, txt, txcap) != 0) { r = -1; break; }
+        if (store_jrec_play_(s, m, op, vec, txt, txcap) != 0) { r = -2; break; }
     fclose(m);
     free(g);
     return r;
 }
 
+/* 1 when nothing but zeros follows in f: a tail the file system extended without the bytes landing, not damage */
+static i32 store_jzeros_(FILE *f)
+{
+    int c;
+    while ((c = fgetc(f)) != EOF) if (c) return 0;
+    return 1;
+}
+
 /* Replays the journal file jn onto a freshly loaded store when it belongs to the file at path. Returns the length of
- * its good part (a torn last record or batch is not in it), or -1 when it belongs to another file or cannot be read. */
-static i64 store_journal_play_(RagStore *s, const char *path, const char *jn)
+ * its good part (a torn last record or batch is not in it), -1 when it belongs to another file or cannot be read, -2
+ * when its header is damaged. *dmg gets 1 when it stopped at a damaged frame with more journal after it. */
+static i64 store_journal_play_(RagStore *s, const char *path, const char *jn, i32 *dmg)
 {
     FILE *f = fopen(jn, "rb");
     u32 magic;
-    i32 match = 0, txcap = 0;
+    i32 match = 0, txcap = 0, framed = 0;
     i64 good;
     f32 *vec;
     char *txt = (char *)0;
+    *dmg = 0;
     if (!f) return -1;
     if (fread(&magic, 4, 1, f) == 1) {
-        if (magic == STORE_JMAGIC2) {
+        if (magic == STORE_JMAGIC3) {
+            u8 b[12];
+            u32 crc;
+            i32 dim; u64 stamp;
+            if (fread(b, 1, 12, f) == 12 && fread(&crc, 4, 1, f) == 1) {
+                if (store_crc32c_(b, 12) != crc) { fclose(f); return -2; }
+                memcpy(&dim, b, 4); memcpy(&stamp, b + 4, 8);
+                match = s->stamp && dim == s->dim && stamp == s->stamp;
+                framed = 1;
+            }
+        } else if (magic == STORE_JMAGIC2) {
             i32 dim; u64 stamp;
             match = s->stamp && fread(&dim, 4, 1, f) == 1 && fread(&stamp, 8, 1, f) == 1 && dim == s->dim && stamp == s->stamp;
         } else if (magic == STORE_JMAGIC) {
@@ -193,8 +224,11 @@ static i64 store_journal_play_(RagStore *s, const char *path, const char *jn)
     good = (i64)ftello(f);
     for (;;) {
         u8 op;
+        i32 r;
         if (fread(&op, 1, 1, f) != 1) break;
-        if (op == 'G' ? store_jgroup_play_(s, f, vec, &txt, &txcap) != 0 : store_jrec_play_(s, f, op, vec, &txt, &txcap) != 0) break;
+        if (op == 'G') r = store_jgroup_play_(s, f, vec, &txt, &txcap);
+        else r = framed ? -2 : store_jrec_play_(s, f, op, vec, &txt, &txcap);
+        if (r != 0) { if (r == -2 && !store_jzeros_(f)) *dmg = 1; break; }
         good = (i64)ftello(f);
     }
     fclose(f);
@@ -205,23 +239,60 @@ static i64 store_journal_play_(RagStore *s, const char *path, const char *jn)
 /* Replays PATH.j onto a freshly loaded store, or PATH.jn when a snapshot replaced the file and its journal had not
  * moved over yet (then it moves now). Afterwards the journal stays open for appending; when none belongs to this
  * file, a fresh one starts. */
+/* keeps a damaged journal as NAME.damaged (or .damaged.1 to .9, the first free one): moved away, or copied when it stays
+ * in use (cut back to its good part right after) */
+static void store_jkeep_(const char *jn, i32 move)
+{
+    char *d = (char *)malloc(strlen(jn) + 16), buf[8192];
+    struct stat st;
+    FILE *in, *out;
+    size_t n;
+    i32 i;
+    if (!d) return;
+    for (i = 0; i < 10; ++i) {
+        if (i) sprintf(d, "%s.damaged.%d", jn, (int)i); else sprintf(d, "%s.damaged", jn);
+        if (stat(d, &st) != 0) break;
+    }
+    if (i < 10) {
+        if (move) { if (rename(jn, d) == 0) store_fsync_dir_(jn); }
+        else if ((in = fopen(jn, "rb")) != (FILE *)0) {
+            if ((out = fopen(d, "wb")) != (FILE *)0) {
+                while ((n = fread(buf, 1, sizeof(buf), in)) > 0) if (fwrite(buf, 1, n, out) != n) break;
+                store_fsync_(out);
+                fclose(out);
+            }
+            fclose(in);
+        }
+    }
+    free(d);
+}
+
 static void store_journal_replay_(RagStore *s, const char *path)
 {
     char *jn = store_jname_(path, ".j"), *jn2 = store_jname_(path, ".jn");
     const char *use = jn;
-    i64 good;
+    i64 good, g2;
+    i32 dmg = 0;
     if (s->ro) {                                                 /* read the journals as they are; move, cut, keep nothing */
-        if (store_journal_play_(s, path, jn) < 0 && s->stamp) store_journal_play_(s, path, jn2);
+        good = store_journal_play_(s, path, jn, &dmg);
+        if (good == -2 || dmg) s->jdamaged = 1;
+        if (good < 0 && s->stamp && (store_journal_play_(s, path, jn2, &dmg) == -2 || dmg)) s->jdamaged = 1;
         free(jn); free(jn2);
         return;
     }
-    good = store_journal_play_(s, path, jn);
-    if (good < 0 && s->stamp && (good = store_journal_play_(s, path, jn2)) >= 0) {
-        if (rename(jn2, jn) == 0) store_fsync_dir_(path);
-        else use = jn2;                                          /* append where it is: the next load finds it there too */
+    good = store_journal_play_(s, path, jn, &dmg);
+    if (good == -2) { store_jkeep_(jn, 1); s->jdamaged = 1; good = -1; }   /* its header: moved aside, never overwritten */
+    if (good < 0 && s->stamp) {
+        if ((g2 = store_journal_play_(s, path, jn2, &dmg)) == -2) { store_jkeep_(jn2, 1); s->jdamaged = 1; }
+        else if (g2 >= 0) {
+            good = g2;
+            if (rename(jn2, jn) == 0) store_fsync_dir_(path);
+            else use = jn2;                                      /* append where it is: the next load finds it there too */
+        }
     } else if (good >= 0)
         remove(jn2);                                             /* left by a snapshot that never finished: it matches nothing */
     if (good >= 0) {
+        if (dmg) { store_jkeep_(use, 0); s->jdamaged = 1; }    /* all of it, before the cut below drops the damaged rest */
         /* drop a torn tail, then append after the good part. If the tail cannot be dropped, run without a journal (as
          * when fopen fails): records appended behind a torn one would never be replayed. */
         if (truncate(use, (off_t)good) == 0) {
@@ -343,7 +414,8 @@ static int store_text_w_(FILE *f, const RagStore *s, i64 n, const u64 *dead)
     return 0;
 }
 
-/* Writes the store to tmp, flushes it to the disk, renames it over path and makes the rename durable: 0 or -1. Takes
+/* Writes the store to tmp - the data, then its block digests and parity (store_sum.c) - flushes it to the disk,
+ * renames it over path and makes the rename durable: 0 or -1. Takes
  * no lock - the caller holds the write lock (store_save, after its compaction), or is the snapshot child, alone with
  * a private image of the store. Tombstoned rows are left out; only the child (child = 1) may then renumber the scan
  * index to match, since that edits the index in place (its own copy). */
@@ -373,9 +445,9 @@ static i32 store_write_file_(RagStore *s, const char *path, const char *tmp, u64
     }
     /* 0: no index (a load rebuilds it), 1: the engine index, 2: the scan index */
     kind = (u8)(s->idx && all_in && !dead ? 1 : (s->tq && all_in && s->tq->n == live ? 2 : 0));
-    f = fopen(tmp, "wb");                                        /* the old file stays intact until the new one is complete */
+    f = fopen(tmp, "w+b");                                       /* the old file stays intact until the new one is complete */
     if (!f) return -1;
-    hdr[0] = (i32)STORE_MAGIC; hdr[1] = s->has_text ? STORE_VERSION8 : STORE_VERSION7; hdr[2] = s->dim; hdr[3] = live;
+    hdr[0] = (i32)STORE_MAGIC; hdr[1] = STORE_VERSION9; hdr[2] = s->dim; hdr[3] = live;
     ext[0] = (s->vbytes == 1 ? 1 : 0) | (s->has_text ? 2 : 0); ext[1] = 0;
     ext[2] = (i32)(u32)(stamp & 0xffffffffu); ext[3] = (i32)(u32)(stamp >> 32);
     bad = STORE_W32(f, hdr, 4) || STORE_W32(f, ext, 4) || store_goal_w_(f, &s->goal)
@@ -387,6 +459,10 @@ static i32 store_write_file_(RagStore *s, const char *path, const char *tmp, u64
        || fwrite(&kind, 1, 1, f) != 1
        || (kind == 1 && engine_save(s->idx, f))
        || (kind == 2 && store_tq_w_(f, s->tq));
+    if (!bad) {                                                  /* the digests and parity of all of it */
+        i64 D = (i64)ftello(f);
+        bad = D <= 0 || ssum_write_file_(f, tmp, (u64)D, (u32)s->sum_k, (u32)s->sum_m, child ? 1 : 8) != 0;
+    }
     if (bad || store_fsync_(f) != 0) { fclose(f); remove(tmp); return -1; }
     if (fclose(f) != 0 || rename(tmp, path) != 0) { remove(tmp); return -1; }
     store_fsync_dir_(path);
@@ -455,7 +531,7 @@ static u64 store_file_stamp_(const char *path)
     i32 h[8];
     u64 st = 0;
     if (!f) return 0;
-    if (!STORE_R32(f, h, 8) && (u32)h[0] == STORE_MAGIC && h[1] == STORE_VERSION7)
+    if (!STORE_R32(f, h, 8) && (u32)h[0] == STORE_MAGIC && (h[1] == STORE_VERSION7 || h[1] == STORE_VERSION8 || h[1] == STORE_VERSION9))
         st = (u64)(u32)h[6] | ((u64)(u32)h[7] << 32);
     fclose(f);
     return st;
@@ -762,14 +838,16 @@ static i32 store_heap_r_(RagStore *s, u8 *map, size_t flen, FILE *f, size_t off,
     return 0;
 }
 
-/* v5, v6, v7: map the file privately (copy-on-write: the store may still edit rows in place, the file is never
+/* v5 to v9: map the file privately (copy-on-write: the store may still edit rows in place, the file is never
  * written through the mapping) and point the columns and the scan index into it. Nothing is read up front;
- * pages arrive on first touch, the id lookups are built on first use. */
-static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *hdr, i32 ro)
+ * pages arrive on first touch, the id lookups are built on first use. dend: where a v9 file's data ends (0: the file's
+ * end); ubad: the first byte of a block its checks could not rebuild (~0: none) - before the index the load is refused,
+ * inside it the index is built again from the rows. */
+static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *hdr, i32 ro, u64 dend, u64 ubad)
 {
     RagStore *s;
-    i32 live = hdr[3], dim = hdr[2], ext[4], v7 = hdr[1] == STORE_VERSION7 || hdr[1] == STORE_VERSION8,
-        i8rows = hdr[1] == STORE_VERSION_I8, texts = 0;
+    i32 live = hdr[3], dim = hdr[2], ext[4], v7 = hdr[1] == STORE_VERSION7 || hdr[1] == STORE_VERSION8 || hdr[1] == STORE_VERSION9,
+        i8rows = hdr[1] == STORE_VERSION_I8, texts = 0, drop_idx = 0;
     struct stat st;
     size_t len, o_vecs, o_vsc = 0, o_ids, o_meta, o_kind, o_txo = 0, o_heap = 0;
     u8 *map = (u8 *)0, kind = 0;
@@ -777,8 +855,9 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
 
     if (live < 0 || dim <= 0 || fstat(fileno(f), &st) != 0) { fclose(f); return (RagStore *)0; }
     len = (size_t)st.st_size;
+    if (dend && dend < (u64)len) len = (size_t)dend;               /* the digests and parity after it are not data */
     if ((v7 || i8rows) && STORE_R32(f, ext, 4)) { fclose(f); return (RagStore *)0; }
-    if (v7) { i8rows = ext[0] & 1; texts = hdr[1] == STORE_VERSION8 && (ext[0] & 2); stamp = (u64)(u32)ext[2] | ((u64)(u32)ext[3] << 32); }
+    if (v7) { i8rows = ext[0] & 1; texts = (hdr[1] == STORE_VERSION8 || hdr[1] == STORE_VERSION9) && (ext[0] & 2); stamp = (u64)(u32)ext[2] | ((u64)(u32)ext[3] << 32); }
     else if (i8rows && ext[0] != 1) { fclose(f); return (RagStore *)0; }
     s = store_new(a, dim);
     s->ro = ro;
@@ -801,6 +880,14 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
         s->has_text = 1;
     }
     if (o_kind >= len) { fclose(f); store_destroy(s); return (RagStore *)0; }
+    if (ubad != ~(u64)0) {                                       /* a block the checks could not rebuild */
+        if (ubad <= (u64)o_kind) {
+            sprintf(store_lerr_, "damaged beyond repair at byte %.0f, in the rows, ids or texts (a scrub lists the blocks)",
+                    (double)ubad);
+            fclose(f); store_destroy(s); return (RagStore *)0;
+        }
+        drop_idx = 1;                                            /* only the saved index: built again from the rows */
+    }
     if (!eng_host_be_() && live > 0) {
         void *m = mmap((void *)0, len, PROT_READ | PROT_WRITE, MAP_PRIVATE, fileno(f), 0);
         if (m != MAP_FAILED) { map = (u8 *)m; s->map = m; s->map_len = len; }
@@ -824,6 +911,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     s->idmap_ok = live == 0;
     if (map) kind = map[o_kind];
     else if (fseeko(f, (off_t)o_kind, SEEK_SET) != 0 || fread(&kind, 1, 1, f) != 1) { fclose(f); store_destroy(s); return (RagStore *)0; }
+    if (drop_idx) kind = 0;
 
     if (kind == 1) {
         if (fseeko(f, (off_t)(o_kind + 1), SEEK_SET) != 0) { fclose(f); store_destroy(s); return (RagStore *)0; }
@@ -845,16 +933,35 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
 
 static RagStore *store_load_impl_(Arena *a, const char *path, i32 ro)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f;
     i32 hdr[4];
     RagStore *s;
-    i32 live, i;
+    i32 live, i, lvl = store_verify_level_(), sums;
     u8 has_idx;
-    if (!f) return (RagStore *)0;
+    SSum z;
+    i64 bad, fixed;
+    u64 ubad;
+    strcpy(store_lerr_, "cannot be read, or not a store file of a version this build knows");
+    /* the checks come first, before even the header is trusted: they rebuild a damaged one too */
+    sums = store_sum_load_(path, ro, lvl, &z, &bad, &fixed, &ubad);
+    if (sums < 0) { strcpy(store_lerr_, "some blocks could not be read to check them"); return (RagStore *)0; }
+    if (!(f = fopen(path, "rb"))) return (RagStore *)0;
     if (STORE_R32(f, hdr, 4) || (u32)hdr[0] != STORE_MAGIC
         || (hdr[1] != 4 && hdr[1] != STORE_VERSION && hdr[1] != STORE_VERSION_I8 && hdr[1] != STORE_VERSION7
-            && hdr[1] != STORE_VERSION8)) { fclose(f); return (RagStore *)0; }
-    if (hdr[1] != 4) return store_load_v5_(a, path, f, hdr, ro);
+            && hdr[1] != STORE_VERSION8 && hdr[1] != STORE_VERSION9)) { fclose(f); return (RagStore *)0; }
+    if (hdr[1] == STORE_VERSION9 && !sums && lvl > 0) {
+        strcpy(store_lerr_, "neither copy of its checksums can be read (VECINDEX_VERIFY=0 loads it unchecked)");
+        fclose(f);
+        return (RagStore *)0;
+    }
+    if (hdr[1] != 4) {
+        s = store_load_v5_(a, path, f, hdr, ro, sums ? z.D : 0, lvl > 0 ? ubad : ~(u64)0);
+        if (s) {
+            store_lerr_[0] = 0;
+            if (sums) { s->sum_blocks = (i64)(z.N + z.P); s->sum_bad = bad; s->sum_fixed = fixed; s->sum_k = (i32)z.k; s->sum_m = (i32)z.m; }
+        }
+        return s;
+    }
 
     /* v4: packed sections, no saved scan index - read everything, rebuild the scan */
     s = store_new(a, hdr[2]);
@@ -879,6 +986,7 @@ static RagStore *store_load_impl_(Arena *a, const char *path, i32 ro)
         store_build(s);
     }
     store_journal_replay_(s, path);
+    store_lerr_[0] = 0;
     return s;
 }
 

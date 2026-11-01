@@ -301,6 +301,31 @@ int main(void)
         rmdir(dpath);
     }
 
+    /* integrity: digests and parity in every file, checked at open, a scrub of the file */
+    {
+        char fn[64], jn[72];
+        vi_i64 blocks = 0, bad = -1, fixed = -1;
+        int jd = -1;
+        sprintf(fn, "/tmp/vecindex_api_sums_%d.vxi", (int)getpid());
+        sprintf(jn, "%s.j", fn);
+        db = vi_open(fn, DIM, 0);
+        check(db && vi_set_parity(db, 8, 2) == 0 && vi_set_parity(db, 0, 2) == -1 && vi_set_parity(db, 8, 99) == -1,
+              "vi_set_parity: 8 and 2 taken, 0 data blocks or 99 parity refused");
+        if (db) { for (i = 0; i < 3000; ++i) { vec_(i, v); vi_add(db, 1 + i, v); } vi_build(db); vi_save(db, (const char *)0); vi_close(db); }
+        check(vi_scrub(fn, 0, &fixed) == 0 && fixed == 0, "vi_scrub of an intact file: 0 damaged");
+        check(vi_scrub("/nonexistent/vecindex.vxi", 0, (vi_i64 *)0) == -1, "vi_scrub of no file: -1");
+        db = vi_open(fn, 0, 0);
+        if (db) vi_integrity(db, &blocks, &bad, &fixed, &jd);
+        check(db && blocks > 0 && bad == 0 && fixed == 0 && jd == 0 && !*vi_open_error(), "vi_integrity after an open: blocks checked, none damaged");
+        if (db) vi_close(db);
+        vi_set_verify(1);
+        db = vi_open(fn, 0, 0);
+        vi_set_verify(2);
+        check(db && vi_count(db) == 3000, "vi_set_verify 1: opens, checking the header's blocks only");
+        if (db) vi_close(db);
+        remove(fn); remove(jn);
+    }
+
     free(qs); free(bi); free(bs);
     printf("C API: %s\n", fails ? "FAILED" : "OK");
     return fails ? 1 : 0;

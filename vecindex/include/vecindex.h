@@ -194,6 +194,31 @@ VI_API int vi_snapshot(vi_db *db, const char *path);
 /* The last snapshot: 0 done, 1 still running, -1 failed, 2 none yet. block 1 waits for a running one. */
 VI_API int vi_snapshot_wait(vi_db *db, int block);
 
+/* Integrity. Every file is written in 64 KiB blocks, each with a BLAKE3 digest, and with Reed-Solomon parity: for
+ * every group of `data` blocks, `parity` blocks from which any `parity` damaged blocks of the group are rebuilt (by
+ * default 32 and 2; the groups interleave, so a damaged run of neighbouring blocks spreads over many groups). The
+ * table of digests and its trailer are kept twice. vi_set_parity sets it for the files this store writes from now
+ * on (data 1-128, parity 0-64; 0: digests only): 0, or -1 out of range. */
+VI_API int vi_set_parity(vi_db *db, int data, int parity);
+
+/* What opening checks, for every vi_open after the call (process-wide): 2 every block, the default; 1 only the
+ * blocks that hold the header; 0 nothing (to rescue a file whose checksums are gone). $VECINDEX_VERIFY sets the
+ * default. Damaged blocks are rebuilt from the parity and written back; when they cannot be, a damaged index is
+ * built again from the rows and damaged rows make vi_open fail - vi_open_error says why. */
+VI_API void vi_set_verify(int level);
+VI_API const char *vi_open_error(void);
+
+/* What opening found: the file's blocks (0 for a file written before checksums), the damaged ones, how many of them
+ * were rebuilt; journal_damaged 1 when a damaged journal record stopped the replay (a copy of the journal is kept
+ * as PATH.j.damaged). Any pointer may be NULL. */
+VI_API void vi_integrity(vi_db *db, vi_i64 *blocks, vi_i64 *bad, vi_i64 *fixed, int *journal_damaged);
+
+/* Checks every block of the store file at path against its digest, the parity blocks and both copies of the table,
+ * reading from the disk where the page cache lets it; with repair, rebuilds what it can in place. Safe beside a
+ * store that has the file open. Returns the damaged blocks found (0: all intact), -1 cannot read it, -2 a file
+ * without checksums, -3 no readable table of digests; *fixed (may be NULL) how many were rebuilt. */
+VI_API vi_i64 vi_scrub(const char *path, int repair, vi_i64 *fixed);
+
 #ifdef __cplusplus
 }
 #endif

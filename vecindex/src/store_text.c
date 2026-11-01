@@ -2,21 +2,16 @@
  * hybrid search (the vector and BM25 over the texts, fused by rank).
  * Part of store.c, which includes it at this point; not compiled on its own. */
 
-/* 'Q' id meta vec[dim] len(u32) text[len]: an upsert with its text, one record, so a torn tail drops both */
+/* 'Q' id meta vec[dim] len(u32) text[len]: an upsert with its text, one framed record, so a torn tail drops both */
 static void store_jrec_text_(RagStore *s, i64 id, i64 meta, const f32 *vec, const char *text, i32 len)
 {
-    FILE *fs[2];
+    const void *pt[6];
+    size_t pl[6];
     u8 op = 'Q';
     u32 n = (u32)len;
-    i32 i;
-    ++s->jseq;
-    fs[0] = s->jf; fs[1] = s->jf2;
-    for (i = 0; i < 2; ++i) {
-        if (!fs[i]) continue;
-        fwrite(&op, 1, 1, fs[i]); fwrite(&id, 8, 1, fs[i]); fwrite(&meta, 8, 1, fs[i]);
-        fwrite(vec, sizeof(f32), (size_t)s->dim, fs[i]); fwrite(&n, 4, 1, fs[i]);
-        if (len > 0) fwrite(text, 1, (size_t)len, fs[i]);
-    }
+    pt[0] = &op; pl[0] = 1; pt[1] = &id; pl[1] = 8; pt[2] = &meta; pl[2] = 8;
+    pt[3] = vec; pl[3] = sizeof(f32) * (size_t)s->dim; pt[4] = &n; pl[4] = 4; pt[5] = text; pl[5] = len > 0 ? (size_t)len : 0;
+    store_jframe_(s, pt, pl, 6);
 }
 
 /* Upsert with a text (len bytes, at most 16 MB - 1; any bytes, UTF-8 for the word index): every row with doc_id

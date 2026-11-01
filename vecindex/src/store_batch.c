@@ -39,9 +39,9 @@ static void store_crc_init_(void)
 }
 #endif
 
-static u32 store_crc32c_(const u8 *p, size_t n)
+/* the CRC-32C register after n more bytes (start at 0xffffffff, finish with ~) */
+static u32 store_crc32c_up_(u32 crc, const u8 *p, size_t n)
 {
-    u32 crc = 0xffffffffu;
 #if defined(__SSE4_2__) && defined(__x86_64__)
     while (n >= 8) { u64 v; memcpy(&v, p, 8); crc = (u32)_mm_crc32_u64(crc, v); p += 8; n -= 8; }
     while (n--) crc = _mm_crc32_u8(crc, *p++);
@@ -49,8 +49,9 @@ static u32 store_crc32c_(const u8 *p, size_t n)
     pthread_once(&store_crc_once_, store_crc_init_);
     while (n--) crc = store_crc_tab_[(crc ^ *p++) & 0xffu] ^ (crc >> 8);
 #endif
-    return ~crc;
+    return crc;
 }
+static u32 store_crc32c_(const u8 *p, size_t n) { return ~store_crc32c_up_(0xffffffffu, p, n); }
 
 /* ---- building ---- */
 
@@ -163,6 +164,25 @@ static void store_jgroup_(RagStore *s, const u8 *rec, u32 len, u32 crc)
     for (i = 0; i < 2; ++i) {
         if (!fs[i]) continue;
         fwrite(&op, 1, 1, fs[i]); fwrite(&len, 4, 1, fs[i]); fwrite(&crc, 4, 1, fs[i]); fwrite(rec, 1, (size_t)len, fs[i]);
+    }
+}
+
+/* one record as a 'G' frame of its own - the parts' length and CRC-32C, then the parts - so that replay finds a
+ * damaged record instead of applying it */
+static void store_jframe_(RagStore *s, const void *const *part, const size_t *plen, i32 np)
+{
+    FILE *fs[2];
+    u8 op = 'G';
+    u32 len = 0, crc = 0xffffffffu;
+    i32 i, j;
+    for (j = 0; j < np; ++j) { len += (u32)plen[j]; crc = store_crc32c_up_(crc, (const u8 *)part[j], plen[j]); }
+    crc = ~crc;
+    ++s->jseq;
+    fs[0] = s->jf; fs[1] = s->jf2;
+    for (i = 0; i < 2; ++i) {
+        if (!fs[i]) continue;
+        fwrite(&op, 1, 1, fs[i]); fwrite(&len, 4, 1, fs[i]); fwrite(&crc, 4, 1, fs[i]);
+        for (j = 0; j < np; ++j) if (plen[j]) fwrite(part[j], 1, plen[j], fs[i]);
     }
 }
 

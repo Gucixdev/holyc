@@ -298,11 +298,17 @@ static VsTen *vs_ten_open_(const char *name, i32 n, const char **err)
     if (t->s && t->s->dim != vs_dim) { store_destroy(t->s); t->s = (RagStore *)0; *err = "the tenant's store has another dimension"; }
     else if (!t->s) *err = created ? "cannot create the tenant's store" : "the tenant's store cannot be read";
     if (!t->s) {
-        vs_log_((const VsConn *)0, 1, "tenant name=%s file=%s: %s", t->name, t->path, *err);
+        vs_log_((const VsConn *)0, 1, "tenant name=%s file=%s: %s%s%s", t->name, t->path, *err,
+                *store_load_error() ? ": " : "", store_load_error());
         free(path); free(t);
         return (VsTen *)0;
     }
     if (vs_ten_setup_(t) != 0) vs_log_((const VsConn *)0, 1, "tenant name=%s: the memlock limit refused part of -m %d", t->name, (int)vs_mem);
+    {   i64 nb, bad, fx;                                         /* what the load's checks found, when anything */
+        i32 jd;
+        store_integrity(t->s, &nb, &bad, &fx, &jd);
+        if (bad || jd) vs_log_((const VsConn *)0, bad > fx, "check file=%s blocks=%.0f damaged=%.0f rebuilt=%.0f journal=%s", t->path,
+                               (double)nb, (double)bad, (double)fx, jd ? "damaged (copy kept as .j.damaged)" : "ok"); }
     t->next = vs_tens;
     vs_tens = t;
     ++vs_ntens;
@@ -962,7 +968,10 @@ int main(int argc, char **argv)
         vs_one.path = path;
         vs_one.s = store_load(&vs_arena, path);
         if (!vs_one.s) {
-            if (stat(path, &st) == 0) { fprintf(stderr, "vserv: %s exists but cannot be read as a store\n", path); return 1; }
+            if (stat(path, &st) == 0) {
+                fprintf(stderr, "vserv: %s exists but cannot be read as a store%s%s\n", path, *store_load_error() ? ": " : "", store_load_error());
+                return 1;
+            }
             if (dim <= 0) { fprintf(stderr, "vserv: cannot load %s (give -d DIM to start a new store)\n", path); return 1; }
             vs_one.s = store_new(&vs_arena, dim);
             if (store_save(vs_one.s, path) != 0) { fprintf(stderr, "vserv: cannot create %s: %s\n", path, strerror(errno)); return 1; }
@@ -970,6 +979,11 @@ int main(int argc, char **argv)
         }
         vs_dim = vs_one.s->dim;
         memrc = vs_ten_setup_(&vs_one);
+        {   i64 nb, bad, fx;
+            i32 jd;
+            store_integrity(vs_one.s, &nb, &bad, &fx, &jd);
+            if (bad || jd) fprintf(stderr, "vserv: %s: %.0f of %.0f blocks were damaged, %.0f rebuilt%s\n", path, (double)bad, (double)nb,
+                                   (double)fx, jd ? "; the journal had a damaged record (its copy: .j.damaged)" : ""); }
         store_tiers(vs_one.s, &hot, &cold);
     }
     /* one request: headers + a JSON vector (~24 bytes a number) or the binary frame */
