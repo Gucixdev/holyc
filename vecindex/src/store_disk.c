@@ -151,6 +151,13 @@ static i32 store_jrec_play_(RagStore *s, FILE *f, u8 op, f32 *vec, char **txt, i
     } else if (op == 'M' || op == 'R') {
         if (fread(&id, 8, 1, f) != 1 || fread(&meta, 8, 1, f) != 1) return -1;
         if (op == 'M') store_set_meta(s, id, meta); else store_delete_range(s, id, meta);
+    } else if (op == 'L') {                                      /* a label: its bit, name and parents */
+        u8 b;
+        char nm[STORE_LABEL_NAME];
+        u64 par;
+        if (fread(&b, 1, 1, f) != 1 || fread(nm, 1, STORE_LABEL_NAME, f) != STORE_LABEL_NAME || fread(&par, 8, 1, f) != 1) return -1;
+        nm[STORE_LABEL_NAME - 1] = 0;
+        store_label_set_(s, (i32)b, nm, par);
     } else return -1;
     return 0;
 }
@@ -414,6 +421,28 @@ static int store_text_w_(FILE *f, const RagStore *s, i64 n, const u64 *dead)
     return 0;
 }
 
+/* the label table: for each of the 64 bits its name (64 bytes, 0-padded; empty: free) and its parents' bits (u64) */
+static int store_labels_w_(FILE *f, const RagStore *s)
+{
+    i32 b;
+    if (store_pad_(f)) return -1;
+    for (b = 0; b < STORE_LABELS; ++b)
+        if (fwrite(s->lab_name[b], 1, STORE_LABEL_NAME, f) != STORE_LABEL_NAME || STORE_W64(f, &s->lab_par[b], 1)) return -1;
+    return 0;
+}
+
+static i32 store_labels_r_(RagStore *s, FILE *f, size_t off, size_t len)
+{
+    i32 b;
+    if (off + (size_t)STORE_LABELS * (STORE_LABEL_NAME + 8) > len || fseeko(f, (off_t)off, SEEK_SET) != 0) return -1;
+    for (b = 0; b < STORE_LABELS; ++b) {
+        if (fread(s->lab_name[b], 1, STORE_LABEL_NAME, f) != STORE_LABEL_NAME || STORE_R64(f, &s->lab_par[b], 1)) return -1;
+        s->lab_name[b][STORE_LABEL_NAME - 1] = 0;
+        if (s->lab_name[b][0]) ++s->nlab;
+    }
+    return 0;
+}
+
 /* Writes the store to tmp - the data, then its block digests and parity (store_sum.c) - flushes it to the disk,
  * renames it over path and makes the rename durable: 0 or -1. Takes
  * no lock - the caller holds the write lock (store_save, after its compaction), or is the snapshot child, alone with
@@ -448,7 +477,7 @@ static i32 store_write_file_(RagStore *s, const char *path, const char *tmp, u64
     f = fopen(tmp, "w+b");                                       /* the old file stays intact until the new one is complete */
     if (!f) return -1;
     hdr[0] = (i32)STORE_MAGIC; hdr[1] = STORE_VERSION9; hdr[2] = s->dim; hdr[3] = live;
-    ext[0] = (s->vbytes == 1 ? 1 : 0) | (s->has_text ? 2 : 0); ext[1] = s->metric;   /* v9: 0 cosine, 1 dot, 2 L2 */
+    ext[0] = (s->vbytes == 1 ? 1 : 0) | (s->has_text ? 2 : 0) | (s->nlab ? 4 : 0); ext[1] = s->metric;   /* v9: 0 cosine, 1 dot, 2 L2 */
     ext[2] = (i32)(u32)(stamp & 0xffffffffu); ext[3] = (i32)(u32)(stamp >> 32);
     bad = STORE_W32(f, hdr, 4) || STORE_W32(f, ext, 4) || store_goal_w_(f, &s->goal)
        || store_pad_(f) || store_col_w_live_(f, &s->vec, s->count, dead)
@@ -458,6 +487,7 @@ static i32 store_write_file_(RagStore *s, const char *path, const char *tmp, u64
        || store_pad_(f) || store_col_w_live_(f, &s->rck, s->count, dead)
        || (s->metric && (store_pad_(f) || store_col_w_live_(f, &s->nrm, s->count, dead)))
        || (s->has_text && store_text_w_(f, s, s->count, dead))
+       || (s->nlab && store_labels_w_(f, s))
        || fwrite(&kind, 1, 1, f) != 1
        || (kind == 1 && engine_save(s->idx, f))
        || (kind == 2 && store_tq_w_(f, s->tq));
@@ -896,6 +926,10 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
         if (o_heap > len || hlen > (u64)(len - o_heap)) { fclose(f); store_destroy(s); return (RagStore *)0; }
         o_kind = o_heap + (size_t)hlen;
         s->has_text = 1;
+    }
+    if (hdr[1] == STORE_VERSION9 && (ext[0] & 4)) {             /* the label table */
+        if (store_labels_r_(s, f, STORE_AL(o_kind), len) != 0) { fclose(f); store_destroy(s); return (RagStore *)0; }
+        o_kind = STORE_AL(o_kind) + (size_t)STORE_LABELS * (STORE_LABEL_NAME + 8);
     }
     if (o_kind >= len) { fclose(f); store_destroy(s); return (RagStore *)0; }
     if (ubad != ~(u64)0) {                                       /* a block the checks could not rebuild */

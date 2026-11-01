@@ -144,6 +144,26 @@ VI_API int vi_batch_delete_range(vi_batch *b, vi_i64 lo, vi_i64 hi);
 VI_API int vi_batch_commit(vi_batch *b, int sync);
 VI_API void vi_batch_abort(vi_batch *b);
 
+/* A 64-bit id for a string - a file name, a URL, a document's key - the same on every machine and in every version
+ * (the first 8 bytes of its BLAKE3, the top bit cleared, so never negative; -1 only for a NULL string). len -1:
+ * 0-terminated. Two different strings share an id with a chance of about n^2 / 2^64 among n of them: 1 in 18 million
+ * for a million keys, about 5% for a billion. To get the string back from a search's ids, keep it as the row's text
+ * (vi_add_text). */
+VI_API vi_i64 vi_key(const char *s, int len);
+
+/* Labels: names for the 64 bits of a row's tag, in a hierarchy. vi_label makes a label (1 to 63 of A-Z a-z 0-9 _ - .
+ * / :) and, with a parent, puts it under that one (made too when new; several parents allowed, cycles refused). A
+ * label stands for itself and everything below it, worked out when a search runs: a new hierarchy is a few new links,
+ * no row changes. vi_label_add / vi_label_remove put labels on a row or take them off (a list: "red,big"; labels
+ * new to the store are made). vi_search_labeled is vi_search over the rows that have every label of `all`, at least
+ * one of `any` and none of `none` (each a list, NULL or "": no condition; at most 15 in all). The table is saved in
+ * the file and journaled. Labels and vi_set_tag share the same 64 bits: use one or the other. 0, or -1 (vi_error()). */
+VI_API int vi_label(vi_db *db, const char *name, const char *parent);
+VI_API int vi_label_add(vi_db *db, vi_i64 id, const char *labels);
+VI_API int vi_label_remove(vi_db *db, vi_i64 id, const char *labels);
+VI_API int vi_search_labeled(vi_db *db, const float *query, int k, const char *all, const char *any, const char *none,
+                             vi_i64 *ids, float *scores);
+
 /* A 64-bit tag on a row, for filtered search: 0, or -1 when there is no such row. */
 VI_API int vi_set_tag(vi_db *db, vi_i64 id, vi_i64 tag);
 VI_API int vi_get_tag(vi_db *db, vi_i64 id, vi_i64 *tag);

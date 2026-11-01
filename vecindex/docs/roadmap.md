@@ -22,8 +22,8 @@ derived 1-bit codes against a 1-bit build byte for byte, added rows, recall agai
 store self-test under ASan and UBSan in `./run`.
 
 Open:
-- tags: one 64-bit tag per row today (`vi_search_tagged`). Tags are the structure: hierarchy, relation and
-  correlation between rows, several per row, ranges and combined conditions in a filter
+- labels beyond 64 a store: sets of rows as bitmaps, unlimited, with the same hierarchy (now: 64 named labels in a
+  hierarchy on the tag's bits, `vi_label*`); relations between rows; numeric ranges in a filter
 - the file format: zones (parts of a store split by id range, time or tag) and namespaces inside a tenant, one
   format readable on every machine (the journal is written in the host's byte order today)
 - scale at both ends: the smallest boards (fewest bytes a vector, RAM to spare) and past one machine's RAM

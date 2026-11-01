@@ -91,7 +91,7 @@ static int vi_norow_(vi_db *db, vi_i64 id)
 }
 
 /* scores as callers expect them: the cosine (1 same direction, -1 opposite), the inner product, or the L2 distance */
-static void vi_cos_(const vi_db *db, float *sc, int n) { int i; for (i = 0; i < n; ++i) sc[i] = store_score_out_(db->s, sc[i]); }
+static void vi_cos_(const vi_db *db, float *sc, int n) { int i; for (i = 0; i < n; ++i) sc[i] = store_score_out(db->s, sc[i]); }
 
 static char *vi_strdup_(const char *p)
 {
@@ -565,3 +565,72 @@ VI_API int vi_snapshot(vi_db *db, const char *path)
 }
 
 VI_API int vi_snapshot_wait(vi_db *db, int block) { return db ? store_snapshot_poll(db->s, block) : vi_fail_(-1, VI_NODB, (const char *)0, (const char *)0); }
+
+/* ---- string keys, labels ---- */
+
+VI_API vi_i64 vi_key(const char *s, int len)
+{
+    u8 h[32];
+    u64 v = 0;
+    i32 i;
+    if (!s) return (vi_i64)vi_fail_(-1, "the key is NULL", (const char *)0, (const char *)0);
+    b3_hash(s, (size_t)vi_len_(s, len), h);
+    for (i = 7; i >= 0; --i) v = v << 8 | (u64)h[i];
+    return (vi_i64)(v & ~((u64)1 << 63));                       /* never negative: -1 stays the error */
+}
+
+/* "the label NAME ..." for the name a list holds at p (up to its comma or space) */
+static int vi_badlabel_(int r, const char *p, const char *why)
+{
+    char nm[STORE_LABEL_NAME + 8];
+    size_t n = 0;
+    if (p) while (p[n] && p[n] != ',' && p[n] != ' ' && n < STORE_LABEL_NAME + 4) { nm[n] = p[n]; ++n; }
+    nm[n] = 0;
+    return vi_fail_(r, "label \"", nm, why);
+}
+
+VI_API int vi_label(vi_db *db, const char *name, const char *parent)
+{
+    i32 r;
+    if (!db) return vi_fail_(-1, VI_NODB, (const char *)0, (const char *)0);
+    if (!name) return vi_fail_(-1, "the name is NULL", (const char *)0, (const char *)0);
+    r = store_label(db->s, name, parent);
+    if (r == -2) return vi_fail_(-1, "that link would make a cycle: the parent is below the label already", (const char *)0, (const char *)0);
+    if (r < 0) {
+        if (!store_label_name_ok_(name, strlen(name)) || (parent && !store_label_name_ok_(parent, strlen(parent))))
+            return vi_fail_(-1, "a label is 1 to 63 of A-Z a-z 0-9 _ - . / :", (const char *)0, (const char *)0);
+        return vi_fail_(-1, "all 64 labels are in use", (const char *)0, (const char *)0);
+    }
+    return 0;
+}
+
+static int vi_label_row_(vi_db *db, vi_i64 id, const char *labels, int on)
+{
+    const char *bad = (const char *)0;
+    i32 r;
+    if (!db) return vi_fail_(-1, VI_NODB, (const char *)0, (const char *)0);
+    if (!labels) return vi_fail_(-1, "the labels are NULL", (const char *)0, (const char *)0);
+    r = store_label_row(db->s, (i64)id, labels, (i32)on, &bad);
+    if (r == -1) return vi_norow_(db, id);
+    if (r == -2) return vi_badlabel_(-1, bad, "\" is not a name (1 to 63 of A-Z a-z 0-9 _ - . / :), or all 64 labels are in use");
+    return 0;
+}
+VI_API int vi_label_add(vi_db *db, vi_i64 id, const char *labels) { return vi_label_row_(db, id, labels, 1); }
+VI_API int vi_label_remove(vi_db *db, vi_i64 id, const char *labels) { return vi_label_row_(db, id, labels, 0); }
+
+VI_API int vi_search_labeled(vi_db *db, const float *query, int k, const char *all, const char *any, const char *none,
+                             vi_i64 *ids, float *scores)
+{
+    StoreCnf c;
+    const char *bad = (const char *)0;
+    i32 r;
+    int n;
+    if (vi_search_ok_(db, query, k, ids, scores)) return -1;
+    if (!query) return vi_fail_(-1, "the query is NULL", (const char *)0, (const char *)0);
+    r = store_label_cnf(db->s, all, any, none, &c, &bad);
+    if (r == -1) return vi_badlabel_(-1, bad, "\" does not exist (vi_label or vi_label_add makes it)");
+    if (r == -2) return vi_fail_(-1, "at most 15 labels in all", (const char *)0, (const char *)0);
+    n = store_search_cnf(db->s, query, (i32)k, (i64 *)ids, scores, &c);
+    vi_cos_(db, scores, n);
+    return n;
+}

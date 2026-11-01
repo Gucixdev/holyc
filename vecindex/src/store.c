@@ -148,6 +148,8 @@ static void store_prefetch_row_(const f32 *row, i32 dim)
                                      * store that holds texts */
 #define STORE_VERSION9 9            /* v9: the v7/v8 layout (texts: flags bit 1), then block digests, Reed-Solomon
                                      * parity and two copies of the table of digests and its trailer (store_sum.c) */
+#define STORE_LABELS 64             /* labels: names for the 64 bits of a row's tag (store_label.c) */
+#define STORE_LABEL_NAME 64         /* bytes of a label's name, its 0 included */
 #define STORE_SUM_K 32              /* data blocks a parity group, by default */
 #define STORE_SUM_M 2               /* parity blocks a group, by default: any 2 damaged blocks of the 32 come back */
 
@@ -241,6 +243,9 @@ typedef struct {
     SCol     rck;           /* a 32-bit check of each row (its vector, id and tag), tested whenever a search uses it */
     SCol     nrm;           /* dot and L2 stores only: each row's length before it was normalised */
     i32      metric;        /* 0 cosine, 1 inner product, 2 L2 distance (store_set_metric; saved in the file) */
+    char     lab_name[STORE_LABELS][STORE_LABEL_NAME];   /* labels: the name of each tag bit ("": free) */
+    u64      lab_par[STORE_LABELS];   /* and the bits of its parents */
+    i32      nlab;          /* labels in use */
     i32      vbytes;        /* 4: f32 rows; 1: int8 rows (each row times its scale) */
     i32      codebits;      /* 4, 2 or 1: the scan index's code width (store_set_codes) */
     i32      cascade;       /* 4-bit index with 1-bit codes beside: scan those, re-score a shortlist (store_set_cascade) */
@@ -916,7 +921,7 @@ void store_mem(RagStore *s, i64 *ram, i64 *file)
 void store_tiers(RagStore *s, i64 *hot, i64 *cold)
 {
     i64 h = 0, c = 0;
-    const SCol *cols[6];
+    const SCol *cols[7];
     const Tq *t;
     i32 i;
     pthread_rwlock_rdlock(&s->lock);
@@ -1187,7 +1192,7 @@ static f32 store_score_(const RagStore *s, const f32 *qn, f32 qlen, i32 r)
 }
 
 /* that score as callers see it: the cosine (1 same direction, -1 opposite), the inner product, or the L2 distance */
-static f32 store_score_out_(const RagStore *s, f32 x)
+f32 store_score_out(const RagStore *s, f32 x)
 {
     if (!s->metric) return 1.0f + 0.5f * x;
     if (s->metric == 1) return x;
@@ -1532,6 +1537,17 @@ void store_build(RagStore *s)
     pthread_mutex_unlock(&s->snap_mu);
 }
 
+/* label conditions of a search: every mask of any[0..n) shared by the row's tag, none of none */
+typedef struct { i32 n; u64 any[16]; u64 none; } StoreCnf;
+static i32 store_cnf_ok_(const StoreCnf *c, i64 meta)
+{
+    u64 m = (u64)meta;
+    i32 i;
+    if (m & c->none) return 0;
+    for (i = 0; i < c->n; ++i) if (!(m & c->any[i])) return 0;
+    return 1;
+}
+
 #include "store_tune.c"
 
 #include "store_live.c"
@@ -1539,6 +1555,8 @@ void store_build(RagStore *s)
 #include "store_search.c"
 
 #include "store_text.c"
+
+#include "store_label.c"
 
 #if defined(__SSE4_2__) && defined(__x86_64__)
 #include <nmmintrin.h>      /* the CRC-32C instruction, for the batches' journal records */

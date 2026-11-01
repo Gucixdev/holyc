@@ -334,6 +334,47 @@ int main(void)
         sprintf(jn, "%s.j", fn2); remove(jn);
     }
 
+    /* string keys; labels in a hierarchy: a label stands for everything below it, a new hierarchy touches no row */
+    {
+        char fn[64], jn[72];
+        vi_i64 k1, i3[3];
+        float s3[3];
+        int pass;
+        sprintf(fn, "/tmp/vecindex_api_lab_%d.vxi", (int)getpid());
+        sprintf(jn, "%s.j", fn);
+        k1 = vi_key("docs/readme.md", -1);
+        check(k1 >= 0 && k1 == vi_key("docs/readme.md", 14) && k1 != vi_key("docs/readme.mD", -1) && vi_key((const char *)0, 0) == -1,
+              "vi_key: the same string, the same id; another string, another id");
+        db = vi_open(fn, DIM, 0);
+        check(db && vi_label(db, "dog", "animal") == 0 && vi_label(db, "cat", "animal") == 0
+              && vi_label(db, "animal", "dog") == -1 && strstr(vi_error(), "cycle") != 0,
+              "vi_label: dog and cat under animal; animal under dog refused as a cycle");
+        check(db && vi_label(db, "bad name", (const char *)0) == -1, "vi_label of a name with a space: refused");
+        for (i = 0; db && i < 3; ++i) { vec_(100 + i, v); vi_add(db, 1 + i, v); }
+        check(db && vi_label_add(db, 1, "dog") == 0 && vi_label_add(db, 2, "cat,big") == 0 && vi_label_add(db, 3, "big") == 0
+              && vi_label_add(db, 99, "dog") == -1, "vi_label_add: lists, new labels made, a missing row refused");
+        vec_(100, v);
+        check(db && vi_search_labeled(db, v, 3, "animal", (const char *)0, (const char *)0, i3, s3) == 2,
+              "all=animal finds the dog and the cat, never labelled animal themselves");
+        check(db && vi_search_labeled(db, v, 3, "animal", (const char *)0, "big", i3, s3) == 1 && i3[0] == 1, "all=animal none=big: the dog");
+        check(db && vi_search_labeled(db, v, 3, (const char *)0, "dog,big", (const char *)0, i3, s3) == 3, "any=dog,big: all three");
+        check(db && vi_label(db, "dog", "pet") == 0 && vi_search_labeled(db, v, 3, "pet", (const char *)0, (const char *)0, i3, s3) == 1
+              && i3[0] == 1, "a new parent, pet over dog: found through it, no row changed");
+        check(db && vi_search_labeled(db, v, 3, "nosuch", (const char *)0, (const char *)0, i3, s3) == -1
+              && strstr(vi_error(), "\"nosuch\" does not exist") != 0, "an unknown label: -1, and its name");
+        check(db && vi_label_remove(db, 2, "cat") == 0 && vi_search_labeled(db, v, 3, "animal", (const char *)0, (const char *)0, i3, s3) == 1,
+              "vi_label_remove: the cat is no longer an animal");
+        if (db) vi_close(db);
+        for (pass = 0; pass < 2; ++pass) {                       /* from the journal, then from the file's table */
+            db = vi_open(fn, 0, 0);
+            check(db && vi_search_labeled(db, v, 3, "pet", (const char *)0, (const char *)0, i3, s3) == 1 && i3[0] == 1,
+                  pass ? "labels come back from the file's table" : "labels come back from the journal");
+            if (db && !pass) vi_save(db, (const char *)0);
+            if (db) vi_close(db);
+        }
+        remove(fn); remove(jn);
+    }
+
     /* errors say why; a NULL handle is an error, not a crash */
     {
         char fn[64];

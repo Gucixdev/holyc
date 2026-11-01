@@ -18,6 +18,16 @@ made from any thread on the same handle at once. A call that fails returns -1 (N
 crash. Rows are indexed as they come by a thread of the store's own (`VI_MANUAL` at `vi_open` turns it off, then
 `vi_build` indexes).
 
+Ids are 64-bit numbers; `vi_key("docs/readme.md", -1)` turns a string into one, the same on every machine (the
+first 8 bytes of its BLAKE3; two strings share an id with a chance of about n^2 / 2^64 among n of them). Keep the
+string as the row's text to get it back from a search.
+
+Labels name the 64 bits of a row's tag and sit in a hierarchy: `vi_label(db, "dog", "animal")`, then
+`vi_label_add(db, id, "dog,big")` and `vi_search_labeled(db, q, 10, "animal", NULL, "big", ids, scores)` - every
+row labelled dog or cat (or anything else under animal) that is not big. A label stands for everything below it,
+worked out when the search runs, so putting a new label over existing ones (`vi_label(db, "dog", "pet")`) changes no
+row. 64 labels a store; the table is saved in the file and every change is journaled.
+
 A store compares by cosine unless it is made with `VI_DOT` (the inner product of the vectors as they came: scores
 bigger is better) or `VI_L2` (the Euclidean distance: scores are the distance, smaller is better, still best first).
 Such a store keeps each row's length beside its direction (4 bytes a row); the index finds candidates by direction
@@ -44,6 +54,8 @@ L2 store's vectors as they came. A file keeps the metric it was made with; openi
 | `vi_search_hybrid(db, q, text, tlen, k, ids, scores)` | the vector and the words (BM25 over the texts), fused by rank; either side may be left out |
 | `vi_set_tag`, `vi_get_tag` | a 64-bit tag per row |
 | `vi_error()` | why the calling thread's last failed call failed, in words |
+| `vi_key(s, len)` | a 64-bit id for a string (a path, a URL), the same everywhere |
+| `vi_label(db, name, parent)`, `vi_label_add(db, id, labels)`, `vi_label_remove(db, id, labels)`, `vi_search_labeled(db, q, k, all, any, none, ids, scores)` | labels in a hierarchy on rows, and a search over every label of `all`, one of `any`, none of `none` |
 | `vi_search(db, q, k, ids, scores)` | the k nearest rows, best first |
 | `vi_search_tagged(db, q, k, all, any, ids, scores)` | the same over rows whose tag has every bit of `all` and one of `any` |
 | `vi_search_batch(db, qs, nq, k, ids, scores, threads)` | many queries on several threads |

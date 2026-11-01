@@ -526,7 +526,7 @@ static void vs_flush_(VsWorker *w, VsConn *c)
 static i32 vs_search_(VsWorker *w, VsConn *c, const f32 *q, i32 k)
 {
     i32 n = store_search(c->t->s, q, k, w->ids, w->sc), i;
-    for (i = 0; i < n; ++i) w->sc[i] = store_score_out_(c->t->s, w->sc[i]);
+    for (i = 0; i < n; ++i) w->sc[i] = store_score_out(c->t->s, w->sc[i]);
     return n;
 }
 
