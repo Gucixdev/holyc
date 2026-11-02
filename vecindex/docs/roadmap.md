@@ -4,7 +4,7 @@ The owner's list and where each item stands (2026-11-01). "Not run" means writte
 still to run on his machine.
 
 Scope: vecindex is the vector database alone, with no dependencies, built as one project. The note database, agent
-memory (mem.c and its rule engine) and the cross-encoder re-rank moved to `agent_launcher/` beside it in holyc,
+memory (mem.c and its rule engine) and the cross-encoder re-rank moved to `examples/agent_launcher/` in this repo,
 a separate project that uses vecindex as a library; vecindex itself is back in holyc as `vecindex/`.
 
 Done and tested: quantization with an exact re-rank (4, 2 and 1-bit codes), SIMD (AVX-512, AVX2, NEON, a scalar path

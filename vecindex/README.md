@@ -8,7 +8,7 @@ through the vendored BearSSL). Nothing beyond libc, libm and pthreads (and BearS
 
 It is part of [holyc](https://github.com/Gucixdev/holyc): it lived there as `ragdb/`, was its own repository
 (github.com/Gucixdev/vecindex) from 2026-10-17 to 2026-11-01 and came back as `vecindex/`, history included. The note
-database and agent memory that grew on top of it are [`../agent_launcher`](../agent_launcher), which uses vecindex as a
+database and agent memory that grew on top of it are [`examples/agent_launcher`](examples/agent_launcher), which uses vecindex as a
 library.
 
 ## Layout

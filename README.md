@@ -11,7 +11,6 @@ is a nod, not a claim: this has nothing to do with TempleOS's HolyC language, it
 | [`fzf`](fzf) | Fuzzy finder compatible with fzf 0.74's command line | C11 GNU: `-std=gnu11` | own, not a fork of the Go fzf |
 | [`notcoreutils`](notcoreutils) | `cb cloc colorado dv man netcat sudo tgates tree` | C11 GNU: `-std=gnu11 -D_GNU_SOURCE` | own |
 | [`vecindex`](vecindex) | Vector database: rotated 4/2/1-bit fast-scan with exact re-scoring, IVF, bit-packed quantizers, BM25 hybrid search; a C API in one library and `vserv`, an epoll server with TLS | C89: `-std=c89 -pedantic`; the sanitizer, crash and server tests `-std=gnu99` | own |
-| [`agent_launcher`](agent_launcher) | The layer for LLM agents on top of [vecindex](https://github.com/Gucixdev/vecindex): a note database (links, tags, hybrid search, MCTS), agent memory with a rule engine, a cross-encoder re-rank | C89: `-std=c89 -pedantic`; the fuzz, thread and crash tests `-std=gnu99` | own, moved out of vecindex |
 | [`gtop`](gtop) | System monitor TUI (CPU/GPU, RAM, disk, net, processes) | C99: `-std=c99` plus POSIX.1-2008 (set in the source), links `-lm` | own, C port of an earlier Rust version |
 | [`dwl`](dwl) | Wayland compositor | C99 features; no `-std` flag, built with the compiler default (wlroots' headers need C11) | fork of [dwl](https://codeberg.org/dwl/dwl) |
 | [`dmenu`](dmenu) | Launcher, native Wayland | C99: `-std=c99 -pedantic`; `dmenu_menu.c` is `-std=gnu11` | fork of [dmenu](https://git.suckless.org/dmenu) (`wayland` branch) |
@@ -23,7 +22,7 @@ compiler, not a claim about what else would compile.
 
 The vector database that lived here as `ragdb/` was its own repository,
 [vecindex](https://github.com/Gucixdev/vecindex), from 2026-10-17 to 2026-11-01 and is back as `vecindex/`, history
-included. The agent layer that grew on top of it is `agent_launcher/`, which uses `vecindex/` as a library.
+included. The agent layer that grew on top of it is `vecindex/examples/agent_launcher/`, which uses `vecindex/` as a library.
 
 Every directory builds on its own; there is no top-level build. Each has its own README with
 the details, this page is the map.
@@ -46,7 +45,7 @@ git clone https://github.com/Gucixdev/holyc && cd holyc
 # vector database, and the agent layer built on it
 (cd vecindex && ./run)             # self-tests, sanitizers, kill -9, the server end to end
 (cd vecindex && ./run all DATA)    # all of that, stress, the cross-built tests and every benchmark
-(cd agent_launcher && ./run)       # builds against ../vecindex
+(cd vecindex/examples/agent_launcher && ./run)
 ```
 
 ## What each piece is
@@ -108,11 +107,11 @@ exact re-scoring, IVF with self-tuning and live indexing, rows past RAM in colum
 batches, tenants, a journal with background snapshots. It runs inside a program through its C API or behind `vserv`.
 See [`vecindex/README.md`](vecindex/README.md).
 
-### agent_launcher
+### vecindex/examples/agent_launcher
 Notes and memory for LLM agents, on vecindex's store: `vecdb.c` (notes, `[[wikilinks]]`, tags, BM25 + vector hybrid
 search, MCTS over the link graph, embedding servers, a command line), `mem.c` (agent memory: lifetime, tiers, a rule
 engine) and `rerank.c` (a cross-encoder second pass). It includes `../vecindex/src/store.c` directly.
-See [`agent_launcher/README.md`](agent_launcher/README.md).
+See [`agent_launcher/README.md`](vecindex/examples/agent_launcher/README.md).
 
 ### The Wayland desktop: dwl, dmenu, lemonbar, nnn
 Forks kept as `git subtree`s with the full upstream history, so `git log <dir>/` shows who
