@@ -180,6 +180,37 @@ theorem layout_burst (G g s L : ℕ) (hG : 0 < G) :
         · exact absurd heq.symm (ne_of_lt (key b' hb' b hb h))
     _ = (L + G - 1) / G := card_range _
 
+/-- A run of at most m G neighbouring blocks puts at most m of them into any one group, so with m parity blocks a
+group every such run of damaged data blocks is rebuilt (`recover_gf`). `tests/battle_damage.c` destroys a run of
+exactly m G data blocks and expects the file back byte for byte. -/
+theorem burst_within_parity (G g s L m : ℕ) (hG : 0 < G) (hL : L ≤ m * G) :
+    ((range (s + L)).filter (fun b => s ≤ b ∧ b % G = g % G)).card ≤ m := by
+  have h : (L + G - 1) / G < m + 1 := by
+    rw [Nat.div_lt_iff_lt_mul hG]
+    have : (m + 1) * G = m * G + G := by ring
+    omega
+  exact (layout_burst G g s L hG).trans (Nat.lt_succ_iff.mp h)
+
+/-- One block more and the run is beyond the parity: m G + 1 neighbouring blocks put m + 1 of them (s, s + G, ...,
+s + m G) into the group of the first one. `tests/battle_damage.c` destroys such a run and expects a refusal. -/
+theorem burst_beyond_parity (G s m : ℕ) (hG : 0 < G) :
+    m + 1 ≤ ((range (s + (m * G + 1))).filter (fun b => s ≤ b ∧ b % G = s % G)).card := by
+  have hsub : (range (m + 1)).image (fun i => s + i * G)
+      ⊆ (range (s + (m * G + 1))).filter (fun b => s ≤ b ∧ b % G = s % G) := by
+    intro b hb
+    simp only [mem_image, mem_range] at hb
+    obtain ⟨i, hi, rfl⟩ := hb
+    simp only [mem_filter, mem_range]
+    have him : i * G ≤ m * G := Nat.mul_le_mul_right G (Nat.lt_succ_iff.mp hi)
+    exact ⟨Nat.add_lt_add_left (Nat.lt_succ_of_le him) s, Nat.le_add_right s (i * G),
+      Nat.add_mul_mod_self_right s i G⟩
+  have hinj : Set.InjOn (fun i => s + i * G) (range (m + 1)) := by
+    intro i _ j _ h
+    exact Nat.eq_of_mul_eq_mul_right hG (Nat.add_left_cancel h)
+  calc m + 1 = ((range (m + 1)).image (fun i => s + i * G)).card := by
+        rw [card_image_of_injOn hinj, card_range]
+    _ ≤ _ := card_le_card hsub
+
 /-- The two tables and two trailers follow the blocks without overlapping, and trailer B is the last 128 bytes. -/
 theorem layout_regions (D blog k m : ℕ) :
     let L := layout D blog k m
