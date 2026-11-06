@@ -67,6 +67,7 @@ S=$($BIN --snapshot 130 40 --keys E); printf '%s\n' "$S" | grep -q "PROCS" && ba
 S=$($BIN --snapshot 140 50 -f systemd);               has "info panel is on by default" "$S" "── info ──"
 has "info has an about line" "$S" "about  "
 has "info has the command line" "$S" "cmd    "
+has "info has the scheduler and syscall line" "$S" "sched  wait [0-9.]* ms per run   syscalls "
 S=$($BIN --snapshot 140 50 -f systemd --keys i);      printf "%s\n" "$S" | grep -q "── info ──" && bad "i hides the panel" || ok
 S=$($BIN --snapshot 140 50 -f kthreadd --keys R);     has "kernel thread is explained" "$S" "the parent of every kernel thread"
 S=$($BIN --snapshot 140 50 -f systemd --keys a);      has "anonymous hides the command line" "$S" "cmd    \[hidden - anonymous mode\]"

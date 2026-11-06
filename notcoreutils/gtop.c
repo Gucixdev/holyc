@@ -51,6 +51,8 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/syscall.h>
+#include <linux/bpf.h>
 
 /* ------------------------------------------------------------------ theme */
 #define ANSI(n) (0x01000000u | (n)) /* terminal palette colour n, not truecolor */
@@ -618,12 +620,89 @@ static void gpu_refresh(Gpu *g)
 }
 
 /* ------------------------------------------------------------------ processes */
+/* ------------------------------------------------------------------ syscalls per process (eBPF) */
+/* One BPF program on the raw tracepoint sys_enter counts system calls per process (tgid) in a hash map;
+ * procs_refresh reads each process's count and turns it into a rate. Raw bpf(2) calls, no libbpf. Loading
+ * it needs root (or CAP_BPF and CAP_PERFMON); without that, or with --no-bpf, the count stays unknown and
+ * nothing is attached. While it runs every system call on the machine pays one hash-map update. */
+static int bpf_map_ = -1, bpf_prog_ = -1, bpf_link_ = -1;
+
+static long bpf_call_(int cmd, union bpf_attr *a) { return syscall(SYS_bpf, cmd, a, sizeof *a); }
+
+static void bpf_start(void)
+{
+	struct bpf_insn p[24];
+	union bpf_attr a;
+	int n = 0;
+#define BPFI(c, d, s, o, i) (p[n].code = (c), p[n].dst_reg = (d), p[n].src_reg = (s), p[n].off = (o), p[n].imm = (i), n++)
+	memset(&a, 0, sizeof a);
+	a.map_type = BPF_MAP_TYPE_HASH;
+	a.key_size = 4;
+	a.value_size = 8;
+	a.max_entries = 1 << 16;
+	if ((bpf_map_ = (int)bpf_call_(BPF_MAP_CREATE, &a)) < 0) return;
+	memset(p, 0, sizeof p);
+	BPFI(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_get_current_pid_tgid);   /*  0 r0 = pid_tgid */
+	BPFI(BPF_ALU64 | BPF_RSH | BPF_K, 0, 0, 0, 32);                     /*  1 r0 = tgid */
+	BPFI(BPF_STX | BPF_MEM | BPF_W, 10, 0, -4, 0);                      /*  2 key at fp-4 */
+	BPFI(BPF_LD | BPF_DW | BPF_IMM, 1, BPF_PSEUDO_MAP_FD, 0, bpf_map_);  /*  3 r1 = the map (2 slots) */
+	BPFI(0, 0, 0, 0, 0);
+	BPFI(BPF_ALU64 | BPF_MOV | BPF_X, 2, 10, 0, 0);                     /*  5 r2 = &key */
+	BPFI(BPF_ALU64 | BPF_ADD | BPF_K, 2, 0, 0, -4);
+	BPFI(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_lookup_elem);        /*  7 r0 = &count or NULL */
+	BPFI(BPF_JMP | BPF_JEQ | BPF_K, 0, 0, 3, 0);                        /*  8 NULL: to 12 */
+	BPFI(BPF_ALU64 | BPF_MOV | BPF_K, 1, 0, 0, 1);
+	BPFI(BPF_STX | 0xc0 | BPF_DW, 0, 1, 0, BPF_ADD);                    /* 10 atomic *r0 += 1 */
+	BPFI(BPF_JMP | BPF_JA, 0, 0, 9, 0);                                 /* 11 to 21 */
+	BPFI(BPF_ST | BPF_MEM | BPF_DW, 10, 0, -16, 1);                     /* 12 count 1 at fp-16 */
+	BPFI(BPF_LD | BPF_DW | BPF_IMM, 1, BPF_PSEUDO_MAP_FD, 0, bpf_map_);
+	BPFI(0, 0, 0, 0, 0);
+	BPFI(BPF_ALU64 | BPF_MOV | BPF_X, 2, 10, 0, 0);
+	BPFI(BPF_ALU64 | BPF_ADD | BPF_K, 2, 0, 0, -4);
+	BPFI(BPF_ALU64 | BPF_MOV | BPF_X, 3, 10, 0, 0);
+	BPFI(BPF_ALU64 | BPF_ADD | BPF_K, 3, 0, 0, -16);
+	BPFI(BPF_ALU64 | BPF_MOV | BPF_K, 4, 0, 0, BPF_ANY);
+	BPFI(BPF_JMP | BPF_CALL, 0, 0, 0, BPF_FUNC_map_update_elem);        /* 20 insert it */
+	BPFI(BPF_ALU64 | BPF_MOV | BPF_K, 0, 0, 0, 0);                      /* 21 return 0 */
+	BPFI(BPF_JMP | BPF_EXIT, 0, 0, 0, 0);
+#undef BPFI
+	memset(&a, 0, sizeof a);
+	a.prog_type = BPF_PROG_TYPE_RAW_TRACEPOINT;
+	a.insns = (unsigned long)p;
+	a.insn_cnt = (unsigned)n;
+	a.license = (unsigned long)"GPL";
+	if ((bpf_prog_ = (int)bpf_call_(BPF_PROG_LOAD, &a)) >= 0) {
+		memset(&a, 0, sizeof a);
+		a.raw_tracepoint.name = (unsigned long)"sys_enter";
+		a.raw_tracepoint.prog_fd = (unsigned)bpf_prog_;
+		if ((bpf_link_ = (int)bpf_call_(BPF_RAW_TRACEPOINT_OPEN, &a)) >= 0) return;
+		close(bpf_prog_);
+	}
+	close(bpf_map_);
+	bpf_map_ = bpf_prog_ = -1;
+}
+
+static int bpf_count(int pid, unsigned long long *v)
+{
+	union bpf_attr a;
+	unsigned key = (unsigned)pid;
+	if (bpf_map_ < 0) return 0;
+	memset(&a, 0, sizeof a);
+	a.map_fd = (unsigned)bpf_map_;
+	a.key = (unsigned long)&key;
+	a.value = (unsigned long)v;
+	if (bpf_call_(BPF_MAP_LOOKUP_ELEM, &a) != 0) *v = 0; /* no entry: no system call since the program loaded */
+	return 1;
+}
+
 typedef struct {
 	int pid;
 	char comm[48];
 	double cpu, disk_bps, gpu_pct;
 	unsigned long long mem_mb, gpu_mb, jiff, io;
-	int kernel, system;
+	unsigned long long sc, rd, rc; /* system calls (eBPF), run-queue wait in ns and runs (/proc/PID/schedstat) */
+	double scps, wait_ms;
+	int kernel, system, has_sc;
 } Ent;
 
 typedef struct {
@@ -665,7 +744,8 @@ typedef struct {
 	GhostG *ghosts;
 	int nghost;
 	int *pj_pid;
-	unsigned long long *pj_j, *pj_io;
+	unsigned long long *pj_j, *pj_io, *pj_sc, *pj_rd, *pj_rc;
+	double *pj_rate; /* per pid: syscalls/s (-1: unknown), run-queue wait in ms per run */
 	int npj;
 	double prev_at, last_sort;
 	char filter[64];
@@ -908,6 +988,9 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 			if (v) wb = strtoull(v + 12, NULL, 10);
 			e.io = rb + wb;
 		}
+		snprintf(path, sizeof path, "/proc/%d/schedstat", pid);
+		if (read_file(path, buf, sizeof buf) > 0) sscanf(buf, "%*u %llu %llu", &e.rd, &e.rc);
+		e.has_sc = bpf_count(pid, &e.sc);
 		/* kernel threads are children of kthreadd (pid 2); /proc/<pid>/exe cannot tell them apart from
 		 * other users' processes without root, because both fail to resolve */
 		e.kernel = (pid == 2 || ppid == 2);
@@ -922,6 +1005,9 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 		if (pi >= 0 && dt > 0) {
 			if (cur[i].jiff >= P->pj_j[pi]) cur[i].cpu = (double)(cur[i].jiff - P->pj_j[pi]) / (double)hz / dt * 100.0;
 			if (cur[i].io > P->pj_io[pi]) cur[i].disk_bps = (double)(cur[i].io - P->pj_io[pi]) / dt;
+			if (cur[i].has_sc && cur[i].sc >= P->pj_sc[pi]) cur[i].scps = (double)(cur[i].sc - P->pj_sc[pi]) / dt;
+			if (cur[i].rc > P->pj_rc[pi] && cur[i].rd >= P->pj_rd[pi])
+				cur[i].wait_ms = (double)(cur[i].rd - P->pj_rd[pi]) / (double)(cur[i].rc - P->pj_rc[pi]) / 1e6;
 		}
 	}
 	nvidia_pmon(cur, n);
@@ -1030,11 +1116,43 @@ static void procs_refresh(Procs *P, double mem_total, double total_disk_bps)
 			for (i = P->cursor - 1; i >= 0; i--) if (!row_is_divider(P, i)) { P->cursor = i; break; }
 	}
 
-	free(P->pj_pid); free(P->pj_j); free(P->pj_io);
+	if (bpf_map_ >= 0) { /* drop the counts of processes gone from /proc, at most 256 per refresh */
+		union bpf_attr a;
+		unsigned key = 0, next, dead[256];
+		int nd = 0, have = 0;
+		Ent probe;
+		for (;;) {
+			memset(&a, 0, sizeof a);
+			a.map_fd = (unsigned)bpf_map_;
+			a.key = have ? (unsigned long)&key : 0;
+			a.next_key = (unsigned long)&next;
+			if (bpf_call_(BPF_MAP_GET_NEXT_KEY, &a) != 0) break;
+			key = next;
+			have = 1;
+			probe.pid = (int)key;
+			if (nd < 256 && !bsearch(&probe, cur, (size_t)n, sizeof(Ent), ent_cmp_pid)) dead[nd++] = key;
+		}
+		for (j = 0; j < nd; j++) {
+			memset(&a, 0, sizeof a);
+			a.map_fd = (unsigned)bpf_map_;
+			a.key = (unsigned long)&dead[j];
+			bpf_call_(BPF_MAP_DELETE_ELEM, &a);
+		}
+	}
+	free(P->pj_pid); free(P->pj_j); free(P->pj_io); free(P->pj_sc); free(P->pj_rd); free(P->pj_rc); free(P->pj_rate);
 	P->pj_pid = malloc((size_t)(n ? n : 1) * sizeof(int));
 	P->pj_j = malloc((size_t)(n ? n : 1) * sizeof(unsigned long long));
 	P->pj_io = malloc((size_t)(n ? n : 1) * sizeof(unsigned long long));
-	for (i = 0; i < n; i++) { P->pj_pid[i] = cur[i].pid; P->pj_j[i] = cur[i].jiff; P->pj_io[i] = cur[i].io; }
+	P->pj_sc = malloc((size_t)(n ? n : 1) * sizeof(unsigned long long));
+	P->pj_rd = malloc((size_t)(n ? n : 1) * sizeof(unsigned long long));
+	P->pj_rc = malloc((size_t)(n ? n : 1) * sizeof(unsigned long long));
+	P->pj_rate = malloc((size_t)(n ? n : 1) * 2 * sizeof(double));
+	for (i = 0; i < n; i++) {
+		P->pj_pid[i] = cur[i].pid; P->pj_j[i] = cur[i].jiff; P->pj_io[i] = cur[i].io;
+		P->pj_sc[i] = cur[i].sc; P->pj_rd[i] = cur[i].rd; P->pj_rc[i] = cur[i].rc;
+		P->pj_rate[2 * i] = cur[i].has_sc ? cur[i].scps : -1.0;
+		P->pj_rate[2 * i + 1] = cur[i].wait_ms;
+	}
 	P->npj = n;
 	P->prev_at = t;
 	free(cur);
@@ -2078,6 +2196,15 @@ static void draw_proc(const App *A, int x, int y, int w, int h)
 			      A->anonymous ? "[hidden]" : I->user, I->state, I->threads, I->parent);
 			col = 0;
 			spanf(&r, row++, &col, C_PRIMARY, 0, "unit   %s   started %s", I->unit[0] ? I->unit : "(none)", I->started);
+			col = 0;
+			{
+				int pi = find_prev(P, I->pid);
+				double sc = pi >= 0 ? P->pj_rate[2 * pi] : -1.0, w = pi >= 0 ? P->pj_rate[2 * pi + 1] : 0.0;
+				char scs[40];
+				if (sc >= 0) snprintf(scs, sizeof scs, "%.0f/s", sc);
+				else snprintf(scs, sizeof scs, "%s", bpf_map_ >= 0 ? "-" : "- (eBPF needs root)");
+				spanf(&r, row++, &col, C_PRIMARY, 0, "sched  wait %.3f ms per run   syscalls %s", w, scs);
+			}
 			wrote = 1;
 		}
 		(void)rr; (void)wrote;
@@ -2257,20 +2384,21 @@ static int key_from_char(char c)
 
 static void usage(void)
 {
-	puts("usage: gtop [-f SUBSTR] [--snapshot [W H]] [--keys KEYS]\n"
+	puts("usage: gtop [-f SUBSTR] [--snapshot [W H]] [--keys KEYS] [--no-bpf]\n"
 	     "  q quit   left/right view (clean / raw)   up/down move   space mark\n"
 	     "  k kill (SIGKILL) marked or current row   / command palette   r record to CSV\n"
 	     "  a anonymous mode   +/- refresh interval (100 ms .. 5 s)\n"
 	     "  --snapshot  draw one frame as plain text and exit\n"
 	     "  --keys      feed keys before the snapshot: U D L R = arrows, E = enter, others literal\n"
 	     "  -f          keep only processes whose name contains SUBSTR\n"
+	     "  --no-bpf    do not load the eBPF syscall counter (it loads when run as root)\n"
 	     "  palette commands: $GTOP_COMMANDS, ./commands, <binary dir>/commands");
 }
 
 int main(int argc, char **argv)
 {
 	App *A = calloc(1, sizeof *A);
-	int snapshot = 0, W = 120, H = 40, i;
+	int snapshot = 0, W = 120, H = 40, i, no_bpf = 0;
 	const char *keys = NULL;
 
 	A->interval_ms = 1000;
@@ -2282,10 +2410,12 @@ int main(int argc, char **argv)
 			if (i + 2 < argc && atoi(argv[i + 1]) > 0 && atoi(argv[i + 2]) > 0) { W = atoi(argv[i + 1]); H = atoi(argv[i + 2]); i += 2; }
 		} else if (!strcmp(argv[i], "--keys") && i + 1 < argc) keys = argv[++i];
 		else if (!strcmp(argv[i], "-f") && i + 1 < argc) snprintf(A->procs.filter, sizeof A->procs.filter, "%s", argv[++i]);
+		else if (!strcmp(argv[i], "--no-bpf")) no_bpf = 1;
 		else { fprintf(stderr, "gtop: unknown option %s\n", argv[i]); return 2; }
 	}
 	if (W > 500) W = 500;
 	if (H > 300) H = 300;
+	if (!no_bpf) bpf_start();
 	if (access("/dev/apex_0", F_OK) == 0) { A->has_tpu = 1; snprintf(A->tpu, sizeof A->tpu, "/dev/apex_0 (PCIe)"); }
 	else if (which("lsusb")) {
 		char out[16384];

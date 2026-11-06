@@ -84,6 +84,7 @@ cmd    /usr/lib/systemd/systemd-logind
 exe    /usr/lib/systemd/systemd-logind   cwd /
 user   root (0)   state S (sleeping)   threads 1   parent systemd [1]
 unit   systemd-logind.service   started 2026-10-10 09:21:55 (1d 2h ago)
+sched  wait 0.012 ms per run   syscalls 340/s
 ```
 
 `about` is the first of these that exists: the description of the systemd unit when the process is
@@ -92,6 +93,13 @@ the executable (`pacman -Qi`, Arch family), the `whatis` line of its man page, t
 started it, or, for a kernel thread, what that kind of thread does (`kworker`, `ksoftirqd`,
 `migration/N`, `rcu_*`...). It is gathered when the cursor moves to another process, not every
 frame. In anonymous mode the command line, executable, working directory and user are hidden.
+
+`sched` is live: the average time the process's main thread waited in a run queue per time slice
+since the last refresh (`/proc/PID/schedstat`; the scheduler latency it sees), and its system calls
+per second, counted per process by a 23-instruction eBPF program on the raw tracepoint `sys_enter`
+(raw `bpf(2)` calls, no libbpf). The counter loads only when gtop runs as root, or with CAP_BPF and
+CAP_PERFMON, and while gtop runs every system call on the machine pays one hash-map update;
+`--no-bpf` leaves it out, and without it the line says `syscalls -`.
 
 ## Keys
 
