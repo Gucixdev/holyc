@@ -81,7 +81,7 @@ while IFS=$'\t' read -r old new; do
 done < "$moves"
 
 # SCRIPT TOP: run the sed script on every text file below TOP that names an old file (tracked files only in a
-# repository), symlinks and this script left alone
+# repository), symlinks, trash/ and this script left alone
 rewrite() {
     local f
     if [[ -n $root ]]; then
@@ -89,7 +89,7 @@ rewrite() {
     else
         find "$2" -type f -exec grep -lIF -f "$moves.names" {} + 2>/dev/null | sed "s|^$2/||" || true
     fi | while IFS= read -r f; do
-        [[ -L $2/$f || $2/$f -ef $0 ]] || sed -i -E -f "$1" "$2/$f"
+        [[ -L $2/$f || $2/$f -ef $0 || $2/$f == "$root"/trash/* ]] || sed -i -E -f "$1" "$2/$f"
     done
 }
 rewrite "$moves.sed" "${root:-$dir}"
