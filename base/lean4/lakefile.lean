@@ -9,3 +9,6 @@ package «base_lean» where
 @[default_target]
 lean_lib «Base» where
   roots := #[`Base]
+
+lean_exe allocoracle where
+  root := `Oracle

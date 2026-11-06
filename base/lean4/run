@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # lean4/run - build the proofs, audit their axioms, scan the sources for escape hatches; exit 0 when all pass.
-# Needs elan with the toolchain in lean-toolchain. A differential test against the C code goes below once an
-# oracle exists (vecindex/lean4/run is the pattern: the Lean definitions run as an exe, a C harness runs the
-# real functions, their outputs compared on every input or on seeded random ones).
+# Then the differential test: c/alloc_harness.c runs seeded random operations on the real arena and pool (built
+# with gcc and with clang), allocoracle recomputes every result from the Lean model, and the outputs must match
+# byte for byte; and the mutants: one-line changes to a copy of src/ that the differential test must catch.
+# Needs elan with the toolchain in lean-toolchain, gcc, clang if present. SEEDS=N sets the seeds per compiler.
 set -uo pipefail
 cd "$(dirname "$0")" || exit 2
 export PATH="$HOME/.elan/bin:$PATH"
@@ -16,4 +17,43 @@ else cat .lake-audit.log; step FAIL "axiom audit"; fi
 if grep -rnE '\b(sorry|admit|native_decide|bv_decide)\b|^[[:space:]]*axiom ' --include=*.lean --exclude=Audit.lean \
         --exclude-dir=.lake .; then step FAIL "source scan"
 else step ok "source scan: no sorry, admit, native_decide, bv_decide or axiom"; fi
+
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+oracle=.lake/build/bin/allocoracle
+same() { # HARNESS SEED: the harness's output and the oracle's replay of it are identical
+    { "$1" "$2" 3000 > "$tmp/c"; } 2> /dev/null && "$oracle" < "$tmp/c" > "$tmp/l" && cmp -s "$tmp/c" "$tmp/l"
+}
+if lake build allocoracle > .lake-oracle.log 2>&1; then
+    seeds=${SEEDS:-200} runs=0 bad=""
+    for cc in gcc clang; do
+        command -v "$cc" > /dev/null || continue
+        if ! "$cc" -std=gnu11 -O2 -w -D_GNU_SOURCE -I../src -o "$tmp/h_$cc" c/alloc_harness.c; then bad="$bad $cc"; continue; fi
+        for s in $(seq 1 "$seeds"); do
+            if same "$tmp/h_$cc" "$s"; then runs=$((runs + 1)); else bad="$bad $cc:seed$s"; diff "$tmp/c" "$tmp/l" | head -4; break; fi
+        done
+    done
+    if [[ -z $bad && $runs -gt 0 ]]; then
+        step ok "differential: $runs runs of 3000 operations (seeds 1-$seeds, gcc and clang), arena and pool equal the model"
+    else step FAIL "differential:$bad"; fi
+else tail -20 .lake-oracle.log; step FAIL "allocoracle build"; fi
+
+# NAME FILE SED: the harness built on a copy of src/ with one change must disagree with the model
+caught=0 total=0 survived=""
+mutant() {
+    local m; m=$(mktemp -d "$tmp/m.XXXX"); cp -r ../src "$m/src"; total=$((total + 1))
+    sed -i "$3" "$m/src/$2"
+    if cmp -s "../src/$2" "$m/src/$2"; then survived="$survived $1(sed-matched-nothing)"; return; fi
+    gcc -std=gnu11 -O2 -w -D_GNU_SOURCE -I"$m/src" -o "$m/h" c/alloc_harness.c 2> /dev/null || { caught=$((caught + 1)); return; }
+    local s; for s in 1 2 3 4 5; do same "$m/h" "$s" || { caught=$((caught + 1)); return; }; done
+    survived="$survived $1"
+}
+if [[ -x $oracle ]]; then
+    mutant granules core/core_arena_alloc.h 's|(size_bytes + sizeof(u64) - 1) / sizeof(u64)|(size_bytes + sizeof(u64) - 2) / sizeof(u64)|'
+    mutant align-mask core/core_arena_alloc.h 's|aligned_addr = (addr + align - 1) \& ~(align - 1);|aligned_addr = (addr + align) \& ~(align - 1);|'
+    mutant rewind core/core_arena_alloc.h 's|m.region->count = m.count;|m.region->count = m.count + 1;|'
+    mutant pool-align core/core_pool_alloc.h 's|return (n + align - 1) \& ~(align - 1);|return (n + align) \& ~(align - 1);|'
+    mutant pool-free-all core/core_pool_alloc.h 's|for (i = 0; i < chunk_count; i++) {|for (i = 1; i < chunk_count; i++) {|'
+    if [[ -z $survived ]]; then step ok "mutants: $caught of $total caught"
+    else step FAIL "mutants: survived:$survived"; fi
+fi
 exit "$fail"
