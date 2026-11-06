@@ -7,6 +7,7 @@
 #include "util/util_path.h"
 #include "util/util_vfs.h"
 
+#include <stdlib.h> /* mkdtemp */
 #include <string.h>
 
 /* same backend-agnostic checks run against BOTH backends below - proves

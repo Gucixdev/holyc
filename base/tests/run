@@ -11,6 +11,11 @@ ls tests/test_*.c | grep -e "${1:-.}" | xargs -P "$(nproc 2>/dev/null || echo 4)
 		echo "COMPILE_FAIL $n"
 	elif timeout 30 "$OUT/$n" > "$OUT/$n.out" 2>&1; then echo "PASS $n"
 	else echo "FAIL $n"; fi' > "$OUT/results"
+# no_heap: memory comes from arenas, pools and mmap, never from malloc/calloc/realloc/free
+if echo no_heap | grep -qe "${1:-.}"; then
+	if grep -rnE '\b(malloc|calloc|realloc|free)[[:space:]]*\(' src | grep -vE ':[0-9]+:[[:space:]]*(/\*|\*)' > "$OUT/heap"
+	then echo "FAIL no_heap" >> "$OUT/results"; cat "$OUT/heap"; else echo "PASS no_heap" >> "$OUT/results"; fi
+fi
 pass=$(grep -c '^PASS' "$OUT/results"); bad=$(grep -vc '^PASS' "$OUT/results")
 grep -v '^PASS' "$OUT/results" | sort
 echo "$pass passed, $bad failed"

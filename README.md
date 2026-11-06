@@ -57,7 +57,7 @@ The single-file library. Include what you need and define `<NAME>_IMPLEMENTATION
 translation unit (stb style). Seven areas, 107 headers, every one with a test:
 
 - **core**: `core_base.h` (constants, fixed-width and fixed-point types, `Option`/`Result`/`TRY`/
-  `Future`/`DEFER`, own `str`/`String_View`/`Arena_String`/`print`), the arena and slab, a
+  `Future`/`DEFER`, own `str`/`String_View`/`Arena_String`/`print`), the arena, a
   fixed-chunk pool and file-backed arena and pool, reference counting, a job pool with a task
   graph, MPMC and SPSC queues, priority queue, coroutines, state machine, streams, `io`, `log`,
   `args`, `flags`, `utf8`.

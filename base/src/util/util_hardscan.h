@@ -64,7 +64,7 @@ void hardscan_run(Hardscan_Report *out, const char *disk_probe_dir);
 #include <unistd.h>   /* sysconf, _SC_* constants */
 #include <time.h>     /* clock_gettime */
 #include <stdio.h>    /* the disk probe's own temp file I/O - genuinely needs real file I/O, not print.h's write(2)-only model */
-#include <stdlib.h>   /* malloc/free for the memory-bandwidth probe's scratch buffer - deliberately NOT Arena here, see below */
+#include <sys/mman.h> /* mmap/munmap: the probes' scratch buffers come from the kernel, not a heap */
 
 #ifndef HARDSCAN_MEM_PROBE_BYTES
 #define HARDSCAN_MEM_PROBE_BYTES (64 * 1024 * 1024) /* 64 MiB - big enough to blow well past L3, small enough to run in well under a second */
@@ -73,13 +73,15 @@ void hardscan_run(Hardscan_Report *out, const char *disk_probe_dir);
 #define HARDSCAN_DISK_PROBE_BYTES (16 * 1024 * 1024) /* 16 MiB */
 #endif
 
-/* raw malloc/free here, not Arena - deliberate: this is a one-shot
- * scratch buffer for the probe itself, freed before hardscan_run
- * returns, and using Arena here would need this file to take one as a
- * parameter for a buffer nothing outside this function ever sees -
- * exactly the "genuinely temporary, not a real ownership question"
- * case this project already carves out elsewhere (see e.g. core_base.h's
- * own top comment on scoped exceptions to its "0 glibc" rule). */
+/* Each probe's scratch buffer is one anonymous mapping, unmapped before
+ * the probe returns: no heap, and no Arena parameter for a buffer nothing
+ * outside the probe ever sees. NULL when the mapping fails. */
+static u8 *hardscan_scratch_(size_t n)
+{
+    void *p = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return p == MAP_FAILED ? NULL : (u8 *)p;
+}
+static void hardscan_scratch_free_(u8 *p, size_t n) { munmap(p, n); }
 
 static f64 hardscan_now_(void)
 {
@@ -108,7 +110,7 @@ static void hardscan_probe_cpu_(Hardscan_Report *out)
 
 static void hardscan_probe_memory_(Hardscan_Report *out)
 {
-    u8 *buf = (u8 *)malloc(HARDSCAN_MEM_PROBE_BYTES);
+    u8 *buf = hardscan_scratch_(HARDSCAN_MEM_PROBE_BYTES);
     f64 t0, t1;
     size_t i;
     volatile u64 sink = 0; /* keeps the read pass from being optimized away entirely */
@@ -121,7 +123,7 @@ static void hardscan_probe_memory_(Hardscan_Report *out)
     t1 = hardscan_now_();
 
     (void)sink;
-    free(buf);
+    hardscan_scratch_free_(buf, HARDSCAN_MEM_PROBE_BYTES);
 
     /* write pass + read pass together move 2x the buffer size */
     if (t1 > t0) {
@@ -146,7 +148,7 @@ static void hardscan_probe_disk_(Hardscan_Report *out, const char *dir)
 
     if (!dir) return;
 
-    buf = (u8 *)malloc(HARDSCAN_DISK_PROBE_BYTES);
+    buf = hardscan_scratch_(HARDSCAN_DISK_PROBE_BYTES);
     if (!buf) return;
     {
         size_t i;
@@ -155,11 +157,11 @@ static void hardscan_probe_disk_(Hardscan_Report *out, const char *dir)
 
     {
         i32 n = snprintf(path, sizeof(path), "%s/hardscan_probe_%ld.tmp", dir, (long)getpid());
-        if (n <= 0 || (size_t)n >= sizeof(path)) { free(buf); return; }
+        if (n <= 0 || (size_t)n >= sizeof(path)) { hardscan_scratch_free_(buf, HARDSCAN_DISK_PROBE_BYTES); return; }
     }
 
     f = fopen(path, "wb");
-    if (!f) { free(buf); return; }
+    if (!f) { hardscan_scratch_free_(buf, HARDSCAN_DISK_PROBE_BYTES); return; }
 
     t0 = hardscan_now_();
     written = fwrite(buf, 1, HARDSCAN_DISK_PROBE_BYTES, f);
@@ -188,7 +190,7 @@ static void hardscan_probe_disk_(Hardscan_Report *out, const char *dir)
     }
 
     remove(path);
-    free(buf);
+    hardscan_scratch_free_(buf, HARDSCAN_DISK_PROBE_BYTES);
 }
 
 /* recommended chunk size: the largest available shared cache (L3, else

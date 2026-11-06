@@ -62,8 +62,8 @@
  * cross-IMPLEMENTATION-guard dependency" rule, backing the MP3_COPY_
  * MEMORY/MP3_MOVE_MEMORY/MP3_ZERO_MEMORY hook macros below instead of
  * libc's memcpy/memmove/memset (a consumer can still override any of
- * those three macros to point at something else, same as the existing
- * MP3_MALLOC/MP3_FREE hooks). */
+ * those three macros to point at something else). The decoder works on
+ * memory the caller hands it and never allocates. */
 static void *mp3_copy_memory_(void *dst, const void *src, size_t n)
 {
     u8 *d = (u8 *)dst;
@@ -247,15 +247,6 @@ u64 mp3_read_pcm_frames_s16(mp3_decoder *d, u64 frames_to_read, i16 *out);
 #define MP3_ZERO_MEMORY(p, sz) mp3_zero_memory_((p), (sz))
 #endif
 #define MP3_ZERO_OBJECT(p) MP3_ZERO_MEMORY((p), sizeof(*(p)))
-#ifndef MP3_MALLOC
-#define MP3_MALLOC(sz) malloc((sz))
-#endif
-#ifndef MP3_REALLOC
-#define MP3_REALLOC(p, sz) realloc((p), (sz))
-#endif
-#ifndef MP3_FREE
-#define MP3_FREE(p) free((p))
-#endif
 typedef struct
 {
     f32 scf[3*64];

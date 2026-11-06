@@ -7,6 +7,8 @@
  *   - no mixed declarations / inline for-loop decls
  *   - no C++ interop cruft (this is not going to touch a C++ compiler)
  *   - WIN32/WASM backends dropped for now, add back when actually needed
+ *   - no heap: the libc malloc backend is gone; LINUX_MMAP and FLAT (the default) take memory from
+ *     the kernel, and arena_snapshot/arena_rewind around a scope free everything allocated in it
  */
 
 #define HOLYC_ARENA_ALLOC_IN_PROGRESS_ /* core_base.h must not re-enter this file */
@@ -20,7 +22,6 @@
 #define ARENA_ASSERT HOLYC_ASSERT
 #endif
 
-#define ARENA_BACKEND_LIBC_MALLOC 0
 #define ARENA_BACKEND_LINUX_MMAP  1
 #define ARENA_BACKEND_FLAT        2
 
@@ -97,18 +98,6 @@ void *arena_calloc(Arena *a, size_t size_bytes);       /* zeroed */
 size_t arena_used(const Arena *a);                     /* bytes handed out, 8-byte granules */
 size_t arena_reserved(const Arena *a);                 /* bytes held in regions */
 
-/* Slab: many same-sized blocks with individual lifetimes. O(1) alloc/release from a
- * free list, grows by chunks, blocks never move, a double release is refused (returns 0).
- * Blocks are 16-byte aligned and come back zeroed. core_pool_alloc.h is the fixed-buffer
- * version of this with no growth and no malloc. Not thread-safe. */
-typedef struct Slab Slab;
-Slab *slab_new(size_t block_size, size_t blocks_per_chunk);   /* 0 chunk size = 64 */
-void slab_destroy(Slab *s);
-void *slab_alloc(Slab *s);                              /* NULL on OOM */
-i32 slab_release(Slab *s, void *block);                 /* 0 on NULL / double release */
-void slab_reset(Slab *s);                               /* every block free again, memory kept */
-size_t slab_used(const Slab *s);                        /* live blocks */
-size_t slab_capacity(const Slab *s);
 
 #ifndef ARENA_DA_INIT_CAP
 #define ARENA_DA_INIT_CAP 256
@@ -163,31 +152,10 @@ size_t slab_capacity(const Slab *s);
 #define ARENA_ALLOC_IMPLEMENTATION_
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <sys/mman.h>
 
 
-#if ARENA_BACKEND == ARENA_BACKEND_LIBC_MALLOC
-
-
-Arena_Region *new_region(size_t capacity)
-{
-    Arena_Region *r;
-    size_t size_bytes = offsetof(Arena_Region, data) + sizeof(u64) * capacity;
-    r = (Arena_Region *)malloc(size_bytes);
-    ARENA_ASSERT(r);
-    r->next = NULL;
-    r->count = 0;
-    r->capacity = capacity;
-    return r;
-}
-
-void free_region(Arena_Region *r)
-{
-    free(r);
-}
-
-#elif ARENA_BACKEND == ARENA_BACKEND_LINUX_MMAP
+#if ARENA_BACKEND == ARENA_BACKEND_LINUX_MMAP
 
 
 Arena_Region *new_region(size_t capacity)
@@ -525,93 +493,6 @@ size_t arena_reserved(const Arena *a)
     return n;
 }
 
-#define SLAB_FREE_MAGIC_ 0xF4EEB10CF4EEB10CULL
-typedef struct Slab_Chunk_ { struct Slab_Chunk_ *next; u64 pad_; } Slab_Chunk_; /* 16 bytes: blocks stay 16-aligned */
-typedef struct Slab_Free_ { struct Slab_Free_ *next; u64 magic; } Slab_Free_;
-
-struct Slab {
-    size_t block, per_chunk, used, capacity;
-    Slab_Chunk_ *chunks;
-    Slab_Free_ *free_list;
-};
-
-static void slab_link_chunk_(Slab *s, Slab_Chunk_ *c)
-{
-    u8 *base = (u8 *)c + sizeof(Slab_Chunk_);
-    size_t i;
-    for (i = s->per_chunk; i-- > 0;) { /* reverse, so allocation walks the chunk forward */
-        Slab_Free_ *b = (Slab_Free_ *)(base + i * s->block);
-        b->magic = SLAB_FREE_MAGIC_;
-        b->next = s->free_list;
-        s->free_list = b;
-    }
-}
-
-Slab *slab_new(size_t block_size, size_t blocks_per_chunk)
-{
-    Slab *s = (Slab *)malloc(sizeof *s);
-    if (!s) return NULL;
-    if (block_size < sizeof(Slab_Free_)) block_size = sizeof(Slab_Free_);
-    s->block = (block_size + 15) & ~(size_t)15;
-    s->per_chunk = blocks_per_chunk ? blocks_per_chunk : 64;
-    s->used = s->capacity = 0;
-    s->chunks = NULL;
-    s->free_list = NULL;
-    return s;
-}
-
-void slab_destroy(Slab *s)
-{
-    Slab_Chunk_ *c;
-    if (!s) return;
-    for (c = s->chunks; c;) {
-        Slab_Chunk_ *n = c->next;
-        free(c);
-        c = n;
-    }
-    free(s);
-}
-
-void *slab_alloc(Slab *s)
-{
-    Slab_Free_ *b;
-    if (!s->free_list) {
-        Slab_Chunk_ *c = (Slab_Chunk_ *)malloc(sizeof(Slab_Chunk_) + s->block * s->per_chunk);
-        if (!c) return NULL;
-        c->next = s->chunks;
-        s->chunks = c;
-        slab_link_chunk_(s, c);
-        s->capacity += s->per_chunk;
-    }
-    b = s->free_list;
-    s->free_list = b->next;
-    { u8 *p = (u8 *)b; size_t i; for (i = 0; i < s->block; i++) p[i] = 0; }
-    s->used++;
-    return b;
-}
-
-i32 slab_release(Slab *s, void *block)
-{
-    Slab_Free_ *b = (Slab_Free_ *)block;
-    if (!s || !block) return 0;
-    if (b->magic == SLAB_FREE_MAGIC_) return 0; /* already free */
-    b->magic = SLAB_FREE_MAGIC_;
-    b->next = s->free_list;
-    s->free_list = b;
-    s->used--;
-    return 1;
-}
-
-void slab_reset(Slab *s)
-{
-    Slab_Chunk_ *c;
-    s->free_list = NULL;
-    for (c = s->chunks; c; c = c->next) slab_link_chunk_(s, c);
-    s->used = 0;
-}
-
-size_t slab_used(const Slab *s) { return s->used; }
-size_t slab_capacity(const Slab *s) { return s->capacity; }
 
 #endif /* ARENA_ALLOC_IMPLEMENTATION_ */
 #endif /* ARENA_ALLOC_IMPLEMENTATION */
