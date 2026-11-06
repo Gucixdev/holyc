@@ -18,3 +18,7 @@ require «amo-lean» from git
 @[default_target]
 lean_lib «Vecindex» where
   roots := #[`Vecindex]
+
+/-- The Lean model run on concrete inputs (differential test) and the printer of the TrustLean kernels. -/
+lean_exe «vecindex-oracle» where
+  root := `Oracle

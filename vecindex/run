@@ -9,6 +9,8 @@
 #   ./run bench                also bench/bench.c (timings vs the Rust port)
 #   ./run stress               also tests/stress.c (churn + oracle + edge cases)
 #   ./run real_val             also bench/real_val.c, the SQuAD + AG-News retrieval benchmark (needs emb/real_data.bin)
+#   ./run lean                 only lean4/run: the Lean 4 proofs, their axiom audit, and the C kernels against the proved
+#                              model (needs lake; ./run all runs it too when lake is installed)
 #   ./run compare DATA [OUT]   only the measurements of docs/benchmarks.md: every library on GloVe-100 through
 #                              py/bench.py, then the 10M and 100M scale runs. DATA from py/prepare_glove.py; results in
 #                              OUT (default bench/results-HOSTNAME), `python3 py/tables.py OUT/glove.jsonl` prints the
@@ -65,6 +67,7 @@ mode=${1:-}
 case $mode in
     compare) [[ -n ${2:-} ]] || { echo "usage: ./run compare DATA_DIR [OUT_DIR]" >&2; exit 2; }
              compare "$2" "${3:-}"; exit $? ;;
+    lean)    exec lean4/run "${@:2}" ;;
     all)     more=(stress bench real_val) ;;
     "")      more=() ;;
     *)       more=("$mode") ;;
@@ -241,6 +244,12 @@ fi
 if [[ $mode == all ]]; then
     echo; echo "cross-built tests (tools/cross; a target without its compiler and qemu is skipped)"
     cro=$(tools/cross | tee /dev/stderr) && { rec "cross builds" ok "$(grep -c '^  ok' <<<"$cro") test runs ok on $(grep -c '^==' <<<"$cro") of 4 CPUs (aarch64 armv7 riscv64 s390x), $(grep -c 'skipped' <<<"$cro") skipped"; } || { echo "  ^ cross FAILED"; fail=1; rec "cross builds" FAIL; }
+    echo
+    if command -v lake >/dev/null || [[ -x $HOME/.elan/bin/lake ]]; then
+        echo "lean4/run (the proofs and the C kernels against them)"
+        if lean4/run > "$OUT/log_lean4.txt" 2>&1; then rec "lean4" ok "$(grep -o '[0-9]* steps, all ok' "$OUT/log_lean4.txt"), $(grep -o '[0-9]* theorems' "$OUT/log_lean4.txt" | head -1)"
+        else tail -20 "$OUT/log_lean4.txt"; echo "  ^ lean4 FAILED"; fail=1; rec "lean4" FAIL; fi
+    else rec "lean4" skip "no lake (elan) installed"; fi
     echo
     data=${2:-}; res=${3:-}
     if [[ -z $data && -f $CMP/data/meta.json ]]; then   # the GloVe set prepared earlier: use it, without the 10M/100M runs (they want far more RAM and disk)
