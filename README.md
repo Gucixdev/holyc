@@ -25,9 +25,10 @@ The vector database that lived here as `ragdb/` was its own repository,
 included. The agent layer that grew on top of it is `vecindex/examples/agent_launcher/`, which uses `vecindex/` as a library.
 
 Every directory builds on its own; there is no top-level build. Each has its own README with
-the details, this page is the map. `tools/` holds two repository scripts: `dirprefix` names the files in a folder's
-subfolders after their folder and rewrites what names them (base's headers went through it), `leaninit` starts a
-project's `lean4/` folder.
+the details, this page is the map. `tools/` holds three repository scripts: `runall` runs every project's tests and
+`lean4/run` and prints one table (`--full` adds the benchmarks and vecindex's whole `./run all`, fuzzing and
+coverage; logs in `.runall/`), `dirprefix` names the files in a folder's subfolders after their folder and rewrites
+what names them (base's headers went through it), `leaninit` starts a project's `lean4/` folder.
 
 ## Quick start
 
