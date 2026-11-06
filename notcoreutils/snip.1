@@ -1,0 +1,63 @@
+.TH SNIP 1 "2026-11-06" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+snip \- command snippet manager with tags, in the spirit of pet
+.SH SYNOPSIS
+.B snip add
+[\fB\-t\fR \fITAGS\fR] [\fB\-d\fR \fIDESC\fR] [\fB\-\-\fR] \fICOMMAND\fR...
+.br
+.B snip list\fR|\fBpick\fR|\fBrun\fR|\fBrm
+[\fB\-t\fR \fITAG\fR]
+.br
+.B snip tags
+.br
+.B snip edit
+.br
+.B snip init bash\fR|\fBzsh
+.SH DESCRIPTION
+.B snip
+keeps commands you want to find again. Each snippet has a command, an optional description and
+optional comma\-separated tags. Choosing happens in
+.BR fzf (1)
+when one is on PATH, else in a numbered menu on the terminal.
+.PP
+A command may contain placeholders, \fI<name>\fR or \fI<name=default>\fR. They are asked for on
+the terminal when the snippet is picked; the same name is asked once.
+.SH COMMANDS
+.TP
+.B add
+Store a snippet. The command is the remaining arguments, or stdin when there are none. A command that
+is already stored is refused.
+.TP
+.B list
+Print the snippets, only those with the given tag when \fB\-t\fR is used.
+.TP
+.B pick
+Choose a snippet, fill its placeholders and print the command on stdout. This is what the shell key uses.
+.TP
+.B run
+Like \fBpick\fR, then run the command with sh \-c.
+.TP
+.B rm
+Choose a snippet and delete it.
+.TP
+.B tags
+Every tag and how many snippets carry it.
+.TP
+.B edit
+Open the store in $EDITOR (vi when unset).
+.TP
+.B init bash\fR|\fBzsh
+Print shell code: Ctrl\-X s pastes a picked snippet into the command line at the cursor.
+Use it with \fBeval "$(snip init bash)"\fR in the shell's rc file. The zsh variant is untested.
+.SH TYPING A COMMAND
+After \fBeval "$(snip init bash)"\fR press Ctrl\-X s in the middle of a command line: pick, fill, and the text
+lands at the cursor. To store the command you just ran, use history expansion:
+\fBsnip add \-t git \-d "undo commit" \-\- !!\fR
+.SH FILES
+.TP
+.I $SNIP_FILE
+else \fI$XDG_CONFIG_HOME/snip/snippets\fR, else \fI~/.config/snip/snippets\fR. One snippet per line:
+TAGS, DESCRIPTION and COMMAND separated by tabs; newline, tab and backslash are written as \\n, \\t, \\\\.
+Comment lines are not kept.
+.SH EXIT STATUS
+0 on success, 1 on failure or a cancelled pick, 2 on a usage error.
