@@ -1,0 +1,19 @@
+#!/bin/sh
+# wlroots-static - build wlroots as a static library into .wlroots/, so dwl links it in and the system needs no
+# wlroots package. `make` runs this by itself when .wlroots/lib/libwlroots-0.20.a is missing.
+# Needs git, meson, ninja and the dev packages wlroots itself needs (wayland, libdrm, pixman, libseat, libinput,
+# xkbcommon, mesa/egl, libdisplay-info, lcms2, ...); only wlroots is static, those stay shared.
+# XWayland is left out (config.mk builds dwl without it) and so is libliftoff.
+set -eu
+V=0.20.2
+here=$(cd "$(dirname "$0")" && pwd)
+cd "$here"
+[ -f .wlroots/lib/libwlroots-0.20.a ] && exit 0
+[ -d .wlroots-src ] || git clone --quiet --depth 1 --branch "$V" https://gitlab.freedesktop.org/wlroots/wlroots.git .wlroots-src
+cd .wlroots-src
+meson setup build --wipe --prefix "$here/.wlroots" --libdir lib -Ddefault_library=static -Dbuildtype=release \
+	-Dexamples=false -Dxwayland=disabled -Dxcb-errors=disabled -Dlibliftoff=disabled > /dev/null 2>&1 ||
+	meson setup build --prefix "$here/.wlroots" --libdir lib -Ddefault_library=static -Dbuildtype=release \
+	-Dexamples=false -Dxwayland=disabled -Dxcb-errors=disabled -Dlibliftoff=disabled
+ninja -C build install > /dev/null
+echo "wlroots $V built statically into $here/.wlroots"
