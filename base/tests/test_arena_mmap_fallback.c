@@ -4,7 +4,7 @@
  * exists specifically to exercise the real 1GB default reservation failing
  * and falling back to an exact-size request, which test_arena.c's small
  * override would never trigger. */
-#include "core/arena_alloc.h"
+#include "core/core_arena_alloc.h"
 
 #include <sys/resource.h>
 

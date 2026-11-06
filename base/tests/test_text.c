@@ -3,8 +3,8 @@
 #define STRING_VIEW_IMPLEMENTATION
 #define STR_IMPLEMENTATION
 #define TEXT_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "util/text.h"
+#include "core/core_arena_alloc.h"
+#include "util/util_text.h"
 
 static i32 sv_is_(String_View sv, const char *expect)
 {

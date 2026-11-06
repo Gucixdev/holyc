@@ -4,8 +4,8 @@
 #define PNG_DEC_IMPLEMENTATION
 #define JPEG_DEC_IMPLEMENTATION
 #define IMG_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "codec/img.h"
+#include "core/core_arena_alloc.h"
+#include "codec/codec_img.h"
 #include <string.h>
 
 /* writes a minimal, valid uncompressed 24-bit BI_RGB BMP (BITMAPFILEHEADER
@@ -117,7 +117,7 @@ int main(void)
 
     /* dispatch reaches the right decoder even when the payload itself is bad -
        proves img_decode() actually routes by format rather than always
-       taking one path (png_dec.h/jpeg_dec.h's own decode correctness is
+       taking one path (codec_png_dec.h/codec_jpeg_dec.h's own decode correctness is
        covered by their own dedicated tests, not re-tested here). */
     {
         u8 png_garbage[16] = { 0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0 };

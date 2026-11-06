@@ -3,10 +3,10 @@
 #define POOL_ALLOC_IMPLEMENTATION
 #define FGJOB_IMPLEMENTATION
 #define REF_COUNT_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "core/pool_alloc.h"
-#include "core/fine_grained.h"
-#include "core/ref_count.h"
+#include "core/core_arena_alloc.h"
+#include "core/core_pool_alloc.h"
+#include "core/core_fine_grained.h"
+#include "core/core_ref_count.h"
 
 static i32 on_zero_calls_ = 0;
 static void on_zero_(void *ctx) { (void)ctx; on_zero_calls_++; }

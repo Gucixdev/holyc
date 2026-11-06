@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define BIT_IMPLEMENTATION
 #define LUT_IMPLEMENTATION
-#include "core/base.h"
-#include "data/lut.h"
+#include "core/core_base.h"
+#include "data/data_lut.h"
 
 static f32 square_gen_(i32 index, void *ctx)
 {

@@ -1,7 +1,7 @@
 #define PRINT_IMPLEMENTATION
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "core/base.h"
-#include "core/arena_alloc.h"
+#include "core/core_base.h"
+#include "core/core_arena_alloc.h"
 #include "bench_util.h"
 #include <stdlib.h>
 
@@ -16,7 +16,7 @@
 
 typedef struct { i32 a, b, c, d; } Small_Obj; /* 16 bytes - typical AST-node-sized allocation */
 
-/* arena_alloc.h's default backend is ARENA_BACKEND_FLAT: one big mmap()
+/* core_arena_alloc.h's default backend is ARENA_BACKEND_FLAT: one big mmap()
  * (MAP_NORESERVE, lazily committed by the kernel page by page) reserved
  * once, then a pure bump pointer - "pamiec jako jedna wielka tablica" per
  * the manifest, no glibc heap involved at all in the common case.

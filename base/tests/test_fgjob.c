@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define FGJOB_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "core/fine_grained.h"
+#include "core/core_arena_alloc.h"
+#include "core/core_fine_grained.h"
 
 static i32 squares_[100000];
 static void square_job_(i64 id, void *ctx)

@@ -1,7 +1,7 @@
 #include "test_common.h"
 #define VECTOR_IMPLEMENTATION
-#include "core/base.h"
-#include "math/mathx.h"
+#include "core/core_base.h"
+#include "math/math_mathx.h"
 
 int main(void)
 {

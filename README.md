@@ -54,7 +54,7 @@ git clone https://github.com/Gucixdev/holyc && cd holyc
 The single-file library. Include what you need and define `<NAME>_IMPLEMENTATION` in one
 translation unit (stb style). Seven areas, 107 headers, every one with a test:
 
-- **core**: `base.h` (constants, fixed-width and fixed-point types, `Option`/`Result`/`TRY`/
+- **core**: `core_base.h` (constants, fixed-width and fixed-point types, `Option`/`Result`/`TRY`/
   `Future`/`DEFER`, own `str`/`String_View`/`Arena_String`/`print`), the arena and slab, a
   fixed-chunk pool and file-backed arena and pool, reference counting, a job pool with a task
   graph, MPMC and SPSC queues, priority queue, coroutines, state machine, streams, `io`, `log`,
@@ -63,9 +63,9 @@ translation unit (stb style). Seven areas, 107 headers, every one with a test:
   hashing: hash table/map/set, MurmurHash3, XXH32, rolling hash, perfect hash.
 - **math**: vectors, matrices, quaternions, curves, easing, noise (simplex, Perlin, Voronoi,
   blue), fractals, PCG32 and xorshift, distributions, statistics, and **balanced ternary logic**
-  (`tenary_gates.h`: min/max/neg/diff over -1, 0, +1).
+  (`math_tenary_gates.h`: min/max/neg/diff over -1, 0, +1).
 - **codec**: deflate, PNG, JPEG, QOI, WAV, MP3, BDF, JSON, CSV, INI, tar, base64/base63, and
-  **small-radix packing** (`tenary.h`: 4:1 and 5:1 packing of 2- and 3-level symbols, delta +
+  **small-radix packing** (`codec_tenary.h`: 4:1 and 5:1 packing of 2- and 3-level symbols, delta +
   zigzag + Golomb-Rice).
 - **crypto**: AES-256, SHA-256, Merkle tree with proofs.
 - **net**: TCP sockets, HTTP/1.1 client and server, IPv4 helpers, stream pipe.

@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define RNG_IMPLEMENTATION
-#include "math/rng.h"
+#include "math/math_rng.h"
 
 int main(void)
 {

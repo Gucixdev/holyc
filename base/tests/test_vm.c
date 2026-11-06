@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define VM_IMPLEMENTATION
-#include "util/vm.h"
+#include "util/util_vm.h"
 
 int main(void)
 {
@@ -30,7 +30,7 @@ int main(void)
     /* sum 1..5 == 15 via a conditional-jump loop - counter lives on the
      * i64 stack, running sum on the f64 stack (via I2F), so IDUP/JZ never
      * need to reach past a buried value the way a single shared stack
-     * would - see vm.h's own comment on why two typed stacks instead of
+     * would - see util_vm.h's own comment on why two typed stacks instead of
      * one tagged one. */
     {
         Vm_Instr prog[11];

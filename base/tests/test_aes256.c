@@ -1,7 +1,7 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define AES256_IMPLEMENTATION
-#include "crypto/aes256.h"
+#include "crypto/crypto_aes256.h"
 
 int main(void)
 {

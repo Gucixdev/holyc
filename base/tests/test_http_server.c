@@ -4,17 +4,17 @@
 #define SOCKET_IMPLEMENTATION
 #define HTTP_IMPLEMENTATION
 #define HTTP_SERVER_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "core/base.h"
-#include "net/socket.h"
-#include "net/http.h"
-#include "net/http_server.h"
+#include "core/core_arena_alloc.h"
+#include "core/core_base.h"
+#include "net/net_socket.h"
+#include "net/net_http.h"
+#include "net/net_http_server.h"
 #include <pthread.h>
 #include <string.h>
 
 #define TEST_PORT 18923
 
-/* real end-to-end: this test's "client" is http.h's own http_request -
+/* real end-to-end: this test's "client" is net_http.h's own http_request -
  * the exact same client code a real caller would use - talking over a
  * real TCP loopback socket to a real http_server_serve_one loop, not a
  * hand-fed fixture on either side. */
@@ -108,7 +108,7 @@ int main(void)
         serve_and_wait_(&srv, echo_method_path_handler_, &th, &ctx);
         err = http_request(&client_arena, "GET", "http://127.0.0.1:18923/hello", NULL, NULL, 0, &resp);
         pthread_join(th, NULL);
-        TEST_CHECK(err == HTTP_ESUCCESS, "the real http.h client completes a real request against our real server");
+        TEST_CHECK(err == HTTP_ESUCCESS, "the real net_http.h client completes a real request against our real server");
         TEST_CHECK(resp.status_code == 200, "status 200 came back for real over the wire");
         TEST_CHECK(resp.body_len == 10 && memcmp(resp.body, "GET /hello", 10) == 0,
                    "the handler's parsed method+path really reached it correctly (echoed back: 'GET /hello')");

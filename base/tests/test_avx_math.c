@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define AVX_MATH_IMPLEMENTATION
-#include "core/base.h"
+#include "core/core_base.h"
 
 int main(void)
 {

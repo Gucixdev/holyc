@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define MP3_DEC_IMPLEMENTATION
-#include "codec/mp3_dec.h"
+#include "codec/codec_mp3_dec.h"
 #include "mp3_fixture.h"
 #include <string.h>
 
@@ -16,7 +16,7 @@
  * an honest correctness oracle given no independent second MP3 decoder is
  * available in this project to cross-check against (unlike jpeg.h/png.h,
  * which cross-check against PIL's decode). Malformed/truncated-input
- * handling is covered the same way the other parsers (deflate.h, png.h,
+ * handling is covered the same way the other parsers (codec_deflate.h, png.h,
  * jpeg.h, tar.h) cover it: garbage bytes and a mid-stream cut must fail
  * or stop cleanly, never crash or hang. */
 

@@ -3,9 +3,9 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define PATH_IMPLEMENTATION
 #define VFS_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "util/path.h"
-#include "util/vfs.h"
+#include "core/core_arena_alloc.h"
+#include "util/util_path.h"
+#include "util/util_vfs.h"
 
 #include <string.h>
 

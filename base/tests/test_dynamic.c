@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "core/arena_alloc.h"
+#include "core/core_arena_alloc.h"
 #define DYNAMIC_FLOW_IMPLEMENTATION
-#include "core/dynamic.h"
+#include "core/core_dynamic.h"
 
 int main(void)
 {

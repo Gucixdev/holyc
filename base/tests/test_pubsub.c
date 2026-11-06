@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define PUBSUB_IMPLEMENTATION
-#include "util/pubsub.h"
+#include "util/util_pubsub.h"
 
 static i32 call_log_[16];
 static i32 call_log_count_ = 0;

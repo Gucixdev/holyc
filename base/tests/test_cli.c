@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define CLI_IMPLEMENTATION
-#include "util/cli.h"
+#include "util/util_cli.h"
 
 static i32 streq_(const char *a, const char *b)
 {

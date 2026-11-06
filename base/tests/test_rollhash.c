@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define ROLLHASH_IMPLEMENTATION
-#include "data/hash/rollhash.h"
+#include "data/hash/hash_rollhash.h"
 
 int main(void)
 {

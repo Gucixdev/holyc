@@ -2,9 +2,9 @@
 #define BASE_TYPE_IMPLEMENTATION
 #define ARENA_ALLOC_IMPLEMENTATION
 #define HASHTABLE_IMPLEMENTATION
-#include "core/base.h"
-#include "core/arena_alloc.h"
-#include "data/hash/hashtable.h"
+#include "core/core_base.h"
+#include "core/core_arena_alloc.h"
+#include "data/hash/hash_hashtable.h"
 #include "bench_util.h"
 #include <stdlib.h>
 
@@ -33,7 +33,7 @@ int main(void)
 
     print_cstr("bench_hashtable: put N keys, then look up every key once\n");
     print_cstr("naive = linear scan over a plain {key,value} array\n");
-    print_cstr("ht    = open-addressing hash table (hashtable.h)\n\n");
+    print_cstr("ht    = open-addressing hash table (hash_hashtable.h)\n\n");
 
     for (si = 0; si < sizeof(sizes) / sizeof(sizes[0]); si++) {
         size_t n = (size_t)sizes[si];

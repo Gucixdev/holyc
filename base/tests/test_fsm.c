@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define FSM_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "core/fsm.h"
+#include "core/core_arena_alloc.h"
+#include "core/core_fsm.h"
 
 #define STATE_IDLE 0
 #define STATE_WALK 1

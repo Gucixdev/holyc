@@ -5,10 +5,10 @@
 #define HASHTABLE_IMPLEMENTATION
 #define HASH_MAP_IMPLEMENTATION
 #define MERGE_OPS_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "data/array.h"
-#include "data/hash/hashmap.h"
-#include "data/merge_ops.h"
+#include "core/core_arena_alloc.h"
+#include "data/data_array.h"
+#include "data/hash/hash_hashmap.h"
+#include "data/data_merge_ops.h"
 
 #include <string.h>
 

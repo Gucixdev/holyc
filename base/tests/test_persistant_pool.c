@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define PERSISTANT_POOL_IMPLEMENTATION
-#include "core/persistant_pool.h"
+#include "core/core_persistant_pool.h"
 #include <string.h>
 #include <unistd.h>
 
@@ -8,7 +8,7 @@
  * no base-address guarantee, and a single process reopening the same
  * fd can coincidentally get the SAME address back, which would hide a
  * real "stored an absolute pointer instead of an offset" bug (see
- * persistant_pool.h's own top comment on exactly this). A genuine
+ * core_persistant_pool.h's own top comment on exactly this). A genuine
  * self-re-exec (not fork - a fork's child still starts from a COW copy
  * of the parent's own address space/layout, a real, if smaller,
  * confound) via execl gives a truly fresh process image, forcing an

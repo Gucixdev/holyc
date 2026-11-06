@@ -1,7 +1,7 @@
-/* test_slab.c - slab and the arena_calloc/used/reserved additions in arena_alloc.h:
+/* test_slab.c - slab and the arena_calloc/used/reserved additions in core_arena_alloc.h:
  * zeroed blocks, pointer stability across growth, reuse, double release refused, reset. */
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "core/arena_alloc.h"
+#include "core/core_arena_alloc.h"
 #include <stdint.h>
 #include <stdio.h>
 

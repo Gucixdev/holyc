@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define NET_IMPLEMENTATION
-#include "net/net.h"
+#include "net/net_net.h"
 
 int main(void)
 {

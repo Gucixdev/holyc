@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define TIME_UTIL_IMPLEMENTATION
 #define PROFILER_IMPLEMENTATION
-#include "util/time_util.h"
-#include "util/profiler.h"
+#include "util/util_time_util.h"
+#include "util/util_profiler.h"
 
 int main(void)
 {

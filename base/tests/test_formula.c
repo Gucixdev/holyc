@@ -2,9 +2,9 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define AST_IMPLEMENTATION
 #define FORMULA_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "util/ast.h"
-#include "util/formula.h"
+#include "core/core_arena_alloc.h"
+#include "util/util_ast.h"
+#include "util/util_formula.h"
 
 static i32 near_(f64 a, f64 b) { f64 d = a - b; if (d < 0) d = -d; return d < 0.0001; }
 

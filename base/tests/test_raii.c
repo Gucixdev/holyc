@@ -1,5 +1,5 @@
 #include "test_common.h"
-#include "util/raii.h"
+#include "util/util_raii.h"
 
 static i32 released_count_ = 0;
 

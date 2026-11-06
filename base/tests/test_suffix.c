@@ -3,8 +3,8 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define STR_IMPLEMENTATION
 #define SUFFIX_IMPLEMENTATION
-#include "core/base.h"
-#include "data/suffix.h"
+#include "core/core_base.h"
+#include "data/data_suffix.h"
 #include <string.h> /* strlen/strncmp - test-only convenience, matches test_qoi.c's own precedent */
 
 int main(void)

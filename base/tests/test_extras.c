@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define EXTRAS_IMPLEMENTATION
-#include "math/extras.h"
+#include "math/math_extras.h"
 
 int main(void)
 {

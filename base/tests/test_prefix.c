@@ -2,7 +2,7 @@
 #define BASE_TYPE_IMPLEMENTATION
 #define ARENA_ALLOC_IMPLEMENTATION
 #define PREFIX_IMPLEMENTATION
-#include "data/prefix.h"
+#include "data/data_prefix.h"
 
 int main(void)
 {

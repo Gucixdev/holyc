@@ -1,7 +1,7 @@
 #include "test_common.h"
 #define VECTOR_IMPLEMENTATION
 #define FRACTAL_MATH_IMPLEMENTATION
-#include "math/fractal_math.h"
+#include "math/math_fractal_math.h"
 
 static Fractal_Complex fc(f32 x, f32 y) { Fractal_Complex c; c.x = x; c.y = y; return c; }
 

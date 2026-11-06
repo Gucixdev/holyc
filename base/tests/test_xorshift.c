@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define XORSHIFT_IMPLEMENTATION
-#include "math/xorshift.h"
+#include "math/math_xorshift.h"
 
 int main(void)
 {

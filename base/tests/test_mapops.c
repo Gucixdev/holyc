@@ -1,9 +1,9 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "core/arena_alloc.h"
+#include "core/core_arena_alloc.h"
 #define ARRAY_IMPLEMENTATION
 #define MAPOPS_IMPLEMENTATION
-#include "data/mapops.h"
+#include "data/data_mapops.h"
 
 static i32 is_even_(const void *elem, void *userdata)
 {

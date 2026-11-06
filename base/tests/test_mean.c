@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define MEAN_IMPLEMENTATION
-#include "math/mean.h"
+#include "math/math_mean.h"
 
 int main(void)
 {

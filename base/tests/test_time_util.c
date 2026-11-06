@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define TIME_UTIL_IMPLEMENTATION
-#include "util/time_util.h"
+#include "util/util_time_util.h"
 #include <string.h>
 
 int main(void)

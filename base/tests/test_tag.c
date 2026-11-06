@@ -3,10 +3,10 @@
 #define BASE_TYPE_IMPLEMENTATION
 #define HASHTABLE_IMPLEMENTATION
 #define TAG_IMPLEMENTATION
-#include "core/arena_alloc.h"
-#include "core/base.h"
-#include "data/hash/hashtable.h"
-#include "data/tag.h"
+#include "core/core_arena_alloc.h"
+#include "core/core_base.h"
+#include "data/hash/hash_hashtable.h"
+#include "data/data_tag.h"
 #include <string.h>
 
 int main(void)
