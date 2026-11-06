@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# lean4/run - the shared library itself: build, axiom audit, source scan (the steps of lib.sh).
+. "$(dirname "$0")/lib.sh" || exit 2
+lean_build
+lean_audit
+lean_scan
+lean_end
