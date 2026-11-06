@@ -969,6 +969,17 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
         }
     }
     if (texts && store_heap_r_(s, map, len, f, o_heap, hlen)) { fclose(f); store_destroy(s); return (RagStore *)0; }
+    if (texts && (!dend || store_verify_level_() < 2)) {        /* nothing vouched for the offsets: each inside the heap */
+        i32 r;                                                   /* (tests/fuzz_store.c: a v8 file's pointed past it, and
+                                                                  * the first save read text from a block that is not there) */
+        for (r = 0; r < live; ++r) {
+            u64 v = STORE_TXO(s, r);
+            if (v && (u64)STORE_TXOFF(v) + (u64)STORE_TXLEN(v) > hlen) {
+                sprintf(store_lerr_, "the text of row %d lies past the text heap: the file is damaged", (int)r);
+                fclose(f); store_destroy(s); return (RagStore *)0;
+            }
+        }
+    }
     s->txlive = (i64)hlen;
     s->count = live;
     s->live = live;
