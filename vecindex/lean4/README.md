@@ -16,7 +16,7 @@ four links, and each is either proved or checked by a program:
    `GF256.mul` is `gf_mul_`, `Crc.upTab` is `store_crc32c_up_`, `Gauss.invert` is `gf_invert_`, `RS.recover` is the
    rebuild in `ssum_group_`, `FastScan.avx2Score` is the AVX2 arithmetic of `tq_block_`, and so on (table below).
 2. **The theorems** are about those definitions, and Lean's kernel checks every proof. `Audit.lean` takes every
-   theorem the `Vecindex` modules define - 211 written in the sources and 347 that Lean generates there (equation
+   theorem the `Vecindex` modules define - 213 written in the sources and 351 that Lean generates there (equation
    lemmas and the like) - and fails if one rests on anything but `propext`, `Classical.choice` and `Quot.sound`: no
    `sorry`, no `native_decide` or `bv_decide` (they add `Lean.ofReduceBool` and `Lean.trustCompiler`, which trust the
    compiler), no axiom of a library. It selects theorems by the module that defines them, so a theorem outside the
@@ -59,7 +59,7 @@ On a 2-vCPU Xeon with AVX-512, 2026-11-06:
 =================== lean4 summary ===================
   STEP                   RESULT  WHAT IT CHECKED
   lake build             ok      2737 jobs, proofs and oracle
-  axiom audit            ok      558 theorems (211 written in the sources)
+  axiom audit            ok      564 theorems (213 written in the sources)
   source scan            ok      no sorry, admit, native_decide, bv_decide or axiom
   gen/trustlean.c        ok      printed by TrustLean from the proved programs
   gf native              ok      260 lines: every table entry and product, the coefficients hashed
@@ -72,7 +72,7 @@ On a 2-vCPU Xeon with AVX-512, 2026-11-06:
   topk native            ok      300 random cases, seed 20261106
   props native           ok      9 checks
   ... the same nine steps for haswell and x86-64 ...
-  31 steps, all ok   (61 s)
+  31 steps, all ok   (75 s)
 ```
 
 The nine checks in C alone (`c/diff.c props`): `tq_code_` counts the boundaries below the value (random values,
@@ -90,7 +90,7 @@ m + 1 is reported as damaged, not passed off as rebuilt.
 | the Cauchy coefficients `gf_coef_` | `RS/Cauchy.lean`, `RS/StoreSum.lean` | `cauchy_kernel`: a Cauchy matrix has no kernel; `coef_mds`: every square part of the coefficient matrix of `store_sum.c` is invertible |
 | `gf_invert_` | `RS/Invert.lean` | `invert_mul`: when it returns 0 the result is a left inverse; `invert_none`: it returns -1 only for a matrix with a nonzero kernel vector; `invert_ok`: it succeeds on every matrix without one |
 | the rebuild of `ssum_group_` | `RS/Group.lean`, `RS/StoreSum.lean` | `recover_gf`: for every k and m that `ssum_layout_` accepts (k <= 128, m <= 64), every group of at most k data blocks and every choice of at most m damaged blocks among its data and parity, the rebuild returns the damaged data exactly |
-| `ssum_layout_` | `RS/StoreSum.lean` | `layout_ng_le`: no group holds more than k data blocks, so `md[128]`, `mp[64]`, `use[64]` and `a[64 * 64]` are large enough; `layout_cover`, `layout_slot`: the groups deal out the data blocks without gaps or overlaps; `layout_burst`: a run of L neighbouring blocks puts at most ceil(L / G) of them into one group; `layout_regions`: the digest tables and the trailers do not overlap, trailer A and table B start on 4 KiB boundaries, trailer B is the last 128 bytes |
+| `ssum_layout_` | `RS/StoreSum.lean` | `layout_ng_le`: no group holds more than k data blocks, so `md[128]`, `mp[64]`, `use[64]` and `a[64 * 64]` are large enough; `layout_cover`, `layout_slot`: the groups deal out the data blocks without gaps or overlaps; `layout_burst`: a run of L neighbouring blocks puts at most ceil(L / G) of them into one group, so a run of at most m G is within the parity (`burst_within_parity`) and one of m G + 1 is not (`burst_beyond_parity`), the limit `tests/battle_damage.c` tests on real files; `layout_regions`: the digest tables and the trailers do not overlap, trailer A and table B start on 4 KiB boundaries, trailer B is the last 128 bytes |
 | `store_crc_init_`, `store_crc32c_up_` (`store_batch.c`) | `Crc32c.lean` | `upTab_eq_upBit`: the table path is CRC-32C bit by bit; `check_value`: "123456789" gives 0xE3069283; `detects_byte_error`: two messages of the same length that differ in one byte never share a CRC (so every single-bit error is caught) |
 | `tq_block_` (`tq_scan.c`) | `FastScan.lean` | `avx2_eq_ref`: the AVX2 / AVX-512 16-bit word trick (even rows as `a0 - (a1 << 8)`) gives the scalar kernel's sums for every block, table and column count; `no_overflow`: with `lutmax = min(255, 65535 / vd)` no sum wraps; `gt_flip`: the sign-flipped signed compare is the unsigned `v > thr` |
 | `tq_vd_`, the kernel loads | `FastScan.lean` | `vd_even`, `vd_enough`: the column count is even and covers every coordinate; `avx2_loads_in_block`, `avx512_loads_in_block`: every 32- and 64-byte load stays inside the block |
