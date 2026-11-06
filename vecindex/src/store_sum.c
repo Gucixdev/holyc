@@ -415,8 +415,9 @@ static i32 ssum_write_file_(FILE *f, const char *path, u64 D, u32 k, u32 m, i32 
 static i32 store_verify_ = -1;
 static char store_lerr_[256];
 
-/* What a load checks: 2 every block (the default), 1 the group of the first block (the header), 0 nothing (to rescue
- * a file whose checksums are gone). For every load after the call, process-wide; $VECINDEX_VERIFY sets the default. */
+/* What a load checks: 2 every data block, and the parity of a group with a damaged one (the default; store_scrub reads
+ * all the parity), 1 the group of the first block (the header), 0 nothing (to rescue a file whose checksums are gone).
+ * For every load after the call, process-wide; $VECINDEX_VERIFY sets the default. */
 void store_set_verify(i32 level) { store_verify_ = level < 0 ? 0 : (level > 2 ? 2 : level); }
 static i32 store_verify_level_(void)
 {

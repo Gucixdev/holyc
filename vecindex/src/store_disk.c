@@ -896,12 +896,22 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
     u64 stamp = 0, hlen = 0;
 
     if (live < 0 || dim <= 0 || fstat(fileno(f), &st) != 0) { fclose(f); return (RagStore *)0; }
+    if (ubad == 0) {                     /* the header's own block could not be rebuilt: its dimension and row count are
+                                          * noise, and tests/fuzz_store.c saw one ask store_new for 2.4 GB before the
+                                          * refusal further down */
+        strcpy(store_lerr_, "damaged beyond repair at byte 0, in the header (a scrub lists the blocks)");
+        fclose(f); return (RagStore *)0;
+    }
     len = (size_t)st.st_size;
     if (dend && dend < (u64)len) len = (size_t)dend;               /* the digests and parity after it are not data */
     if ((v7 || i8rows) && STORE_R32(f, ext, 4)) { fclose(f); return (RagStore *)0; }
     if (v7) { i8rows = ext[0] & 1; texts = (hdr[1] == STORE_VERSION8 || hdr[1] == STORE_VERSION9) && (ext[0] & 2); stamp = (u64)(u32)ext[2] | ((u64)(u32)ext[3] << 32); }
     else if (i8rows && ext[0] != 1) { fclose(f); return (RagStore *)0; }
     s = store_new(a, dim);
+    if (!s->addbuf) {                                            /* not even one row of that dimension fits in memory */
+        sprintf(store_lerr_, "no memory for one row of %d dimensions", (int)dim);
+        fclose(f); store_destroy(s); return (RagStore *)0;
+    }
     s->ro = ro;
     if (i8rows) store_set_vec_bytes(s, 1);
     if (store_goal_r_(f, &s->goal)) { fclose(f); store_destroy(s); return (RagStore *)0; }
@@ -1027,7 +1037,13 @@ static RagStore *store_load_impl_(Arena *a, const char *path, i32 ro)
     }
 
     /* v4: packed sections, no saved scan index - read everything, rebuild the scan */
+    {   struct stat st4;                /* no checksums: the header is believed only as far as the file can hold it -
+                                         * tests/fuzz_store.c saw a damaged row count reserve 16 TB of spill file */
+        if (hdr[2] <= 0 || hdr[3] < 0 || fstat(fileno(f), &st4) != 0
+            || (u64)hdr[3] > (u64)st4.st_size / ((u64)hdr[2] * 4u + 16u)) { fclose(f); return (RagStore *)0; }
+    }
     s = store_new(a, hdr[2]);
+    if (!s->addbuf) { fclose(f); store_destroy(s); return (RagStore *)0; }
     s->ro = ro;
     live = hdr[3];
     if (live < 0 || store_goal_r_(f, &s->goal) || store_reserve_(s, live > 0 ? live : 1)) { fclose(f); store_destroy(s); return (RagStore *)0; }
