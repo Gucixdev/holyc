@@ -7,20 +7,37 @@ import Base
 open Base
 
 structure S where
-  arena : Arena.St := ⟨0, 0⟩
+  arena : Arena.St := ⟨0, 0, 0⟩
   base : Nat := 0
+  page : Nat := 4096
   marks : Array Nat := #[]
-  fl : List Nat := []
-  chunks : Nat := 0
+  blocks : Array (Nat × Nat) := #[]
+  pool : Pool.St := Pool.init 0
 
 def num (w : String) : Nat := w.toNat?.getD 0
 
 def step (st : S) : List String → S × String
-  | ["arena", b, cap] => ({ st with arena := ⟨0, num cap⟩, base := num b, marks := #[] }, s!"arena {b} {cap}")
+  | ["arena", b, cap, pg] =>
+    ({ st with arena := ⟨0, num cap, 0⟩, base := num b, page := num pg, marks := #[] }, s!"arena {b} {cap} {pg}")
   | "a" :: n :: _ =>
     match Arena.alloc st.arena (num n) with
-    | some (o, s') => ({ st with arena := s' }, s!"a {n} {o}")
+    | some (o, s') => ({ st with arena := s', blocks := st.blocks.push (o, num n) }, s!"a {n} {o}")
     | none => (st, s!"a {n} none")
+  | "c" :: n :: _ =>
+    match Arena.alloc st.arena (num n) with
+    | some (o, s') => ({ st with arena := s', blocks := st.blocks.push (o, num n) }, s!"c {n} {o} ok")
+    | none => (st, s!"c {n} none")
+  | "g" :: j :: n :: _ =>
+    let (o, old) := st.blocks.getD (num j) (0, 0)
+    match Arena.realloc st.arena o old (num n) with
+    | some (o', s') =>
+      ({ st with arena := s', blocks := st.blocks.set! (num j) (o', num n) }, s!"g {j} {n} {o'} ok")
+    | none => (st, s!"g {j} {n} none")
+  | "d" :: _ =>
+    let p := st.page
+    let f := (st.base + 8 * st.arena.count + p - 1) / p * p - st.base
+    let s' := Arena.decommit st.arena f
+    ({ st with arena := s' }, s!"d {s'.high}")
   | "l" :: n :: k :: _ =>
     let a := 2 ^ num k
     match Arena.alloc st.arena (num n + a - 1) with
@@ -29,18 +46,17 @@ def step (st : S) : List String → S × String
   | "s" :: _ => ({ st with marks := st.marks.push (Arena.snapshot st.arena) }, s!"s {Arena.snapshot st.arena}")
   | "r" :: j :: _ =>
     let s' := Arena.rewind st.arena (st.marks.getD (num j) 0)
-    ({ st with arena := s' }, s!"r {j} {8 * s'.count}")
-  | "z" :: _ => ({ st with arena := Arena.reset st.arena }, "z 0")
+    ({ st with arena := s', blocks := #[] }, s!"r {j} {8 * s'.count}")
+  | "z" :: _ => ({ st with arena := Arena.reset st.arena, blocks := #[] }, "z 0")
   | "p" :: bs :: cs :: _ =>
     let acs := Arena.alignUp (num cs) 8
-    let k := num bs / acs
-    ({ st with fl := Pool.freeAll k, chunks := k }, s!"p {bs} {cs} {acs}")
+    ({ st with pool := Pool.init (num bs / acs) }, s!"p {bs} {cs} {acs}")
   | "pa" :: _ =>
-    match Pool.alloc st.fl with
-    | some (i, fl') => ({ st with fl := fl' }, s!"pa {i}")
+    match Pool.alloc st.pool with
+    | some (i, p') => ({ st with pool := p' }, s!"pa {i}")
     | none => (st, "pa none")
-  | "pd" :: i :: _ => ({ st with fl := Pool.dealloc (num i) st.fl }, s!"pd {i}")
-  | "pf" :: _ => ({ st with fl := Pool.freeAll st.chunks }, "pf")
+  | "pd" :: i :: _ => ({ st with pool := Pool.dealloc (num i) st.pool }, s!"pd {i}")
+  | "pf" :: _ => ({ st with pool := Pool.init st.pool.k }, "pf")
   | ws => (st, s!"? {" ".intercalate ws}")
 
 partial def loop (h : IO.FS.Stream) (o : IO.FS.Stream) (st : S) : IO Unit := do
