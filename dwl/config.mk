@@ -8,8 +8,9 @@ PREFIX = /usr/local
 MANDIR = $(PREFIX)/share/man
 DATADIR = $(PREFIX)/share
 
-WLR_INCS = `$(PKG_CONFIG) --cflags wlroots-0.20`
-WLR_LIBS = `$(PKG_CONFIG) --libs wlroots-0.20`
+WLR_PC   = PKG_CONFIG_PATH=.wlroots/lib/pkgconfig $(PKG_CONFIG)
+WLR_INCS = `$(WLR_PC) --cflags wlroots-0.20`
+WLR_LIBS = `$(WLR_PC) --static --libs wlroots-0.20`
 
 # Allow using an alternative wlroots installation
 # This has to have all the includes required by wlroots, e.g:
