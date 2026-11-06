@@ -1,7 +1,7 @@
 #ifndef HOLYC_MAPOPS_H_
 #define HOLYC_MAPOPS_H_
 
-/* filter/fold/foreach over datastruct/array.h's type-erased Array -
+/* filter/fold/foreach over data/data_array.h's type-erased Array -
  * the functional trio this file's own one-line spec named. Function-
  * pointer + void* userdata based (C89 has no closures), same shape
  * this project already uses for callbacks elsewhere (Signal_Fn in

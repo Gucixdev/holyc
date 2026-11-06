@@ -6,7 +6,7 @@
  * storage. Deliberately NOT a file-format parser (that's codec/
  * ini.h's job, already real elsewhere in this repo) - this is
  * what an app's settings actually live in AFTER being loaded from
- * wherever (an ini file, argv via app/args.h, hardcoded defaults),
+ * wherever (an ini file, argv via core/core_args.h, hardcoded defaults),
  * queried with a default so a missing key is never a crash. */
 
 #include "data/hash/hash_hashmap.h"

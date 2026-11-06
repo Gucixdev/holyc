@@ -10,7 +10,7 @@
  * TCP only - no UDP. System headers (sys/socket.h, netinet/in.h,
  * arpa/inet.h, unistd.h, netdb.h) live directly here, this file's own
  * sole real consumer, matching this project's "no shared platform
- * wrapper" convention (see src/core/uuid4.h / src/utils/exe_path.h for
+ * wrapper" convention (see src/util/util_uuid4.h / src/util/util_exe_path.h for
  * the same pattern elsewhere).
  *
  * Every send/recv here loops until the requested byte count is fully

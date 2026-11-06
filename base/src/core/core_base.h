@@ -76,7 +76,7 @@ typedef __SIZE_TYPE__ size_t;
  * specific alignment - GCC/Clang's own `__attribute__((aligned))`
  * extension is the real, standard-in-practice way every C89 codebase
  * targeting these compilers actually does this (same "GCC extension
- * where the standard has nothing" stance mem/raii.h's cleanup
+ * where the standard has nothing" stance util/util_raii.h's cleanup
  * attribute and this project's own SIMD intrinsics below already
  * take). Place BEFORE the declaration, same position C11's real
  * `alignas` keyword uses: `HOLYC_ALIGNAS(16) u8 buf[64];` */

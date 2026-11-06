@@ -6,7 +6,7 @@
  * uniform f32 sample(s) in [0,1) as plain parameters, not a Rng
  * pointer or an Xorshift32 pointer. The caller draws the uniform
  * sample(s) from whichever generator it already has
- * (src/math/random/rng.h's PCG32, math_xorshift.h, anything else) and
+ * (src/math/math_rng.h's PCG32, math_xorshift.h, anything else) and
  * passes the number in - this avoids needing a generic RNG dispatch/
  * vtable layer that doesn't exist in this project, and keeps this file
  * testable with fixed, known inputs instead of needing a seeded
