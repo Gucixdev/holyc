@@ -11,7 +11,7 @@
 #    is installed ($REAL_FZF or /usr/bin/fzf), compared line by line
 
 cd "$(dirname "$0")/.." || exit 1
-BIN=./fzf
+BIN=bin/fzf
 [ -x "$BIN" ] || { echo "tests: build first (make)" >&2; exit 2; }
 REAL=${REAL_FZF:-/usr/bin/fzf}
 

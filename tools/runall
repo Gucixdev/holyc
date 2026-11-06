@@ -51,14 +51,14 @@ step() {
 picked() { [[ $want == "  " || $want == *" $1 "* ]]; }
 
 printf '%-13s %-8s %-7s %7s  %s\n' PROJECT STEP RESULT TIME 'LAST LINE OF THE LOG'
-for proj in base dmenu dwl fzf gael gtop lazytui lemonbar nnn notcoreutils vecindex; do
+for proj in base dmenu dwl gael lazytui lemonbar nnn notcoreutils vecindex; do
     picked "$proj" || continue
     case $proj in
         base)         step base tests sh tests/run
                       (( full )) && step base bench make bench ;;
         dmenu|dwl|lemonbar|nnn)
                       step "$proj" build make ;;
-        fzf|gtop|notcoreutils)
+        notcoreutils)
                       step "$proj" tests make test ;;
         gael)         step gael tests ./test
                       (( full )) && step gael bench ./bench ;;

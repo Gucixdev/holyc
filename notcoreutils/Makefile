@@ -3,7 +3,7 @@
 #
 #   make              build everything
 #   make cloc         build one tool: bin/cloc
-#   make test         run tests/run
+#   make test         run tests/run, tests/fzf and tests/gtop
 #   make install      PREFIX=/usr/local, binaries and man pages (sudo is NOT setuid)
 #   make clean
 #
@@ -16,10 +16,12 @@ OUT     ?= bin
 PREFIX  ?= /usr/local
 INC      = -Ideps/utils -Ideps/libutil -Ideps/singlefile/abstract
 
-TOOLS   := cb cloc colorado dv man netcat sudo tgates tree
+TOOLS   := cb cloc colorado dv fzf gtop man netcat sudo tgates tree
 
 LIBS_cb   = -lX11
 LIBS_sudo = -lcrypt
+LIBS_fzf  = -pthread -lm
+LIBS_gtop = -lm
 
 all: $(addprefix $(OUT)/,$(TOOLS))
 
@@ -35,12 +37,14 @@ endef
 $(foreach t,$(TOOLS),$(eval $(call tool,$(t))))
 
 test: all
-	sh tests/run
+	r=0; sh tests/run || r=1; sh tests/fzf || r=1; sh tests/gtop || r=1; exit $$r
 
 install: all
 	mkdir -p $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1
 	for t in $(TOOLS); do install -m 755 $(OUT)/$$t $(DESTDIR)$(PREFIX)/bin/$$t; done
 	for t in $(TOOLS); do [ -f $$t.1 ] && install -m 644 $$t.1 $(DESTDIR)$(PREFIX)/share/man/man1/$$t.1; done; true
+	mkdir -p $(DESTDIR)$(PREFIX)/share/gtop/commands
+	install -m 755 share/gtop/commands/* $(DESTDIR)$(PREFIX)/share/gtop/commands/
 	@echo "sudo was installed WITHOUT the setuid bit; add it yourself if you mean to use it"
 
 clean:

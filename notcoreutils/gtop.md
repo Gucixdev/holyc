@@ -33,8 +33,8 @@ A real frame from `gtop --snapshot 118 22 --keys a -f systemd` (anonymous mode, 
 ## Build
 
 ```sh
-make            # ./gtop
-make test       # tests/run: 46 checks against the live system
+make gtop       # bin/gtop, from gtop.c (one file)
+make test       # tests/gtop: 46 checks against the live system (with the other tools' tests)
 sudo make install   # PREFIX=/usr/local: bin/gtop and share/gtop/commands/
 ```
 
@@ -110,7 +110,8 @@ frame. In anonymous mode the command line, executable, working directory and use
 
 ## Command palette
 
-`commands/` holds plain shell scripts, the file name is the command. They get the extra words you
+`share/gtop/commands/` holds plain shell scripts (gtop looks in ./commands, next to its binary, then in
+../share/gtop/commands), the file name is the command. They get the extra words you
 typed first and then the pids of the marked rows (or the row under the cursor) as arguments:
 
 ```
@@ -129,7 +130,7 @@ gtop --snapshot [W H] [--keys KEYS] [-f SUBSTR]
 
 draws one frame as plain text. `KEYS` feeds keys first (`U D L R` arrows, `E` enter, anything else
 literally; a refresh happens after them), `-f` keeps only processes whose name contains `SUBSTR`.
-`tests/run` uses this for everything: views, marking, kill, palette, recording, anonymous mode.
+`tests/gtop` uses this for everything: views, marking, kill, palette, recording, anonymous mode.
 
 ## History
 

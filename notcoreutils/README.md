@@ -9,6 +9,8 @@ already does well are deliberately not reimplemented here.
 | `cloc` | counts lines of code per language: `cloc [--table \| --files] [ROOT]` |
 | `colorado` | stdin colorizer for log-level words, quoted strings, IPv4 addresses and numbers (the idea of grc/ccze, no config file) |
 | `dv` | disk view: sizes a directory recursively and prints the biggest entries first (a non-interactive slice of ncdu) |
+| `fzf` | fuzzy finder compatible with fzf 0.74's command line, in one file; see [fzf.md](fzf.md) |
+| `gtop` | system monitor TUI (CPU/GPU, RAM, disk, net, processes); its palette commands are in `share/gtop/commands`; see [gtop.md](gtop.md) |
 | `man` | minimal manual-page viewer: finds the page under `$MANPATH` or the FHS paths, gunzips, renders the common troff macros as readable text |
 | `netcat` | minimal TCP pipe: `netcat HOST PORT` connects, `netcat -l PORT` listens for one connection, stdin/stdout both ways |
 | `sudo` | doas-style privilege escalation: asks for your own password, runs the command; not installed setuid by `make install` |
