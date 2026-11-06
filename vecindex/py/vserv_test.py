@@ -142,6 +142,12 @@ try:
     check(http("POST", "/search", [1.0, 2.0])[0] == 400, "http: short vector -> 400")
     check(http("POST", "/search", "nonsense")[0] == 400, "http: not a vector -> 400")
     check(http("GET", "/nope")[0] == 404, "http: unknown path -> 404")
+    # ids beyond 64 bits used to wrap around into another row's id (found by tests/fuzz_proto.c): 2^64 + 7 was row 7
+    bad = [("POST", "/delete?id=18446744073709551623"), ("GET", "/get?id=18446744073709551623"), ("POST", "/delete?id="),
+           ("POST", "/delete?id=7x"), ("GET", "/range?lo=-&hi=10"), ("POST", "/delete?lo=0&hi=99999999999999999999")]
+    check(all(http(m, p)[0] == 400 for m, p in bad), "http: a query number that is empty, junk or beyond 64 bits -> 400")
+    check(http("GET", "/get?id=7")[0] == 200, "http: row 7 survived the deletes that named 2^64 + 7")
+    check(http("GET", "/get?id=-9223372036854775808")[0] == 404, "http: -2^63 parses (no such row)")
     # pipelining: two requests in one write, two answers in order
     s = socket.create_connection(("127.0.0.1", PORT))
     s.sendall(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\nGET /stats HTTP/1.1\r\nHost: x\r\n\r\n")

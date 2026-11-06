@@ -522,17 +522,26 @@ static i32 vs_ieq_(const char *a, const char *b, i32 n)
     return 1;
 }
 
-/* value of query parameter name= in the request target [t, t+tn), or def */
-static i64 vs_qparam_(const char *t, i32 tn, const char *name, i64 def)
+/* value of query parameter name= in the request target [t, t+tn), or def when it is not there. *bad becomes 1 when it
+ * is there but not a decimal 64-bit integer - empty, a sign alone, anything but & or # after the digits, or beyond 64
+ * bits (tests/fuzz_proto.c found 20 digits wrapping around into another row's id: /delete?id= removed that row) */
+static i64 vs_qparam_(const char *t, i32 tn, const char *name, i64 def, i32 *bad)
 {
     i32 nl = (i32)strlen(name), i;
     for (i = 0; i < tn; ++i) {
         if ((t[i] == '?' || t[i] == '&') && i + 1 + nl < tn && !memcmp(t + i + 1, name, (size_t)nl) && t[i + 1 + nl] == '=') {
-            i64 v = 0, sg = 1;
-            i32 j = i + 2 + nl;
-            if (j < tn && t[j] == '-') { sg = -1; ++j; }
-            for (; j < tn && t[j] >= '0' && t[j] <= '9'; ++j) v = v * 10 + (t[j] - '0');
-            return v * sg;
+            u64 v = 0, lim;
+            i32 j = i + 2 + nl, neg = 0, nd = 0;
+            if (j < tn && t[j] == '-') { neg = 1; ++j; }
+            lim = neg ? (u64)1 << 63 : ((u64)1 << 63) - 1;
+            for (; j < tn && t[j] >= '0' && t[j] <= '9'; ++j, ++nd) {
+                u64 d = (u64)(t[j] - '0');
+                if (v > (lim - d) / 10) { *bad = 1; return def; }
+                v = v * 10 + d;
+            }
+            if (!nd || (j < tn && t[j] != '&' && t[j] != '#')) { *bad = 1; return def; }
+            if (!neg || v == 0) return (i64)v;
+            return -(i64)(v - 1) - 1;                            /* -2^63 too, without overflow */
         }
     }
     return def;
@@ -589,7 +598,7 @@ static void vs_http_reply_(VsWorker *w, VsConn *c, const char *status, const cha
 static i32 vs_http_(VsWorker *w, VsConn *c)
 {
     const char *b = c->buf, *line, *t, *body;
-    i32 he = vs_head_end_(b, c->len), i, mlen, tn, clen = 0, keep = 1, raw = 0, got, k;
+    i32 he = vs_head_end_(b, c->len), i, mlen, tn, clen = 0, keep = 1, raw = 0, got, k, qbad = 0;
     char *o;
     if (he < 0) {
         if (c->len >= vs_reqcap) { VS_HTTP_LIT(w, c, "431 Request Header Fields Too Large", "{\"error\":\"headers too large\"}", 0); return -1; }
@@ -633,6 +642,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
 
 #define VS_IS(m, path) (mlen == (i32)strlen(m) && !memcmp(b, m, (size_t)mlen) && tn >= (i32)strlen(path) \
                         && !memcmp(t, path, strlen(path)) && (tn == (i32)strlen(path) || t[strlen(path)] == '?'))
+#define VS_BADQ() VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"a query parameter is not a 64-bit integer\"}", keep)
     if (vs_dir && !VS_IS("GET", "/health")) {                    /* a tenant server: /t/NAME/search?k=10 and so on */
         const char *why = "no tenant: the path starts /t/NAME/";
         i32 e = 3;
@@ -665,13 +675,13 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
     } else if (VS_IS("POST", "/search")) {
         char *p = o;
         double t0 = vs_now_();
-        if (raw ? clen != vs_dim * 4 : vs_json_vec_(w, body, clen) != 0) {
+        i64 kq = vs_qparam_(t, tn, "k", 10, &qbad);
+        if (qbad) VS_BADQ();
+        else if (raw ? clen != vs_dim * 4 : vs_json_vec_(w, body, clen) != 0) {
             VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"expected a vector of the store's dimension\"}", keep);
         } else {
             if (raw) vs_getf_(w->vec, (const u8 *)body, vs_dim);
-            k = (i32)vs_qparam_(t, tn, "k", 10);
-            if (k < 1) k = 1;
-            if (k > VS_MAXK) k = VS_MAXK;
+            k = kq < 1 ? 1 : (kq > VS_MAXK ? VS_MAXK : (i32)kq);
             got = vs_search_(w, c, w->vec, k);
             p = vs_str_(p, "{\"ids\":[");
             for (i = 0; i < got; ++i) { if (i) *p++ = ','; p = vs_i64_(p, w->ids[i]); }
@@ -682,13 +692,14 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
             vs_logsearch_(c, k, got, t0);
         }
     } else if (VS_IS("POST", "/add")) {
-        i64 id = vs_qparam_(t, tn, "id", -1);
+        i64 id = vs_qparam_(t, tn, "id", -1, &qbad);
         i32 hv = 1, txl = -1;
         const char *tx = w->txt;
         if (raw) { if (clen > vs_dim * 4) { tx = body + vs_dim * 4; txl = clen - vs_dim * 4; } }   /* f32[dim], then a text */
         else if (vs_json_vec_(w, body, clen) != 0 && (vs_json_obj_(w, body, clen, &hv, &txl) != 0 || !hv)) hv = 0;
         tx = raw ? tx : w->txt;
-        if (id < 0 || !hv || (raw && clen < vs_dim * 4))
+        if (qbad) VS_BADQ();
+        else if (id < 0 || !hv || (raw && clen < vs_dim * 4))
             VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"need ?id=N and a vector of the store's dimension\"}", keep);
         else {
             if (raw) vs_getf_(w->vec, (const u8 *)body, vs_dim);
@@ -697,8 +708,10 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         }
     } else if (VS_IS("GET", "/text")) {
         char *tx, *r, *p;
-        i32 n = vs_get_text_(w, c, vs_qparam_(t, tn, "id", -1), &tx);
-        if (n == -1) VS_HTTP_LIT(w, c, "404 Not Found", "{\"error\":\"no such id\"}", keep);
+        i64 id = vs_qparam_(t, tn, "id", -1, &qbad);
+        i32 n = qbad ? -1 : vs_get_text_(w, c, id, &tx);
+        if (qbad) VS_BADQ();
+        else if (n == -1) VS_HTTP_LIT(w, c, "404 Not Found", "{\"error\":\"no such id\"}", keep);
         else if (n < 0 || !(r = (char *)malloc((size_t)n * 6 + 16))) VS_HTTP_LIT(w, c, "500 Internal Server Error", "{\"error\":\"out of memory\"}", keep);
         else {
             p = vs_str_(r, "{\"text\":"); p = vs_jesc_(p, tx, n); *p++ = '}';
@@ -707,9 +720,10 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         }
     } else if (VS_IS("GET", "/range")) {
         char *p = o;
-        i64 mx = vs_qparam_(t, tn, "max", 100);
-        got = store_range(c->t->s, vs_qparam_(t, tn, "lo", 0), vs_qparam_(t, tn, "hi", -1), w->ids, (i32)(mx < 1 ? 1 : (mx > VS_MAXK ? VS_MAXK : mx)));
-        if (got < 0) VS_HTTP_LIT(w, c, "500 Internal Server Error", "{\"error\":\"out of memory\"}", keep);
+        i64 mx = vs_qparam_(t, tn, "max", 100, &qbad), lo = vs_qparam_(t, tn, "lo", 0, &qbad), hi = vs_qparam_(t, tn, "hi", -1, &qbad);
+        got = qbad ? 0 : store_range(c->t->s, lo, hi, w->ids, (i32)(mx < 1 ? 1 : (mx > VS_MAXK ? VS_MAXK : mx)));
+        if (qbad) VS_BADQ();
+        else if (got < 0) VS_HTTP_LIT(w, c, "500 Internal Server Error", "{\"error\":\"out of memory\"}", keep);
         else {
             p = vs_str_(p, "{\"ids\":[");
             for (i = 0; i < got; ++i) { if (i) *p++ = ','; p = vs_i64_(p, w->ids[i]); }
@@ -720,12 +734,12 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         char *p = o;
         i32 hv, txl;
         double t0 = vs_now_();
-        if (vs_json_obj_(w, body, clen, &hv, &txl) != 0 || (!hv && txl <= 0))
+        i64 kq = vs_qparam_(t, tn, "k", 10, &qbad);
+        if (qbad) VS_BADQ();
+        else if (vs_json_obj_(w, body, clen, &hv, &txl) != 0 || (!hv && txl <= 0))
             VS_HTTP_LIT(w, c, "400 Bad Request", "{\"error\":\"expected {\\\"vector\\\": [...], \\\"text\\\": \\\"...\\\"}\"}", keep);
         else {
-            k = (i32)vs_qparam_(t, tn, "k", 10);
-            if (k < 1) k = 1;
-            if (k > VS_MAXK) k = VS_MAXK;
+            k = kq < 1 ? 1 : (kq > VS_MAXK ? VS_MAXK : (i32)kq);
             got = vs_hybrid_(w, c, hv, w->txt, txl > 0 ? txl : 0, k);
             p = vs_str_(p, "{\"ids\":[");
             for (i = 0; i < got; ++i) { if (i) *p++ = ','; p = vs_i64_(p, w->ids[i]); }
@@ -737,7 +751,9 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         }
     } else if (VS_IS("GET", "/get")) {
         char *p = o;
-        if (store_get_vec(c->t->s, vs_qparam_(t, tn, "id", -1), w->vec) != 0)
+        i64 id = vs_qparam_(t, tn, "id", -1, &qbad);
+        if (qbad) VS_BADQ();
+        else if (store_get_vec(c->t->s, id, w->vec) != 0)
             VS_HTTP_LIT(w, c, "404 Not Found", "{\"error\":\"no such id\"}", keep);
         else {
             p = vs_str_(p, "{\"vector\":[");
@@ -747,11 +763,14 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
         }
     } else if (VS_IS("POST", "/delete")) {
         char *p = o;
-        i64 lo = vs_qparam_(t, tn, "lo", -1), hi = vs_qparam_(t, tn, "hi", -1), id = vs_qparam_(t, tn, "id", -1);
-        p = vs_str_(p, "{\"removed\":");
-        p = vs_i64_(p, lo >= 0 && hi >= lo ? vs_del_(c, lo, hi) : vs_del_(c, id, id));
-        *p++ = '}';
-        vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
+        i64 lo = vs_qparam_(t, tn, "lo", -1, &qbad), hi = vs_qparam_(t, tn, "hi", -1, &qbad), id = vs_qparam_(t, tn, "id", -1, &qbad);
+        if (qbad) VS_BADQ();
+        else {
+            p = vs_str_(p, "{\"removed\":");
+            p = vs_i64_(p, lo >= 0 && hi >= lo ? vs_del_(c, lo, hi) : vs_del_(c, id, id));
+            *p++ = '}';
+            vs_http_reply_(w, c, "200 OK", o, (i32)(p - o), keep);
+        }
     } else if (VS_IS("POST", "/build")) {
         vs_build_(c);
         VS_HTTP_LIT(w, c, "200 OK", "{\"ok\":true}", keep);
@@ -766,6 +785,7 @@ static i32 vs_http_(VsWorker *w, VsConn *c)
     } else {
         VS_HTTP_LIT(w, c, "404 Not Found", "{\"error\":\"not found\"}", keep);
     }
+#undef VS_BADQ
 #undef VS_IS
     return he + clen;
 }
