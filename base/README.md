@@ -1,6 +1,6 @@
 # base
 
-A library of single-file C headers: 107 modules, 129 test programs, 6 benchmarks. Types, memory
+A library of single-file C headers: 107 modules, 130 test programs, 6 benchmarks. Types, memory
 allocators, queues and job pools, data structures, hashing, math and noise, binary and text
 formats, crypto, networking, and the small utilities that keep coming up.
 
@@ -49,10 +49,11 @@ THIRD_PARTY/  licence texts of the code some headers are ported from, see THIRD_
 parallel; its `no_heap` check fails on any malloc, calloc, realloc or free call in `src/`: memory
 comes from arenas, pools and mmap. `make bench` runs `bench/`: the arena against glibc malloc, the
 pool against malloc/free, the job pool against a thread per job, the hash table and Morton
-encoding against naive versions. `bench_alloc` on 2026-11-06 (2 vCPU Xeon at 2.80 GHz, glibc
-2.39, gcc 13.3 -O2, medians of 9): 1M blocks of 16-256 B written and released took 26 ms on the
-arena and 170 ms with malloc/free (6.5x); 10M alloc-or-free operations on 64 B objects took 97 ms
-on the pool and 195 ms with malloc/free (2.0x). `lean4/` proves the arena's and the pool's
+encoding against naive versions. `bench_alloc` on 2026-11-06 (2 vCPU Xeon at 2.80 GHz, kernel
+6.18, glibc 2.39, gcc 13.3 -O2, medians), against malloc/free: 1M blocks of 16-256 B written and
+released 21 ms against 125 ms; 10M alloc-or-free operations on 64 B objects in a pool 88 ms against
+142 ms; a u32 array grown to 20M elements 13 ms against 54 ms with realloc; 256 MiB committed for
+the first time 50 ms against 124 ms; 64 MiB from arena_calloc 0.39 ms against 2.6 ms from calloc. `lean4/` proves the arena's and the pool's
 bookkeeping and holds the C to it (see `lean4/README.md`).
 
 ## What is in it, module by module
@@ -63,8 +64,8 @@ bookkeeping and holds the C to it (see `lean4/README.md`).
 |---|---|
 | `core_base.h` | **the base header**: constants (`HOLYC_PI`, `TAU`, `E`, `SQRT2`, golden ratio, deg/rad); fixed-width types `i8..i64 u8..u64 f32 f64`, fixed-point `fp16/fp32/fp64` (Q formats), byte/word array views `a8..a64`, bit tricks, FNV-1a, `memset_explicit`, x86 SSE/AVX sums, dots, min and max; `Option`/`Result`/`TRY`/`Future`/`DEFER`/`Async_Signal` (tagged unions you take apart with a `switch`, no hidden control flow); `str_*`/`mem_*` (own replacements for the `<string.h>` functions the library needs) and `String_View` (chop, trim, split, compare, parse numbers); `Arena_String` (growable text on an arena); `print_*` (output with `write(2)` and own integer conversion, no `printf`) |
 | `core_contracts.h` | `HOLYC_REQUIRES`/`ENSURES`/`INVARIANT` design-by-contract macros: ordinary trap-based assertions in a normal build, and under CBMC (a bounded model checker) the same macros become assumptions and proof obligations |
-| `core_arena_alloc.h` | the arena: linked regions on mmap (by default one 1 GiB reservation, committed as it is written; no heap), aligned alloc, `realloc`, `strdup`/`memdup`/`sprintf`, snapshot/rewind/reset/trim, growable-array and string-builder macros; plus `arena_calloc`, `arena_used`, `arena_reserved` |
-| `core_pool_alloc.h` | fixed-chunk free-list pool over a buffer you give it: O(1) alloc and free, no malloc, no fragmentation |
+| `core_arena_alloc.h` | the arena: linked regions on mmap (by default one 1 GiB reservation, committed as it is written, past its first 2 MiB on transparent huge pages; no heap), aligned alloc, `realloc` that grows the last block in place, `strdup`/`memdup`/`sprintf`, snapshot/rewind/reset/trim, growable-array and string-builder macros; plus `arena_calloc` (clears only memory handed out before), `arena_decommit` (pages above the position back to the kernel), `arena_used`, `arena_reserved` |
+| `core_pool_alloc.h` | fixed-chunk free-list pool over a buffer you give it: O(1) alloc and free, O(1) init that touches no chunk, no malloc, no fragmentation |
 | `core_persistant_arena.h` | bump arena in an `mmap(MAP_SHARED)` file: the content and the "how much is used" both survive a restart |
 | `core_persistant_pool.h` | the same pool, file-backed: chunk content and which chunks are allocated survive a restart |
 | `core_ref_count.h` | manual reference counting: `rc_init` with an on-zero callback, `rc_retain`, `rc_release`, `rc_count` |

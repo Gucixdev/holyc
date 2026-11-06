@@ -4,7 +4,10 @@
 /* Fixed-chunk free-list pool. No malloc here - the caller hands over an
  * existing buffer (carve it out of an Arena, a static array, whatever) and
  * this just slices it into equal chunks it can hand out and take back in
- * O(1), no fragmentation because every chunk is the same size. */
+ * O(1), no fragmentation because every chunk is the same size. pool_init and
+ * pool_free_all are O(1) and write no chunk: a chunk is first touched when it
+ * is handed out (chunks never handed out come from `fresh` in address order),
+ * so a big pool commits memory only as it fills. */
 
 #include "core/core_base.h"
 #include "core/core_contracts.h"
@@ -22,7 +25,9 @@ typedef struct {
     u8 *buffer;
     size_t buffer_size;
     size_t chunk_size;
-    Pool_Free_Node *head;
+    Pool_Free_Node *head; /* chunks handed back */
+    u8 *fresh;            /* chunks from here up to limit were never handed out */
+    u8 *limit;            /* buffer + (buffer_size / chunk_size) * chunk_size */
 } Pool;
 
 size_t pool_align_up(size_t n, size_t align);
@@ -44,16 +49,8 @@ size_t pool_align_up(size_t n, size_t align)
 
 void pool_free_all(Pool *p)
 {
-    size_t chunk_count = p->buffer_size / p->chunk_size;
-    size_t i;
-    Pool_Free_Node *node;
-
     p->head = NULL;
-    for (i = 0; i < chunk_count; i++) {
-        node = (Pool_Free_Node *)(p->buffer + i * p->chunk_size);
-        node->next = p->head;
-        p->head = node;
-    }
+    p->fresh = p->buffer;
 }
 
 void pool_init(Pool *p, void *buffer, size_t buffer_size, size_t chunk_size)
@@ -66,6 +63,7 @@ void pool_init(Pool *p, void *buffer, size_t buffer_size, size_t chunk_size)
     p->buffer = (u8 *)buffer;
     p->buffer_size = buffer_size;
     p->chunk_size = aligned_chunk_size;
+    p->limit = p->buffer + buffer_size / aligned_chunk_size * aligned_chunk_size;
     pool_free_all(p);
 }
 
@@ -73,20 +71,23 @@ void *pool_alloc(Pool *p)
 {
     Pool_Free_Node *node = p->head;
     void *result;
-
-    POOL_ASSERT(node && "pool out of chunks");
-    if (!node) return NULL;
-
-    p->head = node->next;
-    result = node; /* not zeroed - no hidden cost, caller writes what it needs */
-
+    if (node != NULL) {
+        p->head = node->next;
+        result = node;
+    } else if (p->fresh < p->limit) {
+        result = p->fresh;
+        p->fresh += p->chunk_size;
+    } else {
+        POOL_ASSERT(0 && "pool out of chunks");
+        return NULL;
+    }
+    /* not zeroed - no hidden cost, caller writes what it needs */
     /* the pool's own "never overflows its region" property - the exact
      * shape of arena_alloc's own flagship ENSURES, applied here to a
      * fixed-chunk free-list instead of a bump-pointer arena: every
      * pointer handed out must lie fully within the buffer this pool
      * was pool_init'd with, chunk_size and all. */
     HOLYC_ENSURES((u8 *)result >= p->buffer && (u8 *)result + p->chunk_size <= p->buffer + p->buffer_size);
-
     return result;
 }
 

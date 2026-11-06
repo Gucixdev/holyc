@@ -52,7 +52,7 @@ static void *arena_alloc_glibc_(Arena *a, size_t size_bytes)
         size_t capacity = ARENA_REGION_DEFAULT_CAPACITY;
         if (capacity < size) capacity = size;
         a->end = (Arena_Region *)malloc(offsetof(Arena_Region, data) + sizeof(u64) * capacity);
-        a->end->next = NULL; a->end->count = 0; a->end->capacity = capacity;
+        a->end->next = NULL; a->end->count = 0; a->end->high = 0; a->end->capacity = capacity;
         a->begin = a->end;
     }
     while (a->end->count + size > a->end->capacity && a->end->next != NULL) a->end = a->end->next;
@@ -61,7 +61,7 @@ static void *arena_alloc_glibc_(Arena *a, size_t size_bytes)
         if (capacity < size) capacity = size;
         a->end->next = (Arena_Region *)malloc(offsetof(Arena_Region, data) + sizeof(u64) * capacity);
         a->end = a->end->next;
-        a->end->next = NULL; a->end->count = 0; a->end->capacity = capacity;
+        a->end->next = NULL; a->end->count = 0; a->end->high = 0; a->end->capacity = capacity;
     }
     result = &a->end->data[a->end->count];
     a->end->count += size;

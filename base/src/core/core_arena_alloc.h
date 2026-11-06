@@ -35,6 +35,9 @@ struct Arena_Region {
     Arena_Region *next;
     size_t count;
     size_t capacity;
+    size_t high; /* with count: max(high, count) granules were ever handed out here; data above that is still
+                  * zero from mmap. Kept up to date when count drops (rewind, reset), so arena_alloc never
+                  * touches it. */
     u64 data[1]; /* struct-hack: real allocation is offsetof(Arena_Region, data) + capacity*sizeof(u64) */
 };
 
@@ -94,7 +97,8 @@ void arena_rewind(Arena *a, Arena_Mark m);
 void arena_free(Arena *a);
 void arena_trim(Arena *a);
 
-void *arena_calloc(Arena *a, size_t size_bytes);       /* zeroed */
+void *arena_calloc(Arena *a, size_t size_bytes);       /* zeroed; memory never handed out is not written */
+void arena_decommit(Arena *a);                         /* pages above the current position back to the kernel */
 size_t arena_used(const Arena *a);                     /* bytes handed out, 8-byte granules */
 size_t arena_reserved(const Arena *a);                 /* bytes held in regions */
 
@@ -153,6 +157,7 @@ size_t arena_reserved(const Arena *a);                 /* bytes held in regions 
 
 #include <stdio.h>
 #include <sys/mman.h>
+#include <unistd.h> /* sysconf */
 
 
 #if ARENA_BACKEND == ARENA_BACKEND_LINUX_MMAP
@@ -167,6 +172,7 @@ Arena_Region *new_region(size_t capacity)
     ARENA_ASSERT(r != MAP_FAILED);
     r->next = NULL;
     r->count = 0;
+    r->high = 0;
     r->capacity = capacity;
     return r;
 }
@@ -201,15 +207,34 @@ void free_region(Arena_Region *r)
 #define ARENA_FLAT_RESERVE_BYTES ((size_t)1 << 30) /* 1GB of address space, reserved not committed */
 #endif
 
+#ifndef ARENA_HUGE_BYTES
+#define ARENA_HUGE_BYTES ((size_t)2 << 20) /* an x86-64 transparent huge page */
+#endif
+
 Arena_Region *new_region(size_t capacity)
 {
     Arena_Region *r;
+    u8 *m;
     size_t requested_bytes = offsetof(Arena_Region, data) + sizeof(u64) * capacity;
     size_t size_bytes = requested_bytes > ARENA_FLAT_RESERVE_BYTES ? requested_bytes : ARENA_FLAT_RESERVE_BYTES;
 
-    r = (Arena_Region *)mmap(NULL, size_bytes, PROT_READ | PROT_WRITE,
-                        MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
-    if (r == MAP_FAILED) {
+    /* Reserve 2 MiB more, start the region on a 2 MiB boundary and hand the slack back, so that past its
+     * first 2 MiB the region can sit on transparent huge pages (MADV_HUGEPAGE): one page fault and one TLB
+     * entry per 2 MiB instead of 512. Writing 512 MiB for the first time took 69-79 ms that way against
+     * 190-300 ms on 4 KiB pages (2 vCPU Xeon, kernel 6.18, THP in madvise mode, 2026-11-06). The first
+     * 2 MiB stay on 4 KiB pages, so an arena that stays small never holds a 2 MiB page. */
+    size_bytes = (size_bytes + ARENA_HUGE_BYTES - 1) & ~(ARENA_HUGE_BYTES - 1);
+    m = (u8 *)mmap(NULL, size_bytes + ARENA_HUGE_BYTES, PROT_READ | PROT_WRITE,
+                   MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
+    if (m != (u8 *)MAP_FAILED) {
+        u8 *p = (u8 *)(((size_t)m + ARENA_HUGE_BYTES - 1) & ~(ARENA_HUGE_BYTES - 1));
+        if (p != m) munmap(m, (size_t)(p - m));
+        if (p != m + ARENA_HUGE_BYTES) munmap(p + size_bytes, (size_t)(m + ARENA_HUGE_BYTES - p));
+#ifdef MADV_HUGEPAGE
+        madvise(p + ARENA_HUGE_BYTES, size_bytes - ARENA_HUGE_BYTES, MADV_HUGEPAGE);
+#endif
+        r = (Arena_Region *)p;
+    } else {
         /* the over-reservation itself failed - not a real out-of-memory
          * condition (MAP_NORESERVE reservations are cheap and this
          * machine's overcommit=0 heuristic accepts them fine, but a
@@ -228,6 +253,7 @@ Arena_Region *new_region(size_t capacity)
     ARENA_ASSERT(r != MAP_FAILED);
     r->next = NULL;
     r->count = 0;
+    r->high = 0;
     /* real capacity is the whole reservation, not just what this call
      * asked for - that's the entire point, over-reserve once */
     r->capacity = (size_bytes - offsetof(Arena_Region, data)) / sizeof(u64);
@@ -245,10 +271,12 @@ void free_region(Arena_Region *r)
 #error "Unknown ARENA_BACKEND"
 #endif
 
-void *arena_alloc(Arena *a, size_t size_bytes)
+/* arena_alloc's slow path: the first region, a later region after a rewind, or a new one */
+static void *arena_alloc_slow_(Arena *a, size_t size)
 {
-    size_t size = (size_bytes + sizeof(u64) - 1) / sizeof(u64);
     void *result;
+
+    if (size > ((size_t)-1 >> 4)) return NULL; /* no region holds it, and its byte size would wrap */
 
     if (a->end == NULL) {
         size_t capacity = ARENA_REGION_DEFAULT_CAPACITY;
@@ -302,6 +330,19 @@ void *arena_alloc(Arena *a, size_t size_bytes)
     return result;
 }
 
+void *arena_alloc(Arena *a, size_t size_bytes)
+{
+    /* granules, rounded up without (size_bytes + 7) wrapping around near SIZE_MAX */
+    size_t size = size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) != 0);
+    Arena_Region *r = a->end;
+    if (r != NULL && size <= r->capacity - r->count) { /* room in the current region: a bump, nothing else */
+        void *result = &r->data[r->count];
+        r->count += size;
+        return result;
+    }
+    return arena_alloc_slow_(a, size);
+}
+
 void *arena_alloc_aligned(Arena *a, size_t size_bytes, size_t align)
 {
     size_t addr, aligned_addr;
@@ -313,18 +354,21 @@ void *arena_alloc_aligned(Arena *a, size_t size_bytes, size_t align)
 
 void *arena_realloc(Arena *a, void *oldptr, size_t oldsz, size_t newsz)
 {
-    char *newptr_char, *oldptr_char;
-    size_t i;
+    Arena_Region *r = a->end;
+    size_t og, ng;
     void *newptr;
 
     if (newsz <= oldsz) return oldptr;
-
-    newptr = arena_alloc(a, newsz);
-    newptr_char = (char *)newptr;
-    oldptr_char = (char *)oldptr;
-    for (i = 0; i < oldsz; ++i) {
-        newptr_char[i] = oldptr_char[i];
+    og = oldsz / sizeof(u64) + (oldsz % sizeof(u64) != 0);
+    ng = newsz / sizeof(u64) + (newsz % sizeof(u64) != 0);
+    /* The block is the region's last one and the region has room: it grows where it is, nothing is
+     * copied. A growable array nothing else allocates after (arena_da_append) never moves. */
+    if (oldptr != NULL && r != NULL && (u64 *)oldptr + og == &r->data[r->count] && ng - og <= r->capacity - r->count) {
+        r->count += ng - og;
+        return oldptr;
     }
+    newptr = arena_alloc(a, newsz);
+    if (newptr != NULL && oldsz > 0) arena_memcpy(newptr, oldptr, oldsz);
     return newptr;
 }
 
@@ -417,10 +461,17 @@ Arena_Mark arena_snapshot(Arena *a)
     return m;
 }
 
+/* count is about to drop: keep the most it has been, so arena_calloc knows what was handed out */
+static void arena_keep_high_(Arena_Region *r)
+{
+    if (r->count > r->high) r->high = r->count;
+}
+
 void arena_reset(Arena *a)
 {
     Arena_Region *r;
     for (r = a->begin; r != NULL; r = r->next) {
+        arena_keep_high_(r);
         r->count = 0;
     }
     a->end = a->begin;
@@ -435,8 +486,10 @@ void arena_rewind(Arena *a, Arena_Mark m)
         return;
     }
 
+    arena_keep_high_(m.region);
     m.region->count = m.count;
     for (r = m.region->next; r != NULL; r = r->next) {
+        arena_keep_high_(r);
         r->count = 0;
     }
     a->end = m.region;
@@ -468,13 +521,33 @@ void arena_trim(Arena *a)
 
 void *arena_calloc(Arena *a, size_t size_bytes)
 {
-    void *p = arena_alloc(a, size_bytes);
-    if (p) {
-        u8 *b = (u8 *)p;
-        size_t n = (size_bytes + sizeof(u64) - 1) / sizeof(u64) * sizeof(u64), i;
-        for (i = 0; i < n; i++) b[i] = 0;
+    u8 *p = (u8 *)arena_alloc(a, size_bytes);
+    if (p != NULL) {
+        /* p is in a->end. From max(high, count before this call) granules on, nothing was ever handed out:
+         * still zero from mmap, so not written (or committed) here. Only the part of the block below the
+         * high-water mark is cleared. */
+        Arena_Region *r = a->end;
+        size_t off = (size_t)(p - (u8 *)r->data), dirty = r->high * sizeof(u64);
+        size_t n = (size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) != 0)) * sizeof(u64);
+        if (dirty > off) memset(p, 0, dirty - off < n ? dirty - off : n);
     }
     return p;
+}
+
+/* Pages wholly above each region's position go back to the kernel (MADV_DONTNEED): after a big scope is
+ * rewound, resident memory drops to what is still in use. The pages read as zero again (high drops with
+ * them) and are committed again when written. */
+void arena_decommit(Arena *a)
+{
+    Arena_Region *r;
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    for (r = a->begin; r != NULL; r = r->next) {
+        u8 *data = (u8 *)r->data;
+        u8 *top = data + (r->high > r->count ? r->high : r->count) * sizeof(u64);
+        u8 *from = (u8 *)(((size_t)(data + r->count * sizeof(u64)) + page - 1) & ~(page - 1));
+        if (from < top && madvise(from, (size_t)(top - from), MADV_DONTNEED) == 0)
+            r->high = (size_t)(from - data) / sizeof(u64);
+    }
 }
 
 size_t arena_used(const Arena *a)
