@@ -11,3 +11,9 @@ bench/tune
 bench/results-*/
 bench/.venv/
 py/.venv/
+# what libFuzzer writes into the current directory when run by hand (tools/fuzz writes into .build/fuzz)
+/crash-*
+/leak-*
+/oom-*
+/timeout-*
+/slow-unit-*

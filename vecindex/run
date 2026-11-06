@@ -207,6 +207,25 @@ else
     echo "  (sanitizers unavailable - skipped)"; rec "store ASan/UBSan" skip "no sanitizer"
 fi
 
+# ---- the fuzz targets' seeds and every input that once made one fail, replayed under ASan/UBSan with gcc alone;
+# ---- tools/fuzz does the fuzzing itself, with clang's libFuzzer ----
+echo "fuzz regressions (tests/fuzz)"
+fzn=0; fzs=ok
+for t in proto store; do
+    extra=(); [[ $t == proto ]] && extra=(-DVSERV_NO_TLS)
+    if ! "$CC" -std=gnu99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined -march=native -DFUZZ_MAIN \
+            "${extra[@]}" -Isrc "tests/fuzz_$t.c" -lm -lpthread -o "$OUT/fuzz_${t}_replay" 2>/dev/null; then [[ $fzs == ok ]] && fzs=skip; continue; fi
+    rm -rf "$OUT/fuzz_seeds/$t"; mkdir -p "$OUT/fuzz_seeds/$t"          # .gz seeds unpacked, the rest as they are
+    for f in "tests/fuzz/$t"/*; do case $f in *.gz) gzip -dc "$f" > "$OUT/fuzz_seeds/$t/$(basename "$f" .gz)";; *) cp "$f" "$OUT/fuzz_seeds/$t/";; esac; done
+    if r=$("./$OUT/fuzz_${t}_replay" "$OUT/fuzz_seeds/$t" 2>&1); then
+        echo "  ok   $t: $(grep -o '[0-9]* inputs' <<<"$r")"; fzn=$((fzn + $(grep -o '[0-9]* inputs' <<<"$r" | grep -o '^[0-9]*')))
+    else
+        tail -5 <<<"$r"; echo "  ^ fuzz replay ($t) FAILED"; fzs=FAIL; fail=1
+    fi
+done
+case $fzs in ok) rec "fuzz regressions" ok "$fzn inputs, ASan/UBSan";; skip) rec "fuzz regressions" skip "no sanitizer";;
+             *) rec "fuzz regressions" FAIL;; esac
+
 # ---- crash safety for the store itself, with background snapshots running: kill -9 the writer (and in every other
 # ---- round its snapshot child too) at random moments; every synced row must be there exactly once ----
 echo "store crash test (journal + background snapshots)"
