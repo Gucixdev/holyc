@@ -982,7 +982,7 @@ static RagStore *store_load_v5_(Arena *a, const char *path, FILE *f, const i32 *
         if (fseeko(f, (off_t)(o_kind + 1), SEEK_SET) != 0) { fclose(f); store_destroy(s); return (RagStore *)0; }
         s->idx = engine_load(&s->idx_arena, f);
         fclose(f);
-        if (!s->idx) { store_destroy(s); return (RagStore *)0; }
+        if (!s->idx || s->idx->dim != s->dim) { store_destroy(s); return (RagStore *)0; }   /* another dimension: not ours */
         s->built_upto = live;
     } else {
         if (kind == 2) s->tq = store_tq_r_(map, len, f, o_kind + 1, live);
@@ -1058,7 +1058,7 @@ static RagStore *store_load_impl_(Arena *a, const char *path, i32 ro)
     if (has_idx) {
         s->idx = engine_load(&s->idx_arena, f);
         fclose(f);
-        if (!s->idx) { store_destroy(s); return (RagStore *)0; }
+        if (!s->idx || s->idx->dim != s->dim) { store_destroy(s); return (RagStore *)0; }
         s->built_upto = live;
     } else {
         fclose(f);

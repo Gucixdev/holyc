@@ -10,6 +10,7 @@
  * ================================================================== */
 #ifdef ENGINE_SERIALIZE
 #include <stdio.h>
+#include <sys/stat.h>
 
 #define ENG_SER_MAGIC   0x35584756u   /* 'VGX5' - v5 adds the ENG_HNSW vector-graph topology */
 
@@ -58,6 +59,21 @@ static int engs_rle_(FILE *f, void *p, size_t esz, size_t n)
     if (esz > 1 && eng_host_be_()) eng_bswap_(p, esz, n);
     return 0;
 }
+/* Bytes left in f from where it stands. An index read from a file nothing vouched for - one older than v9, a load
+ * that checked only the header's blocks (VECINDEX_VERIFY=1), VECINDEX_VERIFY=0 - may claim any count, so no array is
+ * allocated that the rest of the file could not fill: tests/fuzz_store.c saw an IVF header ask the arena for more
+ * than it could map, which the arena answers with a trap. */
+static i64 eng_left_(FILE *f)
+{
+    struct stat st;
+    off_t at = ftello(f);
+    if (at < 0 || fstat(fileno(f), &st) != 0) return 0;
+    return (i64)st.st_size - (i64)at;
+}
+/* n elements of esz bytes, n from the file: 1 when they fit in what is left of it */
+static int eng_fits_(FILE *f, i64 n, i64 esz) { return n >= 0 && n <= eng_left_(f) / esz; }
+static int eng_scheme_ok_(i32 s) { return s >= ENG_Q1 && s <= ENG_Q4FS && s != ENG_NS; }
+
 #define ENG_W32(f, p, n)  engs_wle_((f), (p), 4, (n))
 #define ENG_R32(f, p, n)  engs_rle_((f), (p), 4, (n))
 #define ENG_W64(f, p, n)  engs_wle_((f), (p), 8, (n))
@@ -83,6 +99,8 @@ static void *eng_q_load_(Arena *a, FILE *f, EngScheme s, i32 dim)
     i32 L = eng_levels_(s), hdr[3], cnt;
     if (ENG_R32(f, hdr, 3) || ENG_R32(f, &h->l2_lambda, 1)) return (void *)0;
     h->arena = a; h->dim = hdr[0]; h->code_bytes = hdr[1]; h->count = hdr[2];
+    if (dim < 0 || hdr[0] != dim || L < 2 || hdr[1] < 0 || !eng_fits_(f, (i64)dim * L * 2, 4)
+        || !eng_fits_(f, (i64)hdr[2], (i64)hdr[1] + 8)) return (void *)0;
     cnt = h->count > 0 ? h->count : 1;
     h->centroid = (f32 *)arena_alloc(a, (size_t)dim * sizeof(f32));
     h->codebook = (f32 *)arena_alloc(a, (size_t)dim * L * sizeof(f32));
@@ -124,6 +142,8 @@ static void *eng_qmix_load_(Arena *a, FILE *f)
     if (ENG_R32(f, hdr, 6) || ENG_R32(f, &ix->l2_lambda, 1)) return (void *)0;
     ix->arena = a; ix->dim = hdr[0]; ix->code_bytes = hdr[1]; ix->count = hdr[2];
     ix->n_hi = hdr[3]; ix->n_mid = hdr[4]; ix->n_lo = hdr[5];
+    if (hdr[3] < 0 || hdr[4] < 0 || hdr[5] < 0 || (i64)hdr[3] + hdr[4] + hdr[5] != (i64)hdr[0]
+        || !eng_fits_(f, (i64)hdr[0], 4) || !eng_fits_(f, (i64)hdr[2], 8)) return (void *)0;
     cnt = ix->count > 0 ? ix->count : 1;
     ix->perm = (i32 *)arena_alloc(a, (size_t)(ix->dim > 0 ? ix->dim : 1) * sizeof(i32));
     ix->rn2  = (f32 *)arena_alloc(a, (size_t)cnt * sizeof(f32));
@@ -148,12 +168,14 @@ static int eng_ivf_save_(FILE *f, const Ivf *v)
         || ENG_W64(f, v->list_off,  (size_t)(v->n_clusters + 1))
         || ENG_W64(f, v->cluster_of,(size_t)v->n);
 }
-static Ivf *eng_ivf_load_(Arena *a, FILE *f)
+static Ivf *eng_ivf_load_(Arena *a, FILE *f, i32 dim)
 {
     Ivf *v = (Ivf *)arena_alloc(a, sizeof(Ivf));
     i32 hdr[3];
     if (ENG_R32(f, hdr, 3)) return (Ivf *)0;
     v->arena = a; v->dim = hdr[0]; v->n_clusters = hdr[1]; v->n = hdr[2];
+    if (hdr[0] != dim || hdr[1] < 1 || !eng_fits_(f, (i64)hdr[1], (i64)dim * 4 + 8) || !eng_fits_(f, (i64)hdr[2], 16))
+        return (Ivf *)0;
     v->centroids  = (f32 *)arena_alloc(a, (size_t)v->n_clusters * v->dim * sizeof(f32));
     v->list_ids   = (i64 *)arena_alloc(a, (size_t)(v->n > 0 ? v->n : 1) * sizeof(i64));
     v->list_off   = (i64 *)arena_alloc(a, (size_t)(v->n_clusters + 1) * sizeof(i64));
@@ -239,6 +261,9 @@ EngIndex *engine_load(Arena *a, FILE *f)
     if (ENG_R32(f, &e->count, 1)
         || ENG_R32(f, &e->recall, 1))
         return (EngIndex *)0;
+    if (e->dim < 1 || e->count < 0 || hdr[1] < ENG_FLAT || hdr[1] > ENG_HNSW || !eng_scheme_ok_(hdr[2])
+        || (e->topo == ENG_CASCADE && !eng_scheme_ok_(hdr[6])))
+        return (EngIndex *)0;
     if (e->topo == ENG_FLAT) {
         e->flat_ix = eng_qany_load_(a, f, e->scheme, e->dim);
         return e->flat_ix ? e : (EngIndex *)0;
@@ -251,6 +276,7 @@ EngIndex *engine_load(Arena *a, FILE *f)
     if (e->topo == ENG_HNSW) {
         size_t nv = (size_t)e->count * e->dim;
         HnswParams hp;
+        if (!eng_fits_(f, (i64)nv, 4)) return (EngIndex *)0;
         e->vhnsw_pts = (f32 *)arena_alloc(a, nv * sizeof(f32));
         if (ENG_R32(f, &e->vhnsw_seed, 1) || ENG_R32(f, e->vhnsw_pts, nv))
             return (EngIndex *)0;
@@ -259,7 +285,7 @@ EngIndex *engine_load(Arena *a, FILE *f)
         e->vhnsw = hnsw_build(a, e->vhnsw_pts, e->count, e->dim, hp);
         return e->vhnsw ? e : (EngIndex *)0;
     }
-    e->ivf = eng_ivf_load_(a, f);
+    e->ivf = eng_ivf_load_(a, f, e->dim);
     if (!e->ivf) return (EngIndex *)0;
     {
         u8 has_router;
