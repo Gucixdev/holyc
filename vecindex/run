@@ -231,6 +231,19 @@ case $fzs in ok) rec "fuzz regressions" ok "$fzn inputs, ASan/UBSan";; skip) rec
 echo "store crash test (journal + background snapshots)"
 "$CC" -std=gnu99 -O2 -march=native -Isrc tests/scrash.c -lm -lpthread -o "$OUT/scrash" && "./$OUT/scrash" 20 2>&1 | tee "$OUT/log_scrash.txt" && rec "kill -9 crash test" ok "$(notes "kill -9 crash test")" || { echo "  ^ store crash test FAILED"; fail=1; rec "kill -9 crash test" FAIL; }
 
+# ---- the store's integrity claim against damage on the disk (tests/battle_damage.c): blocks destroyed at random, in
+# ---- runs, exactly at the limit lean4 proves (recover_gf, burst_within_parity, burst_beyond_parity), in the checksum
+# ---- tables; every copy must load rebuilt byte for byte or be refused, a scrub must restore the rebuildable ones, and
+# ---- no row may come back different from the one saved ----
+echo "store damage battletest"
+if "$CC" "${CFLAGS[@]}" tests/battle_damage.c -lm -lpthread -o "$OUT/battle_damage" \
+        && "./$OUT/battle_damage" "${BATTLE_TRIALS:-40}" "${SEED:-$(date +%Y%m%d)}" > "$OUT/log_battle_damage.txt" 2>&1; then
+    grep -a 'copies - ' "$OUT/log_battle_damage.txt"
+    rec "damage battletest" ok "$(awk '/copies - /{for(i=1;i<=NF;i++){if($(i+1)=="copies")c+=$i; if($(i+1)=="rebuilt")r+=$i; if($(i+1)=="refused,")f+=$i}} END{printf "%d damaged copies: %d rebuilt byte for byte, %d refused, 0 wrong rows", c, r, f}' "$OUT/log_battle_damage.txt")"
+else
+    grep -a 'FAIL' "$OUT/log_battle_damage.txt" | head -5; echo "  ^ damage battletest FAILED"; fail=1; rec "damage battletest" FAIL
+fi
+
 # ---- the socket server: both protocols, Unix + TCP sockets, bad input, pipelining, concurrency, restart ----
 # ---- (TLS through the vendored BearSSL: built once into $OUT/libbearssl.a) ----
 echo "vserv"
