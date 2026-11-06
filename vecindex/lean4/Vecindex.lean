@@ -13,6 +13,8 @@ import Vecindex.RS.Group
 import Vecindex.RS.StoreSum
 import Vecindex.Crc32c
 import Vecindex.FastScan
+import Vecindex.FastScanLayout
 import Vecindex.Codes
 import Vecindex.Hadamard
 import Vecindex.TopK
+import Vecindex.CodeGen
