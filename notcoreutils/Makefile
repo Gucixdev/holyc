@@ -3,7 +3,7 @@
 #
 #   make              build everything
 #   make cloc         build one tool: bin/cloc
-#   make test         run tests/run, tests/fzf and tests/gtop
+#   make test         run tests/run, tests/fzf, tests/gtop and tests/snip
 #   make install      PREFIX=/usr/local, binaries and man pages (sudo is NOT setuid)
 #   make clean
 #
@@ -16,7 +16,7 @@ OUT     ?= bin
 PREFIX  ?= /usr/local
 INC      = -Ideps/utils -Ideps/libutil -Ideps/singlefile/abstract
 
-TOOLS   := cb cloc colorado dv fzf gtop man netcat sudo tgates tree
+TOOLS   := cb cloc colorado dv fzf gtop man netcat snip sudo tgates tree
 
 LIBS_cb   = -lX11
 LIBS_sudo = -lcrypt
@@ -37,7 +37,7 @@ endef
 $(foreach t,$(TOOLS),$(eval $(call tool,$(t))))
 
 test: all
-	r=0; sh tests/run || r=1; sh tests/fzf || r=1; sh tests/gtop || r=1; exit $$r
+	r=0; sh tests/run || r=1; sh tests/fzf || r=1; sh tests/gtop || r=1; sh tests/snip || r=1; exit $$r
 
 install: all
 	mkdir -p $(DESTDIR)$(PREFIX)/bin $(DESTDIR)$(PREFIX)/share/man/man1

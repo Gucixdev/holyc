@@ -1,0 +1,56 @@
+#!/bin/sh
+# snip tests: store format, tags, filtering, rm, the numbered menu (no fzf), placeholders, shell init.
+cd "$(dirname "$0")/.." || exit 1
+BIN=$PWD/bin/snip
+[ -x "$BIN" ] || { echo "build first: make"; exit 1; }
+T=$(mktemp -d); trap 'rm -rf "$T"' EXIT INT TERM
+export SNIP_FILE=$T/s
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); echo "FAIL $1"; }
+has() { printf '%s\n' "$2" | grep -q -- "$3" && ok || bad "$1 (no '$3')"; }
+hasno() { printf '%s\n' "$2" | grep -q -- "$3" && bad "$1 (found '$3')" || ok; }
+
+$BIN --help | grep -q usage && ok || bad "--help"
+$BIN bogus >/dev/null 2>&1; [ $? -eq 2 ] && ok || bad "unknown command exits 2"
+$BIN add >/dev/null 2>&1 </dev/null; [ $? -eq 2 ] && ok || bad "add without a command exits 2"
+
+$BIN add -t "git undo" -d "undo last commit" -- git reset --soft HEAD~1 && ok || bad "add"
+$BIN add -t git -d "short log" git log --oneline -20 && ok || bad "add second"
+printf 'tar xzf <file> -C <dir=/tmp>\n' | $BIN add -t "tar" -d extract && ok || bad "add from stdin"
+$BIN add git log --oneline -20 2>/dev/null; [ $? -eq 1 ] && ok || bad "duplicate refused"
+[ "$(wc -l < "$SNIP_FILE")" -eq 3 ] && ok || bad "three lines stored"
+has "tags normalised" "$(cat "$SNIP_FILE")" '^git,undo	undo last commit	git reset'
+
+L=$($BIN list); has "list shows all" "$L" "short log"; has "list shows tar" "$L" "extract"
+L=$($BIN list -t undo); has "tag filter keeps" "$L" "undo last commit"; hasno "tag filter drops" "$L" "short log"
+L=$($BIN list -t nope); [ -z "$L" ] && ok || bad "unknown tag lists nothing"
+L=$($BIN tags); has "tags counts git" "$L" '^git  *2$'; has "tags counts tar" "$L" '^tar  *1$'
+
+# no fzf on PATH -> the numbered menu reads the choice from the terminal; no terminal here, so it must fail cleanly
+PATH=/nonexistent $BIN pick >/dev/null 2>&1 </dev/null; [ $? -eq 1 ] && ok || bad "menu without a terminal fails with 1"
+
+# a fake fzf that takes the first line gives a scriptable pick
+mkdir "$T/bin"; printf '#!/bin/sh\nhead -1\n' > "$T/bin/fzf"; chmod +x "$T/bin/fzf"
+P=$(PATH="$T/bin:$PATH" $BIN pick); [ "$P" = "git reset --soft HEAD~1" ] && ok || bad "pick prints the command ($P)"
+P=$(PATH="$T/bin:$PATH" $BIN pick -t tar </dev/null); [ "$P" = "tar xzf <file> -C /tmp" ] || [ "$P" = "tar xzf  -C /tmp" ] && ok || bad "placeholders without a terminal use defaults ($P)"
+P=$(PATH="$T/bin:$PATH" $BIN run -t git); [ $? -eq 0 ] && ok || bad "run"
+printf '#!/bin/sh\nexit 130\n' > "$T/bin/fzf"
+PATH="$T/bin:$PATH" $BIN pick >/dev/null 2>&1; [ $? -eq 1 ] && ok || bad "cancelled pick exits 1"
+
+printf '#!/bin/sh\nhead -1\n' > "$T/bin/fzf"
+PATH="$T/bin:$PATH" $BIN rm -t tar && ok || bad "rm"
+[ "$(wc -l < "$SNIP_FILE")" -eq 2 ] && ok || bad "rm removed one"
+hasno "removed snippet is gone" "$(cat "$SNIP_FILE")" "tar xzf"
+
+$BIN add -d "multi" 'echo a
+echo b' && ok || bad "multi-line add"
+[ "$(wc -l < "$SNIP_FILE")" -eq 3 ] && ok || bad "multi-line stays one line in the store"
+P=$(PATH="$T/bin:$PATH" $BIN pick -t nothing 2>&1); has "no match message" "$P" "no snippets"
+
+has "bash init binds a key" "$($BIN init bash)" 'bind -x'
+has "zsh init binds a key" "$($BIN init zsh)" 'bindkey'
+bash -n <($BIN init bash) && ok || bad "bash init is valid bash"
+
+echo "snip: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

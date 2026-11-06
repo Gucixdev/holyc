@@ -1,6 +1,6 @@
 # notcoreutils
 
-Nine small command-line tools, one C source file and one man page each. Things GNU coreutils
+Twelve small command-line tools, one C source file and one man page each. Things GNU coreutils
 already does well are deliberately not reimplemented here.
 
 | tool | what it does |
@@ -13,6 +13,7 @@ already does well are deliberately not reimplemented here.
 | `gtop` | system monitor TUI (CPU/GPU, RAM, disk, net, processes); its palette commands are in `share/gtop/commands`; see [gtop.md](gtop.md) |
 | `man` | minimal manual-page viewer: finds the page under `$MANPATH` or the FHS paths, gunzips, renders the common troff macros as readable text |
 | `netcat` | minimal TCP pipe: `netcat HOST PORT` connects, `netcat -l PORT` listens for one connection, stdin/stdout both ways |
+| `snip` | command snippet manager with tags in the spirit of pet: `snip add -t git -d "undo" CMD`, pick with fzf, `<param=default>` placeholders, a shell key (Ctrl-X s) that pastes a snippet into the line you are typing |
 | `sudo` | doas-style privilege escalation: asks for your own password, runs the command; not installed setuid by `make install` |
 | `tgates` | ternary logic gates on the command line over balanced ternary {-1, 0, 1}: `neg`, `min`, `max`, `diff` |
 | `tree` | `tree(1)`-compatible directory listing, written from scratch and tested against the real `tree` |
