@@ -24,14 +24,14 @@ command -v clang >/dev/null || { echo "fuzz: clang not found (Debian/Ubuntu: apt
 fail=0
 for t in "${targets[@]}"; do
     case $t in
-        proto) extra=(-DVSERV_NO_TLS); opts=(-dict=tests/fuzz/proto.dict -max_len=4096); deps=(src/vserv*.c) ;;
-        store) extra=(); opts=(-max_len=262144); deps=(src/store*.c src/engine*.c) ;;
+        proto) extra=(-DVSERV_NO_TLS); opts=(-dict=tests/fuzz/proto.dict -max_len=4096) ;;
+        store) extra=(); opts=(-max_len=262144) ;;
         *) echo "fuzz: no target $t (proto, store)" >&2; exit 2 ;;
     esac
     bin=.build/fuzz_$t
     stale=0
     [[ -x $bin ]] || stale=1
-    for d in "tests/fuzz_$t.c" tests/fuzz_main.h "${deps[@]}" src/base.h; do [[ $d -nt $bin ]] && stale=1; done
+    for d in "tests/fuzz_$t.c" tests/fuzz_main.h src/*.c src/*.h; do [[ $d -nt $bin ]] && stale=1; done   # a unity build: all of src/
     if (( stale )) && ! clang -std=gnu99 -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined \
             -march=native "${extra[@]}" -Isrc "tests/fuzz_$t.c" -lm -lpthread -o "$bin"; then
         echo "fuzz: $t does not build (libFuzzer needs compiler-rt: libclang-rt-dev)" >&2; fail=1; continue
