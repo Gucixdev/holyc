@@ -3,7 +3,9 @@
 # core/core_base.h, data/hash/hashmap.h becomes data/hash/hash_hashmap.h) and rewrite what names the old paths.
 #
 #   tools/dirprefix base/src        rename (git mv inside a repository, mv outside one) and rewrite
-#   tools/dirprefix -n base/src     list the renames, change nothing
+#   tools/dirprefix -f base/src     flat: every file of the subfolders moves into DIR itself, prefixed
+#                                   (base/src/core/core_base.h becomes base/src/core_base.h)
+#   tools/dirprefix -n base/src     list the renames, change nothing (-n -f: the flat ones)
 #
 # Rewritten in every tracked text file of the repository: #include "core/base.h" (the path below DIR, as -IDIR
 # finds it), #include "base.h" in a file of the same folder, and the path below the repository root
@@ -11,13 +13,14 @@
 # #include lines, also the shorter mentions in comments and docs: src/core/base.h, hash/hashmap.h and the bare
 # name base.h (not after a / or <, so sys/socket.h and <log.h> stay; after one in io.h/log.h). This script itself
 # is left out. Files directly in DIR, and files already named FOLDER_..., stay as they are, so a second run
-# changes nothing. Refuses before touching anything when a new name is taken. Prints one line per rename.
+# changes nothing. With -f the shorter mentions lose their folders too (#include "core_base.h", src/core_base.h).
+# Refuses before touching anything when a new name is taken. Prints one line per rename.
 # Example: tools/dirprefix -n base/src
 set -euo pipefail
 
-dry=0
-[[ ${1:-} == -n ]] && { dry=1; shift; }
-[[ $# -eq 1 && -d $1 ]] || { sed -n '2,15s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+dry=0 flat=0
+while [[ ${1:-} == -[nf] ]]; do [[ $1 == -n ]] && dry=1; [[ $1 == -f ]] && flat=1; shift; done
+[[ $# -eq 1 && -d $1 ]] || { sed -n '2,19s/^# \{0,1\}//p' "$0" >&2; exit 2; }
 dir=$(cd "$1" && pwd)
 root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)
 
@@ -25,21 +28,24 @@ moves=$(mktemp)
 trap 'rm -f "$moves" "$moves.sed" "$moves.bare" "$moves.names"' EXIT
 ( cd "$dir" && find . -mindepth 2 -type f ! -path '*/.*' | sed 's|^\./||' | sort ) | while IFS= read -r rel; do
     sub=${rel%/*}; folder=${sub##*/}; name=${rel##*/}
-    [[ $name == "${folder}_"* ]] && continue
-    printf '%s\t%s\n' "$rel" "$sub/${folder}_$name"
+    [[ $name == "${folder}_"* ]] || name=${folder}_$name
+    if (( flat )); then printf '%s\t%s\n' "$rel" "$name"
+    elif [[ $rel != "$sub/$name" ]]; then printf '%s\t%s\n' "$rel" "$sub/$name"; fi
 done > "$moves"
 
 [[ -s $moves ]] || { echo "dirprefix: nothing to rename in $1"; exit 0; }
 while IFS=$'\t' read -r old new; do
     [[ -e $dir/$new ]] && { echo "dirprefix: $new exists already; nothing renamed" >&2; exit 1; }
 done < "$moves"
+dup=$(cut -f2 "$moves" | sort | uniq -d | head -1)
+[[ -z $dup ]] || { echo "dirprefix: two files would both be $dup; nothing renamed" >&2; exit 1; }
 if (( dry )); then awk -F'\t' '{printf "%s -> %s\n", $1, $2}' "$moves"; exit 0; fi
 
 # Two sed scripts, | and # as delimiters (paths have neither). $moves.sed, for the whole repository: the include
 # form, then the path from the root. $moves.bare, for DIR's parent: every shorter form of the path, skipping
 # #include lines; each substitution loops (:m1 ... t m1) so a name twice in a line is caught both times.
 rp=${root:+${dir#"$root"/}}
-awk -F'\t' -v rp="$rp" -v sedf="$moves.sed" -v baref="$moves.bare" '
+awk -F'\t' -v rp="$rp" -v flat="$flat" -v sedf="$moves.sed" -v baref="$moves.bare" '
     function q(s) { gsub(/[.^$*+?()[\]{}\\]/, "\\\\&", s); return s }
     BEGIN { print "/^[[:space:]]*#[[:space:]]*include/b" > baref }
     {
@@ -48,7 +54,8 @@ awk -F'\t' -v rp="$rp" -v sedf="$moves.sed" -v baref="$moves.bare" '
         n = split($1, s, "/"); nb = $2; sub(/.*\//, "", nb)
         for (i = 1; i <= n; i++) {
             o = s[i]; for (j = i + 1; j <= n; j++) o = o "/" s[j]
-            w = nb; for (j = n - 1; j >= i; j--) w = s[j] "/" w
+            w = nb; if (!flat) for (j = n - 1; j >= i; j--) w = s[j] "/" w
+            if (o == w) continue
             pre = i == 1 ? "[^A-Za-z0-9_.-]" : i < n ? "[^A-Za-z0-9_./<-]" : "[^A-Za-z0-9_./<-]|\\.h/"
             k++
             printf ":m%d\ns#(^|%s)%s([^A-Za-z0-9_]|$)#\\1%s\\2#\nt m%d\n", k, pre, q(o), w, k > baref
