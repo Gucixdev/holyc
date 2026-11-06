@@ -26,7 +26,7 @@ static i32 store_search_impl_(RagStore *s, const f32 *query, i32 k,
     f32 qlen;
 
     memcpy(qn, query, (size_t)dim * sizeof(f32));
-    qlen = (f32)eng_sqrt_((f64)vs_dot(qn, qn, dim));
+    qlen = (f32)eng_sqrt_(eng_ssq_(qn, dim));
     store_normalise_(qn, dim);
 
     pthread_rwlock_rdlock(&s->lock);
@@ -163,7 +163,7 @@ void store_search_batch(RagStore *s, const f32 *Q, i32 nq, i32 k, i64 *out_ids, 
     qn = (f32 *)malloc((size_t)nq * (size_t)dim * sizeof(f32));
     ql = (f32 *)malloc((size_t)nq * sizeof(f32));
     memcpy(qn, Q, (size_t)nq * (size_t)dim * sizeof(f32));
-    for (i = 0; i < nq; ++i) { ql[i] = (f32)eng_sqrt_((f64)vs_dot(qn + (size_t)i * dim, qn + (size_t)i * dim, dim)); store_normalise_(qn + (size_t)i * dim, dim); }
+    for (i = 0; i < nq; ++i) { ql[i] = (f32)eng_sqrt_(eng_ssq_(qn + (size_t)i * dim, dim)); store_normalise_(qn + (size_t)i * dim, dim); }
     pthread_rwlock_rdlock(&s->lock);
     if (s->tune_target > 0.0f) for (i = 0; i < nq; i += 1 + nq / STORE_QLOG) store_qlog_(s, qn + (size_t)i * dim);
     R = s->tq_rerank > 0 ? s->tq_rerank : (k * 20 > 256 ? k * 20 : 256) * (s->tq->bits == 1 ? 4 : 1) * (s->metric ? 4 : 1);   /* as one query */

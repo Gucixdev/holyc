@@ -762,11 +762,16 @@ static int store_finite_(const f32 *v, i32 n)
 
 static void store_normalise_(f32 *v, i32 dim)
 {
-    f32 nrm = (f32)eng_sqrt_((f64)vs_dot(v, v, dim));
+    f64 ss = eng_ssq_(v, dim), inv;
     i32 d;
-    if (nrm <= 0.0f) return;
-    nrm = 1.0f / nrm;
-    for (d = 0; d < dim; ++d) v[d] *= nrm;
+    if (ss <= 0.0) return;
+    if (ss <= 3.4e38) {                                      /* the usual case, in f32 as it always was */
+        f32 nrm = 1.0f / (f32)eng_sqrt_(ss);
+        for (d = 0; d < dim; ++d) v[d] *= nrm;
+        return;
+    }
+    inv = 1.0 / eng_sqrt_(ss);
+    for (d = 0; d < dim; ++d) v[d] = (f32)((f64)v[d] * inv);
 }
 
 RagStore *store_new(Arena *a, i32 dim)
@@ -1268,7 +1273,7 @@ static void store_append_locked_(RagStore *s, const f32 *vec, i64 doc_id, i64 me
     f32 len = 0.0f;
     i32 d;
     memcpy(v, vec, (size_t)s->dim * sizeof(f32));
-    if (s->metric) len = (f32)eng_sqrt_((f64)vs_dot(v, v, s->dim));   /* dot and L2 rank by the length too */
+    if (s->metric) len = (f32)eng_sqrt_(eng_ssq_(v, s->dim));          /* dot and L2 rank by the length too */
     store_normalise_(v, s->dim);
     store_put_row_(s, r, v);
     STORE_ID(s, r) = doc_id;

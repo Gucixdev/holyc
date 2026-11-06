@@ -144,11 +144,26 @@ const char *engine_scheme_name(EngScheme s)
 static f64 eng_sqrt_(f64 x)
 {
     union { f32 f; u32 i; } u;
-    f64 g; i32 i;
+    f64 g, sc = 1.0; i32 i;
     if (x <= 0.0) return 0.0;
+    if (!(x <= 1.7e308)) return x;              /* inf (and NaN) as they are: Newton would make inf/inf a NaN */
+    while (x > 1e30) { x *= 1e-30; sc *= 1e15; }    /* the first guess is an f32's: x into its range */
+    while (x < 1e-30) { x *= 1e30; sc *= 1e-15; }
     u.f = (f32)x; u.i = (u.i >> 1) + 0x1fbd1df5u; g = (f64)u.f;
     for (i = 0; i < 3; ++i) g = 0.5 * (g + x / g);
-    return g;
+    return g * sc;
+}
+
+/* the squared length of v: the SIMD dot product, or again in f64 when that overflowed - a component past about
+ * 1.8e19 squares past f32's range, and its inf length made the store's query and rows NaN (tests/fuzz_proto.c) */
+static f64 eng_ssq_(const f32 *v, i32 dim)
+{
+    f32 s = vs_dot(v, v, dim);
+    f64 d = 0.0;
+    i32 i;
+    if (s <= 3.4e38f) return (f64)s;
+    for (i = 0; i < dim; ++i) d += (f64)v[i] * (f64)v[i];
+    return d;
 }
 
 /* ---- per-scheme dispatch -------------------------------------- */
@@ -268,11 +283,11 @@ static void eng_exact_(const f32 *vecs, i32 n, i32 dim, const f32 *q, i32 k, i64
 {
     f32 sc[64]; i32 have = 0, r; f32 qn;
     if (k > 64) k = 64;
-    qn = (f32)eng_sqrt_((f64)vs_dot(q, q, dim)); if (qn == 0.0f) qn = 1.0f;
+    qn = (f32)eng_sqrt_(eng_ssq_(q, dim)); if (qn == 0.0f) qn = 1.0f;
     for (r = 0; r < n; ++r) {
         const f32 *row = vecs + (size_t)r * dim;
         f32 dot = vs_dot(q, row, dim), rn, cs;
-        rn = (f32)eng_sqrt_((f64)vs_dot(row, row, dim));
+        rn = (f32)eng_sqrt_(eng_ssq_(row, dim));
         cs = (rn > 0.0f) ? dot / (qn * rn) : 0.0f;
         eng_topk_(out, sc, k, &have, (i64)r, cs);
     }
