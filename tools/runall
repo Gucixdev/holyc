@@ -51,9 +51,10 @@ step() {
 picked() { [[ $want == "  " || $want == *" $1 "* ]]; }
 
 printf '%-13s %-8s %-7s %7s  %s\n' PROJECT STEP RESULT TIME 'LAST LINE OF THE LOG'
-for proj in base dmenu dwl gael lazytui lemonbar nnn notcoreutils vecindex; do
+for proj in lean4 base dmenu dwl gael lazytui lemonbar nnn notcoreutils vecindex; do
     picked "$proj" || continue
     case $proj in
+        lean4)        step lean4 lib ./run ;;  # the shared Lean library every lean4/ builds on
         base)         step base tests sh tests/run
                       (( full )) && step base bench make bench ;;
         dmenu|dwl|lemonbar|nnn)
