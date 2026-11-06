@@ -25,7 +25,9 @@ The vector database that lived here as `ragdb/` was its own repository,
 included. The agent layer that grew on top of it is `vecindex/examples/agent_launcher/`, which uses `vecindex/` as a library.
 
 Every directory builds on its own; there is no top-level build. Each has its own README with
-the details, this page is the map.
+the details, this page is the map. `tools/` holds two repository scripts: `dirprefix` names the files in a folder's
+subfolders after their folder and rewrites what names them (base's headers went through it), `leaninit` starts a
+project's `lean4/` folder.
 
 ## Quick start
 
@@ -125,6 +127,15 @@ wrote what. Local changes on top of upstream:
 - **nnn**: an arena allocator to fix an O(n²) `dentfill()`, plus opener scripts that open a GUI
   Emacs without blocking nnn. Release engineering of upstream was removed on purpose.
 
+## Proofs
+
+Proofs about the C code are written in Lean 4. Every project has a `lean4/` folder at its root whose `run` builds
+the proofs, checks that no theorem rests on an axiom beyond Lean's `propext`, `Classical.choice` and `Quot.sound`,
+and scans the sources for `sorry` and `native_decide`; `tools/leaninit PROJECT` starts one.
+[`vecindex/lean4`](vecindex/lean4/README.md) holds the proofs so far and shows the method: a Lean model of each C
+function, theorems about the model, and a differential test that holds the C code to the model. The other folders
+are empty so far and build on core Lean in seconds; vecindex's needs Mathlib.
+
 ## Requirements
 
 | Piece | Needs |
@@ -136,6 +147,7 @@ wrote what. Local changes on top of upstream:
 | dwl | wlroots 0.20, wayland, xkbcommon, pkg-config |
 | dmenu, lemonbar | wayland-client, xkbcommon, fontconfig, freetype2 |
 | nnn | ncurses; readline support is off by default (`O_NORL := 1` in its Makefile) |
+| every `lean4/` | elan with `leanprover/lean4:v4.26.0`; vecindex's also Mathlib, TrustLean and AMO-Lean, which lake fetches |
 
 The code is developed and tested on Linux (x86-64). Other platforms are not tested.
 
