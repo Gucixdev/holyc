@@ -165,5 +165,6 @@ i32 store_label_info(RagStore *s, i32 b, char *out, u64 *parents)
 /* the k nearest rows whose labels meet c */
 i32 store_search_cnf(RagStore *s, const f32 *query, i32 k, i64 *out_doc_ids, f32 *out_scores, const StoreCnf *c)
 {
+    if (!store_finite_(query, s->dim)) return 0;                 /* as store_search */
     return store_search_impl_(s, query, k, out_doc_ids, out_scores, 0, c->n ? (i64)c->any[0] : 0, 1, c);
 }

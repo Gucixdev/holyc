@@ -100,15 +100,22 @@ static i32 store_search_impl_(RagStore *s, const f32 *query, i32 k,
     return have;
 }
 
+/* A query with a NaN or an infinity has no direction: no hits. vserv's line protocol passed one on ("hybrid 3 0.1 -1
+ * 0.1 nan"), and its NaNs reached tq_lut_'s conversion to int (tests/fuzz_proto.c); the C API refuses them sooner. */
 i32 store_search(RagStore *s, const f32 *query, i32 k,
                  i64 *out_doc_ids, f32 *out_scores)
-{ return store_search_impl_(s, query, k, out_doc_ids, out_scores, 0, 0, 0, (const StoreCnf *)0); }
+{
+    if (!store_finite_(query, s->dim)) return 0;
+    return store_search_impl_(s, query, k, out_doc_ids, out_scores, 0, 0, 0, (const StoreCnf *)0);
+}
 
 i32 store_search_filter(RagStore *s, const f32 *query, i32 k,
                         i64 *out_doc_ids, f32 *out_scores,
                         i64 all_bits, i64 any_bits)
-{ return store_search_impl_(s, query, k, out_doc_ids, out_scores,
-                            all_bits, any_bits, 1, (const StoreCnf *)0); }
+{
+    if (!store_finite_(query, s->dim)) return 0;
+    return store_search_impl_(s, query, k, out_doc_ids, out_scores, all_bits, any_bits, 1, (const StoreCnf *)0);
+}
 
 /* ---- many queries at once ---- */
 typedef struct { RagStore *s; const f32 *qn, *qlen; i32 k, R; const i32 *rows, *cnt; i64 *ids; f32 *sc; } StoreBatch;
@@ -163,7 +170,11 @@ void store_search_batch(RagStore *s, const f32 *Q, i32 nq, i32 k, i64 *out_ids, 
     qn = (f32 *)malloc((size_t)nq * (size_t)dim * sizeof(f32));
     ql = (f32 *)malloc((size_t)nq * sizeof(f32));
     memcpy(qn, Q, (size_t)nq * (size_t)dim * sizeof(f32));
-    for (i = 0; i < nq; ++i) { ql[i] = (f32)eng_sqrt_(eng_ssq_(qn + (size_t)i * dim, dim)); store_normalise_(qn + (size_t)i * dim, dim); }
+    for (i = 0; i < nq; ++i) {                                   /* a query that is not finite: scanned as zeros */
+        f32 *q = qn + (size_t)i * dim;
+        if (!store_finite_(q, dim)) { memset(q, 0, (size_t)dim * sizeof(f32)); ql[i] = 0.0f; continue; }
+        ql[i] = (f32)eng_sqrt_(eng_ssq_(q, dim)); store_normalise_(q, dim);
+    }
     pthread_rwlock_rdlock(&s->lock);
     if (s->tune_target > 0.0f) for (i = 0; i < nq; i += 1 + nq / STORE_QLOG) store_qlog_(s, qn + (size_t)i * dim);
     R = s->tq_rerank > 0 ? s->tq_rerank : (k * 20 > 256 ? k * 20 : 256) * (s->tq->bits == 1 ? 4 : 1) * (s->metric ? 4 : 1);   /* as one query */
