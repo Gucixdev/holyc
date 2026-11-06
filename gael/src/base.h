@@ -1,4 +1,4 @@
-/* base.h - fixed-size types (the names of holyc's base/src/core/core_base.h), a C89 static assert, and flat arenas.
+/* base.h - fixed-size types (the names of holyc's base/src/core_base.h), a C89 static assert, and flat arenas.
  *
  * No malloc anywhere: an arena is one block with a bump pointer, emptied all at once - a static array, or for the
  * VM's heap and text one reservation of address space (mmap), whose pages the system gives only where something is

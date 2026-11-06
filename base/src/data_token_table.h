@@ -7,12 +7,12 @@
  * compare instead of repeated strcmp, and can use the id directly as a
  * dense array index (a lexer/compiler's own symbol table, or anything
  * else that repeatedly sees the same small set of distinct strings -
- * keywords, identifiers, tags). Built on hash/hash_hashmap.h for the
+ * keywords, identifiers, tags). Built on hash_hashmap.h for the
  * string->id direction rather than reimplementing open addressing here;
  * this file's own job is just the id<->string bookkeeping on top. */
 
-#include "core/core_arena_alloc.h"
-#include "data/hash/hash_hashmap.h"
+#include "core_arena_alloc.h"
+#include "hash_hashmap.h"
 
 typedef struct {
     Hash_Map map;           /* interned string bytes -> boxed i32 id (arena-owned) */

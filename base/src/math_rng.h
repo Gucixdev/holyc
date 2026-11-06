@@ -23,8 +23,8 @@
  * init, a bad idea for anything drawing small integers via a bitmask or
  * a modulo against a small power of two). */
 
-#include "core/core_base.h"
-#include "core/core_contracts.h"
+#include "core_base.h"
+#include "core_contracts.h"
 
 typedef struct {
     u64 state;

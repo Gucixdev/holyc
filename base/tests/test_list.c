@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define LIST_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "data/data_list.h"
+#include "core_arena_alloc.h"
+#include "data_list.h"
 
 int main(void)
 {

@@ -12,8 +12,8 @@
  * for e.g. one stream per game-AI/procgen system that all still trace
  * back to one master seed. */
 
-#include "core/core_base.h"
-#include "core/core_contracts.h"
+#include "core_base.h"
+#include "core_contracts.h"
 
 typedef struct {
     u64 state;

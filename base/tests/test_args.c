@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define ARGS_IMPLEMENTATION
-#include "core/core_args.h"
+#include "core_args.h"
 
 static char *fake_argv_(char *s) { return s; } /* silences a string-literal-to-char* warning at each call site below */
 

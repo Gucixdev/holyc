@@ -3,7 +3,7 @@
 
 /* THE base header: constants, base types, Option/Result/TRY/Future/DEFER/
  * Async_Signal, str + String_View, Arena_String, print - one include,
- * "core/core_base.h". Each part keeps its own *_IMPLEMENTATION macro
+ * "core_base.h". Each part keeps its own *_IMPLEMENTATION macro
  * (BASE_TYPE_, TYPES_, STR_, STRING_VIEW_, ARENA_STRING_, PRINT_).
  *
  * Older notes: base types (formerly base_type.h) + bit tricks
@@ -14,11 +14,11 @@
  * individually-swappable pieces comes back) - this file is now the one
  * every consumer actually includes for base types/bit/SIMD.
  *
- * vec2/vec3/vec4/Quat/Mat4 (`src/math/math_mathx.h`), print (`src/core/
- * print.h`), and log (`src/core/core_log.h`) used to live here too - all
+ * vec2/vec3/vec4/Quat/Mat4 (`src/math_mathx.h`), print (`src/core/
+ * print.h`), and log (`src/core_log.h`) used to live here too - all
  * three moved out to their own files, own scope: core_base.h stays scoped to base types/bit/SIMD only, a
  * consumer needing math types/print/log includes those files
- * separately (they each #include "core/core_base.h" themselves for the types
+ * separately (they each #include "core_base.h" themselves for the types
  * they need, so a consumer never has to include core_base.h AND one of
  * those directly for the shared types to resolve correctly).
  *
@@ -76,7 +76,7 @@ typedef __SIZE_TYPE__ size_t;
  * specific alignment - GCC/Clang's own `__attribute__((aligned))`
  * extension is the real, standard-in-practice way every C89 codebase
  * targeting these compilers actually does this (same "GCC extension
- * where the standard has nothing" stance util/util_raii.h's cleanup
+ * where the standard has nothing" stance util_raii.h's cleanup
  * attribute and this project's own SIMD intrinsics below already
  * take). Place BEFORE the declaration, same position C11's real
  * `alignas` keyword uses: `HOLYC_ALIGNAS(16) u8 buf[64];` */
@@ -1340,7 +1340,7 @@ String_View sv_take_left_while(String_View sv, i32 (*predicate)(char x))
 
 /* ################ implementation: Arena_String ################ */
 #if defined(ARENA_STRING_IMPLEMENTATION) && !defined(HOLYC_ARENA_ALLOC_IN_PROGRESS_)
-#include "core/core_arena_alloc.h" /* the Arena_String bodies sit at the end of core_arena_alloc.h, after Arena is defined */
+#include "core_arena_alloc.h" /* the Arena_String bodies sit at the end of core_arena_alloc.h, after Arena is defined */
 #endif /* ARENA_STRING_IMPLEMENTATION */
 
 /* ################ implementation: print ################ */

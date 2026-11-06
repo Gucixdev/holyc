@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define SERIALIZE_IMPLEMENTATION
-#include "codec/codec_serialize.h"
+#include "codec_serialize.h"
 
 int main(void)
 {

@@ -19,8 +19,8 @@
  *   as a power law in box size; this fits that power law via a linear
  *   regression on the log-log points and returns the slope). */
 
-#include "core/core_base.h"
-#include "math/math_mathx.h"
+#include "core_base.h"
+#include "math_mathx.h"
 #include <math.h> /* log - math_trigonometry.h's own precedent (see its header comment): call libm directly */
 
 typedef struct {

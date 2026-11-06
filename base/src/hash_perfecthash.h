@@ -26,8 +26,8 @@
  * shared state at all (every array is a local scratch buffer) and is
  * O(n) instead of O(n log n) besides. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef struct {
     i32 *displacement; /* [n] */

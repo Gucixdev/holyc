@@ -11,10 +11,10 @@
  * uses plain promotion instead, documented here since it changes the
  * exact root hash a given block set produces). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 #define SHA256_HASH_IMPLEMENTATION
-#include "crypto/crypto_sha256_hash.h"
+#include "crypto_sha256_hash.h"
 
 typedef struct {
     u8 hash[SHA256_DIGEST_SIZE];

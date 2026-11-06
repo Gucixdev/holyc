@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define STATIC_FLOW_IMPLEMENTATION
-#include "core/core_static.h"
+#include "core_static.h"
 
 int main(void)
 {

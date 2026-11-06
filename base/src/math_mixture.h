@@ -11,7 +11,7 @@
  * kind of job, not a random-choice one. Fixed capacity, no arena at
  * all - matches signal.h/pkg.h's own small-fixed-struct stance. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 #ifndef MIXTURE_MAX_INGREDIENTS
 #define MIXTURE_MAX_INGREDIENTS 16

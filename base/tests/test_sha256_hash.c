@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define SHA256_HASH_IMPLEMENTATION
-#include "crypto/crypto_sha256_hash.h"
+#include "crypto_sha256_hash.h"
 
 static i32 hex_eq_(const u8 digest[SHA256_DIGEST_SIZE], const char *hex)
 {

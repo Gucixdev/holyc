@@ -7,9 +7,9 @@
  * original musing (comparing itself to crypto_merkletree.h/hash_marmur.h - small,
  * single-purpose files living on their own rather than crammed into a
  * bigger one) - NOT a lerp/interpolation file, that's math_easing.h's job
- * already (src/math/math_easing.h) - no duplication with it here. */
+ * already (src/math_easing.h) - no duplication with it here. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef struct {
     i32 num;

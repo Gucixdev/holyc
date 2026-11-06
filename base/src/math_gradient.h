@@ -31,7 +31,7 @@
  * lattice point is exactly 0.0, verified directly in
  * tests/test_gradient.c, not just asserted here. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 f32 gradient_noise_2d(i32 seed, f32 x, f32 y);
 

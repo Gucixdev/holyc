@@ -17,7 +17,7 @@
  * exactly the separation of concerns util_ast.h's own header comment
  * describes. */
 
-#include "util/util_ast.h"
+#include "util_ast.h"
 
 typedef enum {
     FORMULA_OP_ADD,

@@ -21,7 +21,7 @@
  * actually sizes), though chunk_make() takes cap as a plain
  * parameter and has no util_hardscan.h dependency itself. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef struct {
     u8 *data;

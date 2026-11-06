@@ -10,10 +10,10 @@
  * core_ring_buffer.h's job, per this project's own thread/ vs dataflow/
  * split - see core_stream.h's own header comment). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 #define STREAM_IMPLEMENTATION
-#include "core/core_stream.h"
+#include "core_stream.h"
 
 typedef struct {
     Stream stream;

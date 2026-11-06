@@ -29,8 +29,8 @@
  * caller's key buffer doesn't need to outlive the call - same convention
  * as vec_index_set_centroid(). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 #define HT_SLOT_EMPTY     0
 #define HT_SLOT_OCCUPIED  1

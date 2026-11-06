@@ -49,15 +49,15 @@ mutant() {
     survived="$survived $1"
 }
 if [[ -x $oracle ]]; then
-    mutant granules core/core_arena_alloc.h 's|size_t size = size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) != 0);|size_t size = size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) > 1);|'
-    mutant align-mask core/core_arena_alloc.h 's|aligned_addr = (addr + align - 1) \& ~(align - 1);|aligned_addr = (addr + align) \& ~(align - 1);|'
-    mutant rewind core/core_arena_alloc.h 's|m.region->count = m.count;|m.region->count = m.count + 1;|'
-    mutant keep-high core/core_arena_alloc.h 's|if (r->count > r->high) r->high = r->count;|if (r->count > r->high) r->high = r->count - 1;|'
-    mutant calloc-zero core/core_arena_alloc.h 's|memset(p, 0, dirty - off < n ? dirty - off : n);|memset(p, 0, dirty - off < n ? (dirty - off) / 2 : n);|'
-    mutant realloc-top core/core_arena_alloc.h 's|(u64 \*)oldptr + og == \&r->data\[r->count\]|(u64 *)oldptr + og <= \&r->data[r->count]|'
-    mutant decommit core/core_arena_alloc.h 's|r->high = (size_t)(from - data) / sizeof(u64);|r->high = 0;|'
-    mutant pool-align core/core_pool_alloc.h 's|return (n + align - 1) \& ~(align - 1);|return (n + align) \& ~(align - 1);|'
-    mutant pool-fresh core/core_pool_alloc.h 's|p->fresh += p->chunk_size;|p->fresh += 2 * p->chunk_size;|'
+    mutant granules core_arena_alloc.h 's|size_t size = size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) != 0);|size_t size = size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) > 1);|'
+    mutant align-mask core_arena_alloc.h 's|aligned_addr = (addr + align - 1) \& ~(align - 1);|aligned_addr = (addr + align) \& ~(align - 1);|'
+    mutant rewind core_arena_alloc.h 's|m.region->count = m.count;|m.region->count = m.count + 1;|'
+    mutant keep-high core_arena_alloc.h 's|if (r->count > r->high) r->high = r->count;|if (r->count > r->high) r->high = r->count - 1;|'
+    mutant calloc-zero core_arena_alloc.h 's|memset(p, 0, dirty - off < n ? dirty - off : n);|memset(p, 0, dirty - off < n ? (dirty - off) / 2 : n);|'
+    mutant realloc-top core_arena_alloc.h 's|(u64 \*)oldptr + og == \&r->data\[r->count\]|(u64 *)oldptr + og <= \&r->data[r->count]|'
+    mutant decommit core_arena_alloc.h 's|r->high = (size_t)(from - data) / sizeof(u64);|r->high = 0;|'
+    mutant pool-align core_pool_alloc.h 's|return (n + align - 1) \& ~(align - 1);|return (n + align) \& ~(align - 1);|'
+    mutant pool-fresh core_pool_alloc.h 's|p->fresh += p->chunk_size;|p->fresh += 2 * p->chunk_size;|'
     if [[ -z $survived ]]; then step ok "mutants: $caught of $total caught"
     else step FAIL "mutants: survived:$survived"; fi
 fi

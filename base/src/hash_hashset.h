@@ -13,7 +13,7 @@
  * still guarded independently; it just calls into ht_* functions that
  * need their own real bodies compiled in somewhere in the same TU). */
 
-#include "data/hash/hash_hashtable.h"
+#include "hash_hashtable.h"
 
 typedef struct {
     Ht ht;

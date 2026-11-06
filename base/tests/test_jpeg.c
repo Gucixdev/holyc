@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define JPEG_DEC_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "codec/codec_jpeg_dec.h"
+#include "core_arena_alloc.h"
+#include "codec_jpeg_dec.h"
 #include "jpeg_test_data.h"
 
 /* JPEG is lossy, so exact-value comparison against the source pixels

@@ -33,10 +33,10 @@
  * silently missing. Every function satisfies f(0)==0, f(1)==1 exactly,
  * checked as a real property in tests/test_easing.c. */
 
-#include "core/core_base.h"
-#include "math/math_mathx.h"
-#include "math/math_linear_algebra.h"
-#include "core/core_contracts.h"
+#include "core_base.h"
+#include "math_mathx.h"
+#include "math_linear_algebra.h"
+#include "core_contracts.h"
 
 f32 clampf(f32 v, f32 lo, f32 hi);
 

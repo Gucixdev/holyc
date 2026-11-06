@@ -13,14 +13,14 @@
  * overwhelming majority of real metadata use (counts, measurements,
  * names/labels, flags) without turning into a general dynamic-typing
  * system - a caller that needs more than this is better served by
- * src/codec/codec_json.h's Json_Value tree, not by growing this file to
+ * src/codec_json.h's Json_Value tree, not by growing this file to
  * match it. String values are copied into arena-owned storage on set
  * (same convention hash_hashtable.h's own keys already use), so the
  * caller's string buffer doesn't need to outlive the call. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
-#include "data/hash/hash_hashtable.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
+#include "hash_hashtable.h"
 
 typedef enum {
     TAG_I64 = 0,

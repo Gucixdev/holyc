@@ -11,9 +11,9 @@
  * simplex's, so a caller defining FBM_IMPLEMENTATION must also define
  * SIMPLEX_IMPLEMENTATION (same requirement the split files had). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
-#include "math/math_rng.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
+#include "math_rng.h"
 
 /* ---- blue ----
  * Blue noise via Bridson's Poisson-disk sampling (Robert Bridson, "Fast

@@ -5,7 +5,7 @@
  * (own main, own IMPLEMENTATION defines) - test_failures_ being static
  * per-TU is exactly what we want here, not a shared global. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 static i32 test_failures_ = 0;
 

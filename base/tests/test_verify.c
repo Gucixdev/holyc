@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define PROOF_IMPLEMENTATION
-#include "util/util_verify.h"
+#include "util_verify.h"
 #include <string.h>
 
 int main(void)

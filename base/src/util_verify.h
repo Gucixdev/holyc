@@ -25,7 +25,7 @@
  * an ESBMC/ACSL-style external prover is the explicitly bigger, not-yet-
  * attempted part of the original goal. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 #include <string.h> /* memcpy - verify_finite_f32/f64's bit-pattern read */
 
 typedef enum {

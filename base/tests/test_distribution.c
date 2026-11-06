@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define XORSHIFT_IMPLEMENTATION
 #define DISTRIBUTION_IMPLEMENTATION
-#include "math/math_xorshift.h"
-#include "math/math_distribution.h"
+#include "math_xorshift.h"
+#include "math_distribution.h"
 
 int main(void)
 {

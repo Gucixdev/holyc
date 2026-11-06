@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define VORONOI_IMPLEMENTATION
-#include "math/math_noise.h"
+#include "math_noise.h"
 
 int main(void)
 {

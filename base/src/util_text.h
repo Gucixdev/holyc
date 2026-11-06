@@ -29,8 +29,8 @@
  * across IMPLEMENTATION guards" rule hash_hashset.h documents for its own
  * HASHTABLE_IMPLEMENTATION dependency. */
 
-#include "core/core_base.h"
-#include "core/core_base.h"
+#include "core_base.h"
+#include "core_base.h"
 
 #ifndef TEXT_MAX_PIECES
 #define TEXT_MAX_PIECES 256

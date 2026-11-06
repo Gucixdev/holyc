@@ -12,8 +12,8 @@
  */
 
 #define HOLYC_ARENA_ALLOC_IN_PROGRESS_ /* core_base.h must not re-enter this file */
-#include "core/core_base.h"
-#include "core/core_contracts.h"
+#include "core_base.h"
+#include "core_contracts.h"
 #undef HOLYC_ARENA_ALLOC_IN_PROGRESS_
 #include <stdarg.h> /* va_list is part of arena_vsprintf's declaration below, not implementation-only */
 #include <string.h> /* memcpy - arena_memcpy's underlying primitive */

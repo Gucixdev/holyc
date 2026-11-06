@@ -16,7 +16,7 @@
  * tree itself for anything - re-emitting it, static analysis, multiple
  * evaluation passes - and just want the fastest path to one answer). */
 
-#include "core/core_arena_alloc.h"
+#include "core_arena_alloc.h"
 
 typedef enum {
     AST_LITERAL,  /* a bare number */

@@ -10,8 +10,8 @@
  * scattered malloc, and arena_free() at the end reclaims everything in
  * one call instead of needing a matching ini_free()). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef struct {
     char *data;

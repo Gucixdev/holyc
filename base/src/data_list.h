@@ -12,7 +12,7 @@
  * established style for payload-agnostic containers (see gc.c's own
  * void*-payload object header). */
 
-#include "core/core_arena_alloc.h"
+#include "core_arena_alloc.h"
 
 typedef struct List_Node {
     struct List_Node *prev, *next;

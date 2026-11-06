@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
+#include "core_arena_alloc.h"
 #define MERKLETREE_IMPLEMENTATION
-#include "crypto/crypto_merkletree.h"
+#include "crypto_merkletree.h"
 
 int main(void)
 {

@@ -20,9 +20,9 @@
  * PNG spec's own reference code but is mathematically equivalent with
  * better data dependencies for the compiler to pipeline. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
-#include "codec/codec_deflate.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
+#include "codec_deflate.h"
 
 /* returns arena-owned RGBA8 pixels (out_width * out_height * 4 bytes,
  * row-major, no padding) on success, NULL on any parse/format error or

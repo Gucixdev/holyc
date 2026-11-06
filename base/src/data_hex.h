@@ -8,7 +8,7 @@
  * builds it from these primitives rather than this file trying to
  * cover every display convention itself). */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 /* out must have room for size*2 bytes - no NUL terminator written
  * (matches this project's other codec/base* encoders: the caller adds

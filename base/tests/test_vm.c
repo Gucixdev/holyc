@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define VM_IMPLEMENTATION
-#include "util/util_vm.h"
+#include "util_vm.h"
 
 int main(void)
 {

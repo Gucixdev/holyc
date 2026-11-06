@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define SINGLE_INSTANCE_IMPLEMENTATION
-#include "util/util_single_instance.h"
+#include "util_single_instance.h"
 
 #include <unistd.h>
 #include <sys/wait.h>

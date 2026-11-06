@@ -2,8 +2,8 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define RNG_IMPLEMENTATION
 #define BLUE_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "math/math_noise.h"
+#include "core_arena_alloc.h"
+#include "math_noise.h"
 #include <math.h>
 
 int main(void)

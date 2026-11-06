@@ -7,10 +7,10 @@
  * per-component IMPLEMENTATION guard names as before the move
  * (VECTOR_IMPLEMENTATION, QUAT_IMPLEMENTATION, MATRIX_IMPLEMENTATION) -
  * every existing `#define X_IMPLEMENTATION` call site keeps working
- * unchanged, consumers just need `#include "math/math_mathx.h"` in addition to
- * `#include "core/core_base.h"`. */
+ * unchanged, consumers just need `#include "math_mathx.h"` in addition to
+ * `#include "core_base.h"`. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 /* ============================================================
  * math types: vector (vector.h)

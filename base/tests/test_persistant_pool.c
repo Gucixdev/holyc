@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define PERSISTANT_POOL_IMPLEMENTATION
-#include "core/core_persistant_pool.h"
+#include "core_persistant_pool.h"
 #include <string.h>
 #include <unistd.h>
 

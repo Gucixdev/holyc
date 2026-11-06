@@ -16,7 +16,7 @@
  * instead of relying on aggregate-init shorthand the caller might get
  * wrong. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef struct {
     char *optarg;

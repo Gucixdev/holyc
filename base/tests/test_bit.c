@@ -1,7 +1,7 @@
 #include "test_common.h"
 #define BASE_TYPE_IMPLEMENTATION
 #define BIT_IMPLEMENTATION
-#include "core/core_base.h"
+#include "core_base.h"
 
 int main(void)
 {

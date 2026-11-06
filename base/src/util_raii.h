@@ -16,7 +16,7 @@
  * pointer + void* resource, same "caller supplies the type-specific
  * bit" shape as gc.c's Gc_Trace_Fn / react.h's Signal_Fn. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef void (*Raii_Finalizer)(void *resource);
 

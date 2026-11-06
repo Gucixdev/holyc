@@ -4,8 +4,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define POOL_ALLOC_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "core/core_pool_alloc.h"
+#include "core_arena_alloc.h"
+#include "core_pool_alloc.h"
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>

@@ -29,7 +29,7 @@
  * probing (also mentioned) is out of scope for the same reason this
  * project has no GPU code anywhere else (a deliberate scope cut) - not attempted here either. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef struct {
     size_t l1_dcache_size;      /* bytes; 0 if this machine/kernel doesn't expose it */

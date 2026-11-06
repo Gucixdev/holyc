@@ -10,7 +10,7 @@
  * TCP only - no UDP. System headers (sys/socket.h, netinet/in.h,
  * arpa/inet.h, unistd.h, netdb.h) live directly here, this file's own
  * sole real consumer, matching this project's "no shared platform
- * wrapper" convention (see src/util/util_uuid4.h / src/util/util_exe_path.h for
+ * wrapper" convention (see src/util_uuid4.h / src/util_exe_path.h for
  * the same pattern elsewhere).
  *
  * Every send/recv here loops until the requested byte count is fully
@@ -20,8 +20,8 @@
  * "done" is a genuine, common bug class this wrapper exists to close
  * off at the one place instead of at every call site. */
 
-#include "core/core_base.h"
-#include "core/core_contracts.h"
+#include "core_base.h"
+#include "core_contracts.h"
 
 /* own local memset_ - own copy per this project's standing "no cross-
  * IMPLEMENTATION-guard dependency" rule, avoiding a <string.h>

@@ -1,15 +1,15 @@
 #ifndef HOLYC_MAPOPS_H_
 #define HOLYC_MAPOPS_H_
 
-/* filter/fold/foreach over data/data_array.h's type-erased Array -
+/* filter/fold/foreach over data_array.h's type-erased Array -
  * the functional trio this file's own one-line spec named. Function-
  * pointer + void* userdata based (C89 has no closures), same shape
  * this project already uses for callbacks elsewhere (Signal_Fn in
  * react.h, Action_Fn in core_action_queue.h). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
-#include "data/data_array.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
+#include "data_array.h"
 
 typedef i32 (*Mapops_Predicate)(const void *elem, void *userdata);
 typedef void (*Mapops_Fn)(void *elem, void *userdata);

@@ -32,7 +32,7 @@
  * bit writer/reader this one encoding actually needs, kept static/
  * internal to this file. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 /* ---- small-radix symbol packing (the "kompresja 4:1 5:1" part) ---- */
 

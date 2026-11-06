@@ -38,8 +38,8 @@
  * can be defined together in one translation unit without a
  * duplicate-symbol error. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef enum {
     BASE63_ESUCCESS  = 0,

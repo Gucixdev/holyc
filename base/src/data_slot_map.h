@@ -22,7 +22,7 @@
  * owns the buffer, full is a checkable failure not silent truncation"
  * stance array_static_init takes. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef struct {
     void *items;      /* capacity * elem_size bytes, caller-owned */

@@ -39,8 +39,8 @@
  * same offset-not-pointer discipline core_persistant_pool.h's own free-list
  * needs for the identical reason - see that file's own doc comment). */
 
-#include "core/core_base.h"
-#include "core/core_contracts.h"
+#include "core_base.h"
+#include "core_contracts.h"
 #include <string.h> /* memcpy */
 
 /* ftruncate/msync are POSIX.1-2001, not strict ISO C89 - same real gap

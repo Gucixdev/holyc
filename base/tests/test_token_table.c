@@ -4,9 +4,9 @@
 #define HASHTABLE_IMPLEMENTATION
 #define HASH_MAP_IMPLEMENTATION
 #define TOKEN_TABLE_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "data/hash/hash_hashmap.h"
-#include "data/data_token_table.h"
+#include "core_arena_alloc.h"
+#include "hash_hashmap.h"
+#include "data_token_table.h"
 
 #include <string.h>
 

@@ -9,8 +9,8 @@
  * is handed out (chunks never handed out come from `fresh` in address order),
  * so a big pool commits memory only as it fills. */
 
-#include "core/core_base.h"
-#include "core/core_contracts.h"
+#include "core_base.h"
+#include "core_contracts.h"
 
 #ifndef POOL_ASSERT
 #define POOL_ASSERT HOLYC_ASSERT

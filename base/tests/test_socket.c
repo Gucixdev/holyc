@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define SOCKET_IMPLEMENTATION
-#include "net/net_socket.h"
+#include "net_socket.h"
 #include <pthread.h>
 #include <string.h>
 

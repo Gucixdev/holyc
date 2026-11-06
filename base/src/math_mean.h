@@ -8,7 +8,7 @@
  * mean as a plain parameter rather than calling into this file
  * internally, for the same reason. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 f32 mean_f32(const f32 *data, size_t n);
 

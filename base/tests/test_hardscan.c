@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define HARDSCAN_IMPLEMENTATION
-#include "util/util_hardscan.h"
+#include "util_hardscan.h"
 #include <stdlib.h> /* system */
 
 int main(void)

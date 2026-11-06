@@ -30,8 +30,8 @@
  * had already allocated and never freed, which is exactly the state a
  * "persistent" pool exists to keep in the first place. */
 
-#include "core/core_base.h"
-#include "core/core_contracts.h"
+#include "core_base.h"
+#include "core_contracts.h"
 
 /* See core_persistant_arena.h's own identical note: ftruncate/msync are
  * POSIX.1-2001, not strict ISO C89 - compile with

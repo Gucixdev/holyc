@@ -26,8 +26,8 @@
  * this project already assumes (codec decoders trust their caller to
  * have handed them a file worth decoding, not an adversarial one). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef struct Vfs Vfs;
 
@@ -72,7 +72,7 @@ void vfs_mem_init(Vfs *vfs, Arena *a);
 #ifndef VFS_IMPLEMENTATION_
 #define VFS_IMPLEMENTATION_
 
-#include "util/util_path.h"
+#include "util_path.h"
 #include <fcntl.h>
 #include <unistd.h>
 

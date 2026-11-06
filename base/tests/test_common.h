@@ -13,7 +13,7 @@
  * SPECIFIC to it: the module(s) it's testing, and (for the ~half that
  * need it) core_arena_alloc.h. test_util.h already includes print.h itself,
  * so defining PRINT_IMPLEMENTATION before including it is sufficient -
- * no separate #include "core/core_base.h" needed. */
+ * no separate #include "core_base.h" needed. */
 
 #define PRINT_IMPLEMENTATION
 #include "test_util.h"

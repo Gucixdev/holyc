@@ -25,10 +25,10 @@
  * (core_arena_alloc.h, sequencer.h) make explicitly for their own first
  * versions. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
-#include "core/core_base.h"
-#include "net/net_socket.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
+#include "core_base.h"
+#include "net_socket.h"
 
 typedef enum {
     HTTP_ESUCCESS     =  0,

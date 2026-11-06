@@ -12,8 +12,8 @@
  * I/O against arbitrary paths, not the "write bytes to our own
  * stdout" job print.h exists for. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef struct {
     u8 *data;

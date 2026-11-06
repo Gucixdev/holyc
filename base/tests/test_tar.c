@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define TAR_IMPLEMENTATION
-#include "codec/codec_tinytar.h"
+#include "codec_tinytar.h"
 
 #include <string.h>
 #include <stdio.h>

@@ -1,7 +1,7 @@
 #include "test_common.h"
 #define BASE_TYPE_IMPLEMENTATION
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "data/data_scaffold.h"
+#include "data_scaffold.h"
 
 SCAFFOLD_ARRAY_DEFINE(i32, I32_Array)
 

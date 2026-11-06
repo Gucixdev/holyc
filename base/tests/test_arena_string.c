@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define ARENA_STRING_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "core/core_base.h"
+#include "core_arena_alloc.h"
+#include "core_base.h"
 
 #include <string.h>
 

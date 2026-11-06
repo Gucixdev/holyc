@@ -15,7 +15,7 @@
  * is, since this calls real ht_* functions that need their own bodies
  * compiled in. */
 
-#include "data/hash/hash_hashtable.h"
+#include "hash_hashtable.h"
 
 typedef struct {
     const void *key;

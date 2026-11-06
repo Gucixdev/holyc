@@ -24,7 +24,7 @@
  * core_args.h's own per-tool-copy convention) and call flags_init once at
  * the top of main with that tool's own env-var prefix. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef struct {
     i32 verbose;

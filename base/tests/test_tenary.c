@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define TENARY_IMPLEMENTATION
-#include "codec/codec_tenary.h"
+#include "codec_tenary.h"
 
 int main(void)
 {

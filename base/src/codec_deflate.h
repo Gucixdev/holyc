@@ -24,8 +24,8 @@
  * 0/1, matched here instead of carrying over stb's own error-message
  * plumbing). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 /* src need not be a complete zlib stream in one buffer up front in the
  * general case, but this port - like the original when driven from PNG -

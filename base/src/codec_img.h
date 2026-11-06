@@ -23,8 +23,8 @@
  * documented gaps, not silently missing, same convention codec_png_dec.h and
  * codec_jpeg_dec.h already use for their own scope cuts. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef enum {
     IMG_FORMAT_UNKNOWN = 0,
@@ -59,8 +59,8 @@ i32 img_decode(Arena *a, const u8 *data, size_t size, Img_Result *out);
 #ifndef IMG_IMPLEMENTATION_
 #define IMG_IMPLEMENTATION_
 
-#include "codec/codec_png_dec.h"
-#include "codec/codec_jpeg_dec.h"
+#include "codec_png_dec.h"
+#include "codec_jpeg_dec.h"
 
 static u32 img_read_u32le_(const u8 *p)
 {

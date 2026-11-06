@@ -1,9 +1,9 @@
 #include "test_common.h"
 #define VECTOR_IMPLEMENTATION
 #define LERP_IMPLEMENTATION
-#include "core/core_base.h"
-#include "math/math_mathx.h"
-#include "math/math_easing.h"
+#include "core_base.h"
+#include "math_mathx.h"
+#include "math_easing.h"
 
 int main(void)
 {

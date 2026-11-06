@@ -4,11 +4,11 @@
 #define SOCKET_IMPLEMENTATION
 #define HTTP_IMPLEMENTATION
 #define HTTP_SERVER_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "core/core_base.h"
-#include "net/net_socket.h"
-#include "net/net_http.h"
-#include "net/net_http_server.h"
+#include "core_arena_alloc.h"
+#include "core_base.h"
+#include "net_socket.h"
+#include "net_http.h"
+#include "net_http_server.h"
 #include <pthread.h>
 #include <string.h>
 

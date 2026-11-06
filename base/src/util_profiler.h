@@ -22,9 +22,9 @@
  * own code anyway (the one place this would bite is instrumenting
  * someone else's recursive code, not a normal use case here). */
 
-#include "core/core_base.h"
-#include "core/core_base.h"
-#include "util/util_time_util.h"
+#include "core_base.h"
+#include "core_base.h"
+#include "util_time_util.h"
 
 /* own local strcmp_ - own copy per this project's standing "no cross-
  * IMPLEMENTATION-guard dependency" rule, avoiding a <string.h>

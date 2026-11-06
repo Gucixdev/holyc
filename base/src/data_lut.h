@@ -21,7 +21,7 @@
  * table is a real bug elsewhere; here it's an explicit, documented
  * clamp-to-nearest-valid-entry, not silent corruption). */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef f32 (*Lut_F32_Gen_Fn)(i32 index, void *ctx);
 typedef u8  (*Lut_U8_Gen_Fn)(i32 index, void *ctx);

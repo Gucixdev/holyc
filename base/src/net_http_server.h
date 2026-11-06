@@ -27,11 +27,11 @@
  * Content-Length is treated as a zero-length body, not a hang waiting
  * for a close that may never come. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
-#include "core/core_base.h"
-#include "net/net_socket.h"
-#include "net/net_http.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
+#include "core_base.h"
+#include "net_socket.h"
+#include "net_http.h"
 
 typedef struct {
     String_View method;

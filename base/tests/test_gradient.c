@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define GRADIENT_IMPLEMENTATION
-#include "math/math_gradient.h"
+#include "math_gradient.h"
 #include <math.h>
 
 int main(void)

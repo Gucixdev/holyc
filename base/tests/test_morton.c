@@ -2,8 +2,8 @@
 #define BASE_TYPE_IMPLEMENTATION
 #define BIT_IMPLEMENTATION
 #define MORTON_IMPLEMENTATION
-#include "core/core_base.h"
-#include "math/math_curve.h"
+#include "core_base.h"
+#include "math_curve.h"
 
 int main(void)
 {

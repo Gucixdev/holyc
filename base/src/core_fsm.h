@@ -8,8 +8,8 @@
  * per state, entered/exited alongside the parent transition - left out
  * on purpose, not silently dropped). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef void (*Fsm_Callback)(i32 state, void *ctx);
 

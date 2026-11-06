@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define BASE_TYPE_IMPLEMENTATION
 #define FP_MATH_IMPLEMENTATION
-#include "core/core_base.h"
-#include "math/math_fp_math.h"
+#include "core_base.h"
+#include "math_fp_math.h"
 
 int main(void)
 {

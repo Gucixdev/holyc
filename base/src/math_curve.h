@@ -8,9 +8,9 @@
  * split files) - a caller/test wanting only one algorithm still only pulls
  * in that one's code, this file just puts them in one place on disk. */
 
-#include "core/core_base.h"
-#include "core/core_base.h"
-#include "math/math_mathx.h"
+#include "core_base.h"
+#include "core_base.h"
+#include "math_mathx.h"
 
 /* ---- bezier ----
  * Cubic Bezier evaluation - the scalar formula ported from cglm's

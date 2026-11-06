@@ -17,7 +17,7 @@
  * number of times, rather than looping forever or silently giving up -
  * a real, finite, documented wait, not an infinite spin. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef struct {
     i32 fd;    /* the open, locked file descriptor - held for the process's entire lifetime, closing it (including on process exit/crash) releases the lock automatically, the kernel's own guarantee */

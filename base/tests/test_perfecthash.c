@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define PERFECTHASH_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "data/hash/hash_perfecthash.h"
+#include "core_arena_alloc.h"
+#include "hash_perfecthash.h"
 
 /* C89 reserved keywords - the exact kind of fixed key set this is for */
 static const char *const c89_keywords[] = {

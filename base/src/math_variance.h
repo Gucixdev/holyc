@@ -13,7 +13,7 @@
  * estimate of some larger population's variance; a caller wanting
  * Bessel's correction can trivially multiply by n/(n-1) themselves. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 f32 variance_f32(const f32 *data, size_t n, f32 mean);
 f32 stddev_f32(const f32 *data, size_t n, f32 mean);
@@ -25,7 +25,7 @@ f32 stddev_f32(const f32 *data, size_t n, f32 mean);
 #define VARIANCE_IMPLEMENTATION_
 
 /* Newton-Raphson sqrt, replacing math.h's - own local copy (see
- * src/core/core_base.h's own vector_sqrt_/quat_sqrt_/matrix_sqrt_ for the
+ * src/core_base.h's own vector_sqrt_/quat_sqrt_/matrix_sqrt_ for the
  * precedent and algorithm) - part of this project's "0 glibc" push. */
 static f64 variance_sqrt_(f64 x)
 {

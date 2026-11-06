@@ -11,7 +11,7 @@
  * cglm bundles that into its own trig-adjacent euler.h, but it's really
  * orientation math, not a trig helper. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 #ifndef HOLYC_PI
 #define HOLYC_PI 3.14159265358979323846

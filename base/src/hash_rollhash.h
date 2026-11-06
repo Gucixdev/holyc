@@ -16,7 +16,7 @@
  * chunking/search use, NOT a cryptographic or collision-resistant
  * hash (same disclaimer hash_marmur.h/hash_tinyxxhash.h already carry). */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 #define ROLLHASH_BASE 257u
 

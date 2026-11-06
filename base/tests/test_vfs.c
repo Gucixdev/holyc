@@ -3,9 +3,9 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define PATH_IMPLEMENTATION
 #define VFS_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "util/util_path.h"
-#include "util/util_vfs.h"
+#include "core_arena_alloc.h"
+#include "util_path.h"
+#include "util_vfs.h"
 
 #include <stdlib.h> /* mkdtemp */
 #include <string.h>

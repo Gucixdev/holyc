@@ -3,8 +3,8 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define HASHTABLE_IMPLEMENTATION
 #define HASH_MAP_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "data/hash/hash_hashmap.h"
+#include "core_arena_alloc.h"
+#include "hash_hashmap.h"
 
 int main(void)
 {

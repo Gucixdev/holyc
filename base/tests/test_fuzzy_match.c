@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define FUZZY_MATCH_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "util/util_fuzzy_match.h"
+#include "core_arena_alloc.h"
+#include "util_fuzzy_match.h"
 
 #include <string.h>
 

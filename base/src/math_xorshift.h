@@ -6,7 +6,7 @@
  * value except 0, which is why seed 0 is rejected below). General-
  * knowledge algorithm, not a port.
  *
- * `src/math/math_rng.h` (PCG32) already exists as this project's
+ * `src/math_rng.h` (PCG32) already exists as this project's
  * default general-purpose PRNG and its own header comment explains why
  * it's usually the better choice - xorshift32's LOW bits are known-weak
  * (bit 0 alone has period 2, not the full 2^32-1), a real problem for
@@ -16,8 +16,8 @@
  * external system/paper that specifies it) - not a default recommendation
  * over math_rng.h. */
 
-#include "core/core_base.h"
-#include "core/core_contracts.h"
+#include "core_base.h"
+#include "core_contracts.h"
 
 typedef struct {
     u32 state;

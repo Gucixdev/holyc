@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define RNG_IMPLEMENTATION
 #define UUID_IMPLEMENTATION
-#include "math/math_rng.h"
-#include "util/util_uuid4.h"
+#include "math_rng.h"
+#include "util_uuid4.h"
 
 #define N 2000
 

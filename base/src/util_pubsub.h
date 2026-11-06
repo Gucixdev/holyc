@@ -12,7 +12,7 @@
  * revisit (raise the constant), not a silent truncation - pubsub_signal_connect
  * returns 0 rather than dropping a subscriber quietly when full. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 #ifndef PUBSUB_MAX_SUBSCRIBERS
 #define PUBSUB_MAX_SUBSCRIBERS 16

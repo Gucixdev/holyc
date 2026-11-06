@@ -1,7 +1,7 @@
 /* test_tenary_gates.c - balanced ternary logic: min/max are Kleene AND/OR, neg is NOT, diff is the
  * three-way compare. Checks the full 3x3 tables, De Morgan, double negation and the array forms. */
 #define TENARY_GATES_IMPLEMENTATION
-#include "math/math_tenary_gates.h"
+#include "math_tenary_gates.h"
 #include <stdio.h>
 
 static int fails;

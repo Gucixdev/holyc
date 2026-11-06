@@ -11,7 +11,7 @@ formats, crypto, networking, and the small utilities that keep coming up.
 
 ```c
 #define ARENA_ALLOC_IMPLEMENTATION    // once, in one .c file
-#include "core/core_arena_alloc.h"
+#include "core_arena_alloc.h"
 
 Arena a = {0};
 void *p = arena_alloc(&a, 256);       // a pointer add; freed all at once
@@ -33,13 +33,14 @@ integers are `long long`. Measured with GCC 16.2, all 130 tests compile and pass
 ## Layout
 
 ```
-src/core/     core_base.h, allocators, job pool and queues, coroutines, streams, io, log, args, flags, utf8
-src/data/     array, list, tree, slot map, trie, suffix array, interner, lookup table; data/hash/
-src/math/     vectors/matrices/quaternions, trig, curves, easing, noise, RNGs, statistics, ternary logic
-src/codec/    deflate, png, jpeg, qoi, wav, mp3, bdf, json, csv, ini, tar, base64, base63, ternary packing
-src/crypto/   aes256, sha256, merkle tree
-src/net/      sockets, http client and server, ipv4 helpers, stream pipe
-src/util/     paths, vfs, config, dates, units, uuid, fuzzy match, expression tree + formula + vm, profiler...
+src/          every header, no subfolders; the prefix says the group:
+  core_       core_base.h, allocators, job pool and queues, coroutines, streams, io, log, args, flags, utf8
+  data_       array, list, tree, slot map, trie, suffix array, interner, lookup table; hash_ the hash tables
+  math_       vectors/matrices/quaternions, trig, curves, easing, noise, RNGs, statistics, ternary logic
+  codec_      deflate, png, jpeg, qoi, wav, mp3, bdf, json, csv, ini, tar, base64, base63, ternary packing
+  crypto_     aes256, sha256, merkle tree
+  net_        sockets, http client and server, ipv4 helpers, stream pipe
+  util_       paths, vfs, config, dates, units, uuid, fuzzy match, expression tree + formula + vm, profiler...
 tests/        one program per module: tests/test_NAME.c
 bench/        benchmarks
 THIRD_PARTY/  licence texts of the code some headers are ported from, see THIRD_PARTY.md
@@ -58,7 +59,7 @@ bookkeeping and holds the C to it (see `lean4/README.md`).
 
 ## What is in it, module by module
 
-### core/
+### core_
 
 | header | what it is |
 |---|---|
@@ -84,7 +85,7 @@ bookkeeping and holds the C to it (see `lean4/README.md`).
 | `core_utf8.h` | decode/encode one codepoint, count codepoints, validate a buffer |
 | `core_xmacro.h` | X-macro helpers: one list generates an enum, a name table and a dispatcher |
 
-### data/
+### data_
 
 | header | what it is |
 |---|---|
@@ -101,15 +102,15 @@ bookkeeping and holds the C to it (see `lean4/README.md`).
 | `data_mapops.h` | filter / fold / foreach over the type-erased `Array` |
 | `data_merge_ops.h` | the merge step of merge sort for two sorted `Array`s, and merging one hash map into another (overwrite or keep existing) |
 | `data_hex.h` | bytes to lowercase hex and back |
-| `hash/hash_hashtable.h` | generic hash table: open addressing, triangular probing, FNV-1a, tombstones, resize at 70% load |
-| `hash/hash_hashmap.h` | insertion-ordered map on the hash table |
-| `hash/hash_hashset.h` | set of byte keys on the hash table |
-| `hash/hash_marmur.h` | MurmurHash3, x86 32-bit |
-| `hash/hash_tinyxxhash.h` | XXH32 |
-| `hash/hash_rollhash.h` | rolling polynomial hash (Rabin-Karp): O(1) update as a window slides |
-| `hash/hash_perfecthash.h` | minimal perfect hash for a fixed key set (hash, displace and compress) |
+| `hash_hashtable.h` | generic hash table: open addressing, triangular probing, FNV-1a, tombstones, resize at 70% load |
+| `hash_hashmap.h` | insertion-ordered map on the hash table |
+| `hash_hashset.h` | set of byte keys on the hash table |
+| `hash_marmur.h` | MurmurHash3, x86 32-bit |
+| `hash_tinyxxhash.h` | XXH32 |
+| `hash_rollhash.h` | rolling polynomial hash (Rabin-Karp): O(1) update as a window slides |
+| `hash_perfecthash.h` | minimal perfect hash for a fixed key set (hash, displace and compress) |
 
-### math/
+### math_
 
 | header | what it is |
 |---|---|
@@ -131,7 +132,7 @@ bookkeeping and holds the C to it (see `lean4/README.md`).
 | `math_extras.h` | ratios: simplify to lowest terms, from width and height (1920x1080 gives 16:9), to float |
 | `math_tenary_gates.h` | **balanced ternary logic** over `Trit` in {-1, 0, +1}: `tmin`/`tmax` are Kleene AND/OR, `tneg` is NOT, `tdiff` is the three-way compare; array forms that may work in place. Used by `notcoreutils/tgates` |
 
-### codec/
+### codec_
 
 | header | what it is |
 |---|---|
@@ -152,7 +153,7 @@ bookkeeping and holds the C to it (see `lean4/README.md`).
 | `codec_tinytar.h` | POSIX ustar reader and writer with a pluggable stream backend (from rxi/microtar) |
 | `codec_serialize.h` | binary reader and writer over a buffer: little-endian integers, floats, byte runs |
 
-### crypto/
+### crypto_
 
 | header | what it is |
 |---|---|
@@ -160,7 +161,7 @@ bookkeeping and holds the C to it (see `lean4/README.md`).
 | `crypto_sha256_hash.h` | SHA-256 (FIPS 180-4), one shot |
 | `crypto_merkletree.h` | Merkle tree over SHA-256 with proofs: verify a block against the root without the whole data set |
 
-### net/
+### net_
 
 | header | what it is |
 |---|---|
@@ -170,7 +171,7 @@ bookkeeping and holds the C to it (see `lean4/README.md`).
 | `net_net.h` | IPv4 string to 4 bytes and back, 16/32-bit host/network byte order |
 | `net_pipe.h` | producer/consumer close protocol on a `Stream`: "empty for now" versus "finished" |
 
-### util/
+### util_
 
 | header | what it is |
 |---|---|

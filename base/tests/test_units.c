@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define UNITS_IMPLEMENTATION
-#include "util/util_units.h"
+#include "util_units.h"
 
 int main(void)
 {

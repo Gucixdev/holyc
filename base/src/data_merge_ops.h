@@ -16,8 +16,8 @@
  *     wins" choice a real settings-layering system needs both
  *     directions of). */
 
-#include "data/data_array.h"
-#include "data/hash/hash_hashmap.h"
+#include "data_array.h"
+#include "hash_hashmap.h"
 
 /* `out` must be a dynamic Array (array_dynamic_init) of the SAME
  * elem_size as `a` and `b`, and both `a`/`b` must already be sorted

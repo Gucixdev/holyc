@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define SIMPLEX_IMPLEMENTATION
-#include "math/math_noise.h"
+#include "math_noise.h"
 #include <math.h>
 
 int main(void)

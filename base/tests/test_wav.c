@@ -2,8 +2,8 @@
 #define ARENA_ALLOC_IMPLEMENTATION
 #define WAV_DEC_IMPLEMENTATION
 #define WAV_ENC_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "codec/codec_wav.h"
+#include "core_arena_alloc.h"
+#include "codec_wav.h"
 
 #include <string.h>
 

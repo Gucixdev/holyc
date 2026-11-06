@@ -7,8 +7,8 @@
  * preconditions the model states (Pool.alloc_inv, Pool.dealloc_inv). */
 #define ARENA_ALLOC_IMPLEMENTATION
 #define POOL_ALLOC_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "core/core_pool_alloc.h"
+#include "core_arena_alloc.h"
+#include "core_pool_alloc.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

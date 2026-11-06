@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
 #define BASE63_DECODE_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
-#include "codec/codec_base63.h"
+#include "core_arena_alloc.h"
+#include "codec_base63.h"
 #include <string.h>
 
 static const char base63_test_alphabet_[] =

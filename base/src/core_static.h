@@ -11,7 +11,7 @@
  * to grow at runtime, or must it stay a known, fixed size" (confirmed
  * scope, see src/core/questions.md's own dataflow/static.h entry). */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef struct {
     u8 *data;

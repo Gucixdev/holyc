@@ -24,8 +24,8 @@
  * caller mixing i64 and f64 in one program converts explicitly via
  * VM_OP_I2F/VM_OP_F2I, the same way C itself requires an explicit cast. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef enum {
     VM_OP_HALT = 0,

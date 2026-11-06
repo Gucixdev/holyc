@@ -15,7 +15,7 @@
  * a whole tree, not random-accessing the Nth child) never need the
  * latter. */
 
-#include "core/core_arena_alloc.h"
+#include "core_arena_alloc.h"
 
 typedef struct Tree_Node {
     struct Tree_Node *parent;

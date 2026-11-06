@@ -11,8 +11,8 @@
  * so unlike codec_base63.h/codec_qoi_codec.h there's no shared-name collision to
  * dodge between the two IMPLEMENTATION blocks here. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef enum {
     BASE64_ESUCCESS  = 0,

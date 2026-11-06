@@ -26,9 +26,9 @@
  * file), not defaulted to zero - a font that doesn't know a glyph's
  * advance width or bitmap dimensions can't be laid out correctly anyway. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
-#include "core/core_base.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
+#include "core_base.h"
 
 typedef struct {
     i32 codepoint;
@@ -64,7 +64,7 @@ i32 bdf_glyph_bit(const Bdf_Glyph *g, i32 x, i32 y);
 #define BDF_DEC_IMPLEMENTATION_
 
 #define PERFECTHASH_IMPLEMENTATION
-#include "data/hash/hash_perfecthash.h"
+#include "hash_perfecthash.h"
 
 #define BDF_KW_FONTBOUNDINGBOX 0
 #define BDF_KW_FONT_ASCENT     1

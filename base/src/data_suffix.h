@@ -9,9 +9,9 @@
  * lookup via binary search over the sorted suffixes, O(m log n) for a
  * pattern of length m. */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
-#include "core/core_base.h" /* mem_cmp. SUFFIX_IMPLEMENTATION callers must also define
+#include "core_base.h"
+#include "core_arena_alloc.h"
+#include "core_base.h" /* mem_cmp. SUFFIX_IMPLEMENTATION callers must also define
                    * STR_IMPLEMENTATION in the same TU. */
 #include <stdlib.h> /* qsort */
 

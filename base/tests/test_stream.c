@@ -1,8 +1,8 @@
 #include "test_common.h"
 #define ARENA_ALLOC_IMPLEMENTATION
-#include "core/core_arena_alloc.h"
+#include "core_arena_alloc.h"
 #define STREAM_IMPLEMENTATION
-#include "core/core_stream.h"
+#include "core_stream.h"
 
 int main(void)
 {

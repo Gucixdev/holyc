@@ -21,7 +21,7 @@ original licence text is in `THIRD_PARTY/`.
 | `util_cli.h` | xgetopt | its authors | public domain (Unlicense), stated in the header |
 | `math_curve.h` | the scalar Bezier formula from [recp/cglm](https://github.com/recp/cglm) | Recep Aslantas | MIT, `LICENSE.cglm` |
 
-Implementations written from scratch from the published algorithm, not ports: `hash/hash_marmur.h`
-(MurmurHash3 by Austin Appleby, public domain), `hash/hash_tinyxxhash.h` (XXH32 by Yann Collet),
+Implementations written from scratch from the published algorithm, not ports: `hash_marmur.h`
+(MurmurHash3 by Austin Appleby, public domain), `hash_tinyxxhash.h` (XXH32 by Yann Collet),
 `core_corountines.h` (the protothreads technique by Adam Dunkels), `util_fuzzy_match.h` (the FuzzyMatchV2
 scoring of [junegunn/fzf](https://github.com/junegunn/fzf), MIT).

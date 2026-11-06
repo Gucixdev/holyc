@@ -8,7 +8,7 @@
  * "still exposes them transparently" pattern base_type.h uses for
  * bit.h's BIT()/FLAG_*() macros. */
 
-#include "math/math_mathx.h"
+#include "math_mathx.h"
 
 #endif /* HOLYC_LINEAR_ALGEBRA_H_ */
 
@@ -33,7 +33,7 @@
 #define QUAT_IMPLEMENTATION
 #endif
 
-#include "math/math_mathx.h"
+#include "math_mathx.h"
 
 #endif /* LINEAR_ALGEBRA_IMPLEMENTATION_ */
 #endif /* LINEAR_ALGEBRA_IMPLEMENTATION */

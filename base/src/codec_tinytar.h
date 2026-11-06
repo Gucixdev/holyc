@@ -11,7 +11,7 @@
  * (mtar_open), a caller can still point tar->read/write/seek/close
  * elsewhere (e.g. an in-memory buffer) without touching this file. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 /* own local memset_/strcmp_/strcpy_ - own copy per this project's
  * standing "no cross-IMPLEMENTATION-guard dependency" rule, avoiding a

@@ -10,7 +10,7 @@
  * around it, same token-pasted-prefix convention as OPTION_DEFINE/
  * RESULT_DEFINE (help/result.h) and FABRIC_DEFINE (help/fabric.h).
  *
- * Different from data/data_array.h's Array: that one is runtime-typed
+ * Different from data_array.h's Array: that one is runtime-typed
  * (void*, one binary works for any element size). This is compile-time
  * typed (one concrete struct+functions per T, real type checking, no
  * void* casts at call sites) - reach for this when T is fixed and
@@ -23,8 +23,8 @@
  *   i32 *v = I32_Array_get(&xs, 0);
  */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 #define SCAFFOLD_ARRAY_DEFINE(T, Name)                                    \
 typedef struct {                                                          \

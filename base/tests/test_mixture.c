@@ -1,6 +1,6 @@
 #include "test_common.h"
 #define MIXTURE_IMPLEMENTATION
-#include "math/math_mixture.h"
+#include "math_mixture.h"
 
 static i32 near_(f64 a, f64 b) { f64 d = a - b; if (d < 0) d = -d; return d < 0.0001; }
 

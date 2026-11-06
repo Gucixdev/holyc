@@ -24,7 +24,7 @@
  * overwrites the ones before it in Args_Result, same as most getopt
  * implementations default to). */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 #ifndef ARGS_MAX_MATCHES
 #define ARGS_MAX_MATCHES 32

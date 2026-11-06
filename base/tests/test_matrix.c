@@ -2,8 +2,8 @@
 #define VECTOR_IMPLEMENTATION
 #define MATRIX_IMPLEMENTATION
 #define QUAT_IMPLEMENTATION
-#include "core/core_base.h"
-#include "math/math_mathx.h"
+#include "core_base.h"
+#include "math_mathx.h"
 
 int main(void)
 {

@@ -7,8 +7,8 @@
  * sparse/compressed trie would trade that for a much bigger real gain
  * only past a few thousand keys). */
 
-#include "core/core_base.h"
-#include "core/core_arena_alloc.h"
+#include "core_base.h"
+#include "core_arena_alloc.h"
 
 typedef struct Prefix_Node_ {
     struct Prefix_Node_ *children[256];

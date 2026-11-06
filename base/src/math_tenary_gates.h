@@ -29,7 +29,7 @@
  * work on THAT file, not bundled into this one - see tenary/readme's
  * own roadmap. */
 
-#include "core/core_base.h"
+#include "core_base.h"
 
 typedef i8 Trit; /* -1, 0, or +1 - caller-guaranteed, not clamped on input (see tenary_gates_clamp below for the one place that IS meant to produce an out-of-range sum safely) */
 
