@@ -4,6 +4,7 @@
   two outputs byte for byte. Input: one operation per line, the harness's own output (its results are ignored).
 -/
 import Base
+import Holyc.Oracle
 open Base
 
 structure S where
@@ -14,7 +15,7 @@ structure S where
   blocks : Array (Nat × Nat) := #[]
   pool : Pool.St := Pool.init 0
 
-def num (w : String) : Nat := w.toNat?.getD 0
+open Holyc.Oracle (num)
 
 def step (st : S) : List String → S × String
   | ["arena", b, cap, pg] =>
@@ -41,7 +42,7 @@ def step (st : S) : List String → S × String
   | "l" :: n :: k :: _ =>
     let a := 2 ^ num k
     match Arena.alloc st.arena (num n + a - 1) with
-    | some (o, s') => ({ st with arena := s' }, s!"l {n} {k} {Arena.alignUp (st.base + o) a - st.base}")
+    | some (o, s') => ({ st with arena := s' }, s!"l {n} {k} {Holyc.alignUp (st.base + o) a - st.base}")
     | none => (st, s!"l {n} {k} none")
   | "s" :: _ => ({ st with marks := st.marks.push (Arena.snapshot st.arena) }, s!"s {Arena.snapshot st.arena}")
   | "r" :: j :: _ =>
@@ -49,7 +50,7 @@ def step (st : S) : List String → S × String
     ({ st with arena := s', blocks := #[] }, s!"r {j} {8 * s'.count}")
   | "z" :: _ => ({ st with arena := Arena.reset st.arena, blocks := #[] }, "z 0")
   | "p" :: bs :: cs :: _ =>
-    let acs := Arena.alignUp (num cs) 8
+    let acs := Holyc.alignUp (num cs) 8
     ({ st with pool := Pool.init (num bs / acs) }, s!"p {bs} {cs} {acs}")
   | "pa" :: _ =>
     match Pool.alloc st.pool with
@@ -59,13 +60,4 @@ def step (st : S) : List String → S × String
   | "pf" :: _ => ({ st with pool := Pool.init st.pool.k }, "pf")
   | ws => (st, s!"? {" ".intercalate ws}")
 
-partial def loop (h : IO.FS.Stream) (o : IO.FS.Stream) (st : S) : IO Unit := do
-  let line ← h.getLine
-  if line.isEmpty then return
-  let ws := (line.trimRight.splitOn " ").filter (· ≠ "")
-  let (st', out) := step st ws
-  o.putStrLn out
-  loop h o st'
-
-def main : IO Unit := do
-  loop (← IO.getStdin) (← IO.getStdout) {}
+def main : IO Unit := Holyc.Oracle.run step {}

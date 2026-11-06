@@ -114,8 +114,8 @@ theorem chunk_in_buffer {bs cs i : Nat} (hi : i < bs / cs) : i * cs + cs ≤ bs 
 /-- pool_init's chunk size, pool_align_up(chunk_size, sizeof(void *)): a multiple of 8, at least the request and
     less than 8 above it. -/
 theorem chunk_size_spec (cs : Nat) :
-    Arena.alignUp cs 8 % 8 = 0 ∧ cs ≤ Arena.alignUp cs 8 ∧ Arena.alignUp cs 8 < cs + 8 := by
-  have := Arena.alignUp_spec cs 8 0 (by decide)
+    Holyc.alignUp cs 8 % 8 = 0 ∧ cs ≤ Holyc.alignUp cs 8 ∧ Holyc.alignUp cs 8 < cs + 8 := by
+  have := Holyc.alignUp_spec cs 8 0 (by decide)
   omega
 
 end Base.Pool

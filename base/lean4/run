@@ -1,64 +1,20 @@
 #!/usr/bin/env bash
-# lean4/run - build the proofs, audit their axioms, scan the sources for escape hatches; exit 0 when all pass.
-# Then the differential test: c/alloc_harness.c runs seeded random operations on the real arena and pool (built
-# with gcc and with clang), allocoracle recomputes every result from the Lean model, and the outputs must match
-# byte for byte, every arena_calloc block reads zero and every arena_realloc block keeps its bytes; and the
-# mutants: one-line changes to a copy of src/ that the differential test must catch.
-# Needs elan with the toolchain in lean-toolchain, gcc, clang if present. SEEDS=N sets the seeds per compiler.
-set -uo pipefail
-cd "$(dirname "$0")" || exit 2
-export PATH="$HOME/.elan/bin:$PATH"
-fail=0
-step() { printf '  %-4s %s\n' "$1" "$2"; [[ $1 == ok ]] || fail=1; }
-if lake build > .lake-build.log 2>&1; then step ok "lake build: $(grep -oE '[0-9]+ jobs' .lake-build.log | tail -1)"
-else tail -20 .lake-build.log; step FAIL "lake build"; fi
-if lake env lean Audit.lean > .lake-audit.log 2>&1 && grep -q 'none rests' .lake-audit.log; then
-    step ok "$(grep -oE 'axiom audit: [0-9]+ theorems \([0-9]+ written' .lake-audit.log) in the sources)"
-else cat .lake-audit.log; step FAIL "axiom audit"; fi
-if grep -rnE '\b(sorry|admit|native_decide|bv_decide)\b|^[[:space:]]*axiom ' --include=*.lean --exclude=Audit.lean \
-        --exclude-dir=.lake .; then step FAIL "source scan"
-else step ok "source scan: no sorry, admit, native_decide, bv_decide or axiom"; fi
-
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-oracle=.lake/build/bin/allocoracle
-same() { # HARNESS SEED: the harness's output and the oracle's replay of it are identical
-    { "$1" "$2" 3000 > "$tmp/c"; } 2> /dev/null && "$oracle" < "$tmp/c" > "$tmp/l" && cmp -s "$tmp/c" "$tmp/l"
-}
-if lake build allocoracle > .lake-oracle.log 2>&1; then
-    seeds=${SEEDS:-200} runs=0 bad=""
-    for cc in gcc clang; do
-        command -v "$cc" > /dev/null || continue
-        if ! "$cc" -std=gnu11 -O2 -w -D_GNU_SOURCE -I../src -o "$tmp/h_$cc" c/alloc_harness.c; then bad="$bad $cc"; continue; fi
-        for s in $(seq 1 "$seeds"); do
-            if same "$tmp/h_$cc" "$s"; then runs=$((runs + 1)); else bad="$bad $cc:seed$s"; diff "$tmp/c" "$tmp/l" | head -4; break; fi
-        done
-    done
-    if [[ -z $bad && $runs -gt 0 ]]; then
-        step ok "differential: $runs runs of 3000 operations (seeds 1-$seeds, gcc and clang), arena and pool equal the model"
-    else step FAIL "differential:$bad"; fi
-else tail -20 .lake-oracle.log; step FAIL "allocoracle build"; fi
-
-# NAME FILE SED: the harness built on a copy of src/ with one change must disagree with the model
-caught=0 total=0 survived=""
-mutant() {
-    local m; m=$(mktemp -d "$tmp/m.XXXX"); cp -r ../src "$m/src"; total=$((total + 1))
-    sed -i "$3" "$m/src/$2"
-    if cmp -s "../src/$2" "$m/src/$2"; then survived="$survived $1(sed-matched-nothing)"; return; fi
-    gcc -std=gnu11 -O2 -w -D_GNU_SOURCE -I"$m/src" -o "$m/h" c/alloc_harness.c 2> /dev/null || { caught=$((caught + 1)); return; }
-    local s; for s in 1 2 3 4 5; do same "$m/h" "$s" || { caught=$((caught + 1)); return; }; done
-    survived="$survived $1"
-}
-if [[ -x $oracle ]]; then
-    mutant granules core_arena_alloc.h 's|size_t size = size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) != 0);|size_t size = size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) > 1);|'
-    mutant align-mask core_arena_alloc.h 's|aligned_addr = (addr + align - 1) \& ~(align - 1);|aligned_addr = (addr + align) \& ~(align - 1);|'
-    mutant rewind core_arena_alloc.h 's|m.region->count = m.count;|m.region->count = m.count + 1;|'
-    mutant keep-high core_arena_alloc.h 's|if (r->count > r->high) r->high = r->count;|if (r->count > r->high) r->high = r->count - 1;|'
-    mutant calloc-zero core_arena_alloc.h 's|memset(p, 0, dirty - off < n ? dirty - off : n);|memset(p, 0, dirty - off < n ? (dirty - off) / 2 : n);|'
-    mutant realloc-top core_arena_alloc.h 's|(u64 \*)oldptr + og == \&r->data\[r->count\]|(u64 *)oldptr + og <= \&r->data[r->count]|'
-    mutant decommit core_arena_alloc.h 's|r->high = (size_t)(from - data) / sizeof(u64);|r->high = 0;|'
-    mutant pool-align core_pool_alloc.h 's|return (n + align - 1) \& ~(align - 1);|return (n + align) \& ~(align - 1);|'
-    mutant pool-fresh core_pool_alloc.h 's|p->fresh += p->chunk_size;|p->fresh += 2 * p->chunk_size;|'
-    if [[ -z $survived ]]; then step ok "mutants: $caught of $total caught"
-    else step FAIL "mutants: survived:$survived"; fi
-fi
-exit "$fail"
+# lean4/run - base's proofs: build, axiom audit, source scan, the differential test of the arena and pool against
+# the model (c/alloc_harness.c replayed by allocoracle; every arena_calloc block must read zero, every arena_realloc
+# block keep its bytes) and the mutants of src/ it must catch. The steps are in ../../lean4/lib.sh; SEEDS=N sets the
+# seeds per compiler (default 200).
+. "$(dirname "$0")/../../lean4/lib.sh" || exit 2
+lean_build
+lean_audit
+lean_scan
+diff_test c/alloc_harness.c allocoracle
+mutant granules core_arena_alloc.h 's|size_t size = size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) != 0);|size_t size = size_bytes / sizeof(u64) + (size_bytes % sizeof(u64) > 1);|'
+mutant align-mask core_arena_alloc.h 's|aligned_addr = (addr + align - 1) \& ~(align - 1);|aligned_addr = (addr + align) \& ~(align - 1);|'
+mutant rewind core_arena_alloc.h 's|m.region->count = m.count;|m.region->count = m.count + 1;|'
+mutant keep-high core_arena_alloc.h 's|if (r->count > r->high) r->high = r->count;|if (r->count > r->high) r->high = r->count - 1;|'
+mutant calloc-zero core_arena_alloc.h 's|memset(p, 0, dirty - off < n ? dirty - off : n);|memset(p, 0, dirty - off < n ? (dirty - off) / 2 : n);|'
+mutant realloc-top core_arena_alloc.h 's|(u64 \*)oldptr + og == \&r->data\[r->count\]|(u64 *)oldptr + og <= \&r->data[r->count]|'
+mutant decommit core_arena_alloc.h 's|r->high = (size_t)(from - data) / sizeof(u64);|r->high = 0;|'
+mutant pool-align core_pool_alloc.h 's|return (n + align - 1) \& ~(align - 1);|return (n + align) \& ~(align - 1);|'
+mutant pool-fresh core_pool_alloc.h 's|p->fresh += p->chunk_size;|p->fresh += 2 * p->chunk_size;|'
+lean_end
