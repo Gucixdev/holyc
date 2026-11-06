@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# dirprefix - give every file in DIR's subfolders its folder's name as a prefix (core/base.h becomes
+# core/core_base.h, data/hash/hashmap.h becomes data/hash/hash_hashmap.h) and rewrite what names the old paths.
+#
+#   tools/dirprefix base/src        rename (git mv inside a repository, mv outside one) and rewrite
+#   tools/dirprefix -n base/src     list the renames, change nothing
+#
+# Rewritten in every tracked text file of the repository: #include "core/base.h" (the path below DIR, as -IDIR
+# finds it), #include "base.h" in a file of the same folder, and the path below the repository root
+# (base/src/core/base.h) wherever it appears. In the files under DIR's parent folder (base/ for base/src), outside
+# #include lines, also the shorter mentions in comments and docs: src/core/base.h, hash/hashmap.h and the bare
+# name base.h (not after a / or <, so sys/socket.h and <log.h> stay; after one in io.h/log.h). This script itself
+# is left out. Files directly in DIR, and files already named FOLDER_..., stay as they are, so a second run
+# changes nothing. Refuses before touching anything when a new name is taken. Prints one line per rename.
+# Example: tools/dirprefix -n base/src
+set -euo pipefail
+
+dry=0
+[[ ${1:-} == -n ]] && { dry=1; shift; }
+[[ $# -eq 1 && -d $1 ]] || { sed -n '2,15s/^# \{0,1\}//p' "$0" >&2; exit 2; }
+dir=$(cd "$1" && pwd)
+root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)
+
+moves=$(mktemp)
+trap 'rm -f "$moves" "$moves.sed" "$moves.bare" "$moves.names"' EXIT
+( cd "$dir" && find . -mindepth 2 -type f ! -path '*/.*' | sed 's|^\./||' | sort ) | while IFS= read -r rel; do
+    sub=${rel%/*}; folder=${sub##*/}; name=${rel##*/}
+    [[ $name == "${folder}_"* ]] && continue
+    printf '%s\t%s\n' "$rel" "$sub/${folder}_$name"
+done > "$moves"
+
+[[ -s $moves ]] || { echo "dirprefix: nothing to rename in $1"; exit 0; }
+while IFS=$'\t' read -r old new; do
+    [[ -e $dir/$new ]] && { echo "dirprefix: $new exists already; nothing renamed" >&2; exit 1; }
+done < "$moves"
+if (( dry )); then awk -F'\t' '{printf "%s -> %s\n", $1, $2}' "$moves"; exit 0; fi
+
+# Two sed scripts, | and # as delimiters (paths have neither). $moves.sed, for the whole repository: the include
+# form, then the path from the root. $moves.bare, for DIR's parent: every shorter form of the path, skipping
+# #include lines; each substitution loops (:m1 ... t m1) so a name twice in a line is caught both times.
+rp=${root:+${dir#"$root"/}}
+awk -F'\t' -v rp="$rp" -v sedf="$moves.sed" -v baref="$moves.bare" '
+    function q(s) { gsub(/[.^$*+?()[\]{}\\]/, "\\\\&", s); return s }
+    BEGIN { print "/^[[:space:]]*#[[:space:]]*include/b" > baref }
+    {
+        printf "s|(#[[:space:]]*include[[:space:]]*\")%s\"|\\1%s\"|g\n", q($1), $2 > sedf
+        if (rp != "") printf "s|%s|%s|g\n", q(rp "/" $1), rp "/" $2 > sedf
+        n = split($1, s, "/"); nb = $2; sub(/.*\//, "", nb)
+        for (i = 1; i <= n; i++) {
+            o = s[i]; for (j = i + 1; j <= n; j++) o = o "/" s[j]
+            w = nb; for (j = n - 1; j >= i; j--) w = s[j] "/" w
+            pre = i == 1 ? "[^A-Za-z0-9_.-]" : i < n ? "[^A-Za-z0-9_./<-]" : "[^A-Za-z0-9_./<-]|\\.h/"
+            k++
+            printf ":m%d\ns#(^|%s)%s([^A-Za-z0-9_]|$)#\\1%s\\2#\nt m%d\n", k, pre, q(o), w, k > baref
+        }
+    }' "$moves"
+awk -F'\t' '{ sub(/.*\//, "", $1); print $1 }' "$moves" > "$moves.names"
+
+while IFS=$'\t' read -r old new; do
+    if [[ -n $root ]] && git -C "$root" ls-files --error-unmatch "$dir/$old" >/dev/null 2>&1; then
+        git -C "$root" mv "$dir/$old" "$dir/$new"
+    else
+        mv -n "$dir/$old" "$dir/$new"
+    fi
+    echo "$old -> $new"
+done < "$moves"
+
+# a bare include of a sibling ("base.h" inside core/) gets the new name, in that folder only
+while IFS=$'\t' read -r old new; do
+    sub=${old%/*}; o=${old##*/}
+    for f in "$dir/$sub"/*; do
+        [[ -f $f ]] && sed -i -E "s|(#[[:space:]]*include[[:space:]]*\")${o//./\\.}\"|\\1${new##*/}\"|g" "$f"
+    done
+done < "$moves"
+
+# SCRIPT TOP: run the sed script on every text file below TOP that names an old file (tracked files only in a
+# repository), symlinks and this script left alone
+rewrite() {
+    local f
+    if [[ -n $root ]]; then
+        git -C "$2" ls-files -z | (cd "$2" && xargs -0 grep -lIF -f "$moves.names" 2>/dev/null || true)
+    else
+        find "$2" -type f -exec grep -lIF -f "$moves.names" {} + 2>/dev/null | sed "s|^$2/||" || true
+    fi | while IFS= read -r f; do
+        [[ -L $2/$f || $2/$f -ef $0 ]] || sed -i -E -f "$1" "$2/$f"
+    done
+}
+rewrite "$moves.sed" "${root:-$dir}"
+rewrite "$moves.bare" "$(dirname "$dir")"
+echo "dirprefix: $(wc -l < "$moves") files renamed in $1; run the project's tests"
