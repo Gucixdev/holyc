@@ -124,7 +124,7 @@ Not covered: ScaNN, Annoy, NMSLIB, Azure AI Search, turbopuffer, Typesense, Marq
   the 87.1% ceiling that embedder allows - how close to lossless the index is, not a claim about embedders.
 - **No users and roles, replication or HA.** Access is the operating system's and TLS's business and accountability is
   the log; a standby is a copy of the file and its journal. Tenants are a store file each, in the library
-  (`vi_dir_*`) or the server, and a batch of writes goes in all or none - both written and compiled, not yet run. A
+  (`vi_dir_*`) or the server, and a batch of writes goes in all or none - both tested in `./run`. A
   real category difference from a managed vector-DB product, on purpose.
 - **No independent review, no production traffic.** Every test in this repo was written and run
   by the same person who wrote the code being tested. Real bugs were found this way (the whole

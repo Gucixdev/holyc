@@ -12,14 +12,17 @@ elsewhere), hybrid BM25 search, concurrent updates (one rwlock, live indexing), 
 replication, a line protocol beside binary and HTTP, system logs instead of users and roles, any language through
 the C ABI and the protocols, i64 ids, one CPU knob, texts with chunk ranges, vfind.
 
-Done, not run: memory tiers (hot codes in RAM, cold rows on disk, mlock), tenants (`vserv DIR`, `vi_dir_*`), write
+Done and tested since 2026-11-06 (`./run`, every step passing on a 2-vCPU Xeon): memory tiers (hot codes in RAM,
+cold rows on disk, mlock), tenants (`vserv DIR`, `vi_dir_*`), write
 batches (all or none, CRC-32C journal records, fsync on commit), integrity (BLAKE3 digests of every 64 KiB block, Reed-Solomon parity - 2 for every
 32 blocks, interleaved - the table of digests twice, checks at load that rebuild and write back, a scrub, a CRC-32C on
 every journal record, a check on every row tested on every read with the blocks rebuilt on the spot, `vi_scrub`,
 `vserv` `scrub`), the cascade (1-bit scan, 4-bit shortlist, exact
 re-rank: `vi_set_cascade`, `vserv -C`, bench methods `vecindex-cascade` and `-i8`; `tests/store_test.c` checks the
 derived 1-bit codes against a 1-bit build byte for byte, added rows, recall against the 4-bit scan, the file), the
-store self-test under ASan and UBSan in `./run`.
+store self-test under ASan and UBSan in `./run`. The integrity math, CRC-32C, the fast-scan arithmetic, the codes,
+the rotation and the top-k insertion are also proved in Lean 4 and the C code is tested against the proved model:
+[`lean4`](../lean4).
 
 Open:
 - labels beyond 64 a store: sets of rows as bitmaps, unlimited, with the same hierarchy (now: 64 named labels in a
