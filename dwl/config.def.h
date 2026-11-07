@@ -106,7 +106,7 @@ LIBINPUT_CONFIG_TAP_MAP_LMR -- 1/2/3 finger tap maps to left/middle/right
 static const enum libinput_config_tap_button_map button_map = LIBINPUT_CONFIG_TAP_MAP_LRM;
 
 /* If you want to use the windows key for MODKEY, use WLR_MODIFIER_LOGO */
-#define MODKEY WLR_MODIFIER_ALT
+#define MODKEY WLR_MODIFIER_LOGO   /* Super, same as Hyprland; Alt stays free for Emacs */
 
 #define TAGKEYS(KEY,TAG) \
 	{ MODKEY,                    KEY,            view,            {.ui = 1 << TAG} }, \
@@ -121,19 +121,33 @@ static const enum libinput_config_tap_button_map button_map = LIBINPUT_CONFIG_TA
 static const char *termcmd[] = { "foot", NULL };
 static const char *menucmd[] = { "dmenu_menu", NULL };   /* apps, games, scripts, calculator, clipboard */
 static const char *runcmd[]  = { "dmenu_run", NULL };    /* every executable in PATH */
+static const char *kbdcmd[]  = { "pkill", "-RTMIN", "wvkbd-mobintl", NULL };   /* toggle the on-screen keyboard */
+static const char *emacscmd[] = { "emacsclient", "-c", "-a", "", NULL };
+static const char *shotcmd[]  = { "shot", NULL };
+static const char *shotareacmd[] = { "shot", "area", NULL };
 
 static const Key keys[] = {
 	/* modifier                  key                  function          argument */
+	{ MODKEY,                    XKB_KEY_w,           spawn,            {.v = menucmd} },
 	{ MODKEY,                    XKB_KEY_p,           spawn,            {.v = menucmd} },
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_P,           spawn,            {.v = runcmd} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Return,      spawn,            {.v = termcmd} },
+	{ MODKEY,                    XKB_KEY_b,           spawn,            {.v = kbdcmd} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_W,           spawn,            {.v = emacscmd} },
+	{ 0,                         XKB_KEY_Print,       spawn,            {.v = shotcmd} },
+	{ MODKEY,                    XKB_KEY_Print,       spawn,            {.v = shotareacmd} },
+	{ 0,                         XKB_KEY_XF86AudioRaiseVolume, spawn,   SHCMD("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+") },
+	{ 0,                         XKB_KEY_XF86AudioLowerVolume, spawn,   SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-") },
+	{ 0,                         XKB_KEY_XF86AudioMute,        spawn,   SHCMD("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle") },
+	{ MODKEY,                    XKB_KEY_Return,      spawn,            {.v = termcmd} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Return,      zoom,             {0} },
 	{ MODKEY,                    XKB_KEY_j,           focusstack,       {.i = +1} },
 	{ MODKEY,                    XKB_KEY_k,           focusstack,       {.i = -1} },
 	{ MODKEY,                    XKB_KEY_i,           incnmaster,       {.i = +1} },
 	{ MODKEY,                    XKB_KEY_d,           incnmaster,       {.i = -1} },
-	{ MODKEY,                    XKB_KEY_h,           setmfact,         {.f = -0.05f} },
-	{ MODKEY,                    XKB_KEY_l,           setmfact,         {.f = +0.05f} },
-	{ MODKEY,                    XKB_KEY_Return,      zoom,             {0} },
+	{ MODKEY|WLR_MODIFIER_CTRL,  XKB_KEY_h,           setmfact,         {.f = -0.05f} },
+	{ MODKEY,                    XKB_KEY_h,           spawn,            SHCMD("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+") },
+	{ MODKEY|WLR_MODIFIER_CTRL,  XKB_KEY_l,           setmfact,         {.f = +0.05f} },
+	{ MODKEY,                    XKB_KEY_l,           spawn,            SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-") },
 	{ MODKEY,                    XKB_KEY_Tab,         view,             {0} },
 	/* i3 layouts: split / floating / tabbed are t f m above; stacking and grid: */
 	{ MODKEY,                    XKB_KEY_s,          setlayout,      {.v = &layouts[3]} },
@@ -153,6 +167,7 @@ static const Key keys[] = {
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Z,          tagshiftview,   {.i = -1} },
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_X,          tagshiftview,   {.i = +1} },
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_c,           killclient,       {0} },
+	{ MODKEY,                    XKB_KEY_q,           killclient,       {0} },
 	{ MODKEY,                    XKB_KEY_t,           setlayout,        {.v = &layouts[0]} },
 	{ MODKEY,                    XKB_KEY_f,           setlayout,        {.v = &layouts[1]} },
 	{ MODKEY,                    XKB_KEY_m,           setlayout,        {.v = &layouts[2]} },
@@ -174,7 +189,7 @@ static const Key keys[] = {
 	TAGKEYS(                     XKB_KEY_7,           6),
 	TAGKEYS(                     XKB_KEY_8,           7),
 	TAGKEYS(                     XKB_KEY_9,           8),
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_q,           quit,             {0} },
+	{ MODKEY|WLR_MODIFIER_CTRL|WLR_MODIFIER_SHIFT, XKB_KEY_Q, quit,        {0} },
 
 	/* Ctrl-Alt-Backspace and Ctrl-Alt-Fx used to be handled by X server */
 	{ WLR_MODIFIER_CTRL|WLR_MODIFIER_ALT,XKB_KEY_BackSpace, quit, {0} },
