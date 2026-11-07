@@ -1,0 +1,8 @@
+#!/bin/sh
+# shot - screenshot: whole screen, or the area you drag (any argument). Saves to ~/Pictures/shot-DATE.png and copies it.
+set -eu
+d="${XDG_PICTURES_DIR:-$HOME/Pictures}"; mkdir -p "$d"
+f="$d/shot-$(date +%Y%m%d-%H%M%S).png"
+if [ $# -gt 0 ]; then grim -g "$(slurp)" "$f"; else grim "$f"; fi
+wl-copy < "$f" 2>/dev/null || :
+echo "$f"
