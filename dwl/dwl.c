@@ -2530,6 +2530,16 @@ printstatus(void)
 			sel = 0;
 		}
 
+		/* one line per window on this output, in stacking order: "<out> client <tags> <floating> <focused> <fullscreen> <appid>" */
+		wl_list_for_each(c, &clients, link) {
+			const char *id;
+			if (c->mon != m)
+				continue;
+			id = client_get_appid(c);
+			printf("%s client %"PRIu32" %d %d %d %s\n", m->wlr_output->name, c->tags,
+				c->isfloating, c == focustop(m), c->isfullscreen, id && *id ? id : "?");
+		}
+		printf("%s clients-end\n", m->wlr_output->name);
 		printf("%s selmon %u\n", m->wlr_output->name, m == selmon);
 		printf("%s tags %"PRIu32" %"PRIu32" %"PRIu32" %"PRIu32"\n",
 			m->wlr_output->name, occ, m->tagset[m->seltags], sel, urg);

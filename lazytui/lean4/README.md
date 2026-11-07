@@ -1,7 +1,9 @@
 # lean4 - lazytui, machine-checked
 
 Lean 4 proofs about lazytui's C code: a Lean model of each C function, theorems about the model, and a test that
-holds the C code to the model. The method is the one [vecindex/lean4](../../vecindex/lean4/README.md) uses.
+holds the C code to the model. The shared parts (the audit command, bit lemmas, the oracle driver, the run steps)
+are in [holyc/lean4](../../lean4/README.md); [base/lean4](../../base/lean4/README.md) shows a full differential
+test on them.
 
 ## Status
 

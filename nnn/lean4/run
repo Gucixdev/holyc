@@ -1,19 +1,9 @@
 #!/usr/bin/env bash
-# lean4/run - build the proofs, audit their axioms, scan the sources for escape hatches; exit 0 when all pass.
-# Needs elan with the toolchain in lean-toolchain. A differential test against the C code goes below once an
-# oracle exists (vecindex/lean4/run is the pattern: the Lean definitions run as an exe, a C harness runs the
-# real functions, their outputs compared on every input or on seeded random ones).
-set -uo pipefail
-cd "$(dirname "$0")" || exit 2
-export PATH="$HOME/.elan/bin:$PATH"
-fail=0
-step() { printf '  %-4s %s\n' "$1" "$2"; [[ $1 == ok ]] || fail=1; }
-if lake build > .lake-build.log 2>&1; then step ok "lake build: $(grep -oE '[0-9]+ jobs' .lake-build.log | tail -1)"
-else tail -20 .lake-build.log; step FAIL "lake build"; fi
-if lake env lean Audit.lean > .lake-audit.log 2>&1 && grep -q 'none rests' .lake-audit.log; then
-    step ok "$(grep -oE 'axiom audit: [0-9]+ theorems \([0-9]+ written' .lake-audit.log) in the sources)"
-else cat .lake-audit.log; step FAIL "axiom audit"; fi
-if grep -rnE '\b(sorry|admit|native_decide|bv_decide)\b|^[[:space:]]*axiom ' --include=*.lean --exclude=Audit.lean \
-        --exclude-dir=.lake .; then step FAIL "source scan"
-else step ok "source scan: no sorry, admit, native_decide, bv_decide or axiom"; fi
-exit "$fail"
+# lean4/run - build the proofs, audit their axioms, scan the sources for escape hatches; exit 0 when all pass. The
+# steps are in ../../lean4/lib.sh; a differential test against the C code adds diff_test and mutant lines (see
+# base/lean4/run).
+. "$(dirname "$0")/../../lean4/lib.sh" || exit 2
+lean_build
+lean_audit
+lean_scan
+lean_end
