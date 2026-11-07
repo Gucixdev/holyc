@@ -14,12 +14,14 @@ structure S where
   marks : Array Nat := #[]
   blocks : Array (Nat × Nat) := #[]
   pool : Pool.St := Pool.init 0
+  word : Nat := 8  -- sizeof(void *) of the machine the harness ran on, from its `w` line
 
 open Holyc.Oracle (num)
 
 def step (st : S) : List String → S × String
   | ["arena", b, cap, pg] =>
     ({ st with arena := ⟨0, num cap, 0⟩, base := num b, page := num pg, marks := #[] }, s!"arena {b} {cap} {pg}")
+  | ["w", n] => ({ st with word := num n }, s!"w {n}")
   | "a" :: n :: _ =>
     match Arena.alloc st.arena (num n) with
     | some (o, s') => ({ st with arena := s', blocks := st.blocks.push (o, num n) }, s!"a {n} {o}")
@@ -50,7 +52,7 @@ def step (st : S) : List String → S × String
     ({ st with arena := s', blocks := #[] }, s!"r {j} {8 * s'.count}")
   | "z" :: _ => ({ st with arena := Arena.reset st.arena, blocks := #[] }, "z 0")
   | "p" :: bs :: cs :: _ =>
-    let acs := Holyc.alignUp (num cs) 8
+    let acs := Holyc.alignUp (num cs) st.word
     ({ st with pool := Pool.init (num bs / acs) }, s!"p {bs} {cs} {acs}")
   | "pa" :: _ =>
     match Pool.alloc st.pool with
