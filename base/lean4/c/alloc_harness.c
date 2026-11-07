@@ -57,6 +57,7 @@ int main(int argc, char **argv)
     rng_ = (argc > 1 ? strtoull(argv[1], NULL, 10) : 1) * 0x9E3779B97F4A7C15ULL | 1;
     ops = argc > 2 ? atol(argv[2]) : 2000;
     base = (u8 *)arena_alloc(&a, 0); /* makes the region; data[0] */
+    printf("w %lu\n", (unsigned long)sizeof(void *)); /* pool_init aligns chunks to sizeof(void *): the model needs it */
     printf("arena %lu %lu %lu\n", (unsigned long)((size_t)base % (size_t)sysconf(_SC_PAGESIZE)),
            (unsigned long)a.begin->capacity, (unsigned long)sysconf(_SC_PAGESIZE));
     for (op = 0; op < ops; op++) {
