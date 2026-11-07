@@ -10,6 +10,14 @@ LOG=$HOME/.cache/dwl.log
 export PATH="$D/bin:$HOME/.local/bin:$PATH"
 export XDG_CURRENT_DESKTOP=dwl XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=dwl MOZ_ENABLE_WAYLAND=1
 mkdir -p "$HOME/.cache"
+# GPU mode. "free" (default): the desktop draws on the CPU (wlroots pixman) and its clients are told not to touch the GPU, so
+# the whole card (4 GB) is left for agents/CUDA. "gaming": GPU rendering, VRR, tearing. Switch: put the word in
+# ~/.config/desktop/gpu (or set DESKTOP_GPU=gaming for one login), then restart the session.
+GPU=${DESKTOP_GPU:-$(cat "$HOME/.config/desktop/gpu" 2>/dev/null)}
+if [ "${GPU:-free}" != gaming ]; then
+  export WLR_RENDERER=pixman
+  export GSK_RENDERER=cairo MOZ_WEBRENDER=0 MOZ_ACCELERATED=0 LIBGL_ALWAYS_SOFTWARE=1 QT_QUICK_BACKEND=software
+fi
 fallback() { echo "$(date '+%F %T') dwl failed ($1), starting Hyprland" >> "$LOG"; exec start-hyprland; }
 [ -x "$D/desktop" ] || make -C "$D" >/dev/null 2>>"$LOG"
 [ -x "$D/desktop" ] || fallback "desktop binary missing"
