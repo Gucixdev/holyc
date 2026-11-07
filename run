@@ -14,5 +14,5 @@ cp src/wvkbd/wvkbd-mobintl bin/
 [ -d src/wtype/build ] || meson setup src/wtype/build src/wtype >/dev/null
 ninja -C src/wtype/build >/dev/null && cp src/wtype/build/wtype bin/
 echo "built: $(ls bin | tr '\n' ' ')"
-echo "put $PWD/bin on PATH; dwl: Alt+b keyboard, Super+Shift+w frost, Print screenshot (Alt+Print area)"
+echo "put $PWD/bin on PATH; dwl: Alt+b keyboard, Alt+w emacs, Print screenshot (Alt+Print area)"
 echo "one binary: ./desktop dwl|dmenu|lemonbar|bar|menu|stest (or a symlink with that name)"

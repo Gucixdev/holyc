@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# session - start the dwl desktop: dwl, lemonbar fed by bar, the on-screen keyboard (hidden until Alt+b).
+# session - start the dwl desktop: dwl, lemonbar fed by bar, the Emacs daemon, the on-screen keyboard (hidden until Alt+b).
 # From a TTY: ./session   or through the display manager with dwl.desktop (README). 0 arguments.
 # dwl -s runs one command with dwl's stdout piped into its stdin, which is exactly what bar reads.
 # Safety net: if dwl is missing or dies within 15 s with an error, Hyprland starts instead, so a login never ends on a dead screen.
@@ -21,6 +21,7 @@ fi
 fallback() { echo "$(date '+%F %T') dwl failed ($1), starting Hyprland" >> "$LOG"; exec start-hyprland; }
 [ -x "$D/desktop" ] || make -C "$D" >/dev/null 2>>"$LOG"
 [ -x "$D/desktop" ] || fallback "desktop binary missing"
+pgrep -x emacs >/dev/null || ( emacs --daemon >/dev/null 2>&1 & )
 t0=$(date +%s)
 "$D/desktop" dwl -s "wvkbd-mobintl --hidden & exec $D/desktop bar | $D/desktop lemonbar -p -b -B '#1d2021' -F '#ebdbb2'" 2>>"$LOG"
 rc=$?
