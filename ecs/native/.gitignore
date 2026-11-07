@@ -1,0 +1,9 @@
+*.o
+*.os
+*.a
+tests/test_*
+!tests/test_*.c
+godot/godot-cpp/
+godot/.venv/
+godot/gdext/bin/
+godot/gdext/.sconsign.dblite
