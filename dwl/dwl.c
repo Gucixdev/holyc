@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <time.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
@@ -2637,6 +2639,80 @@ resize(Client *c, struct wlr_box geo, int interact)
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
 }
 
+/* command channel: lines on $XDG_RUNTIME_DIR/dwl.cmd (fifo), one command per line.
+ * focus next|prev, view N, tag N, toggletag N, layout N, kill, float, zoom, quit, spawn SHELLCMD
+ * N is a tag number 1..TAGCOUNT. State goes out on stdout (printstatus). */
+static struct wl_event_source *cmd_src;
+static int cmd_fd = -1;
+static char cmd_path[256];
+static char cmd_buf[1024];
+static size_t cmd_len;
+
+static void
+cmdrun(char *l)
+{
+	Arg a = {0};
+	char *rest = strchr(l, ' ');
+	int n;
+	if (rest)
+		*rest++ = 0;
+	n = rest ? atoi(rest) : 0;
+	if (!strcmp(l, "focus")) {
+		a.i = (rest && !strcmp(rest, "prev")) ? -1 : 1;
+		focusstack(&a);
+	} else if (!strcmp(l, "view") && n >= 1 && n <= TAGCOUNT) {
+		a.ui = 1u << (n - 1); view(&a);
+	} else if (!strcmp(l, "tag") && n >= 1 && n <= TAGCOUNT) {
+		a.ui = 1u << (n - 1); tag(&a);
+	} else if (!strcmp(l, "toggletag") && n >= 1 && n <= TAGCOUNT) {
+		a.ui = 1u << (n - 1); toggletag(&a);
+	} else if (!strcmp(l, "layout") && n >= 0 && n < (int)LENGTH(layouts)) {
+		a.v = &layouts[n]; setlayout(&a);
+	} else if (!strcmp(l, "kill")) killclient(&a);
+	else if (!strcmp(l, "float")) togglefloating(&a);
+	else if (!strcmp(l, "zoom")) zoom(&a);
+	else if (!strcmp(l, "quit")) quit(&a);
+	else if (!strcmp(l, "spawn") && rest) {
+		const char *argv[] = { "/bin/sh", "-c", rest, NULL };
+		a.v = argv; spawn(&a);
+	}
+}
+
+static int
+cmdread(int fd, uint32_t mask, void *data)
+{
+	ssize_t r = read(fd, cmd_buf + cmd_len, sizeof(cmd_buf) - 1 - cmd_len);
+	char *nl;
+	if (r <= 0) /* writer closed: fifo is opened O_RDWR so this is only EAGAIN */
+		return 0;
+	cmd_len += r;
+	cmd_buf[cmd_len] = 0;
+	while ((nl = strchr(cmd_buf, '\n'))) {
+		*nl = 0;
+		cmdrun(cmd_buf);
+		cmd_len -= (nl + 1 - cmd_buf);
+		memmove(cmd_buf, nl + 1, cmd_len + 1);
+	}
+	if (cmd_len >= sizeof(cmd_buf) - 1)
+		cmd_len = 0; /* overlong line: drop */
+	return 0;
+}
+
+static void
+cmdinit(void)
+{
+	const char *rt = getenv("XDG_RUNTIME_DIR");
+	if (!rt)
+		return;
+	snprintf(cmd_path, sizeof(cmd_path), "%s/dwl.cmd", rt);
+	unlink(cmd_path);
+	if (mkfifo(cmd_path, 0600) < 0)
+		return;
+	if ((cmd_fd = open(cmd_path, O_RDWR | O_NONBLOCK | O_CLOEXEC)) < 0)
+		return;
+	cmd_src = wl_event_loop_add_fd(event_loop, cmd_fd, WL_EVENT_READABLE, cmdread, NULL);
+}
+
 void
 run(char *startup_cmd)
 {
@@ -2695,7 +2771,10 @@ run(char *startup_cmd)
 	 * compositor. Starting the backend rigged up all of the necessary event
 	 * loop configuration to listen to libinput events, DRM events, generate
 	 * frame events at the refresh rate, and so on. */
+	cmdinit();
 	wl_display_run(dpy);
+	if (cmd_path[0])
+		unlink(cmd_path);
 }
 
 void
