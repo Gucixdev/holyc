@@ -17,4 +17,8 @@ mutant realloc-top core_arena_alloc.h 's|(u64 \*)oldptr + og == \&r->data\[r->co
 mutant decommit core_arena_alloc.h 's|r->high = (size_t)(from - data) / sizeof(u64);|r->high = 0;|'
 mutant pool-align core_pool_alloc.h 's|return (n + align - 1) \& ~(align - 1);|return (n + align) \& ~(align - 1);|'
 mutant pool-fresh core_pool_alloc.h 's|p->fresh += p->chunk_size;|p->fresh += 2 * p->chunk_size;|'
+sanitize
+fuzz_diff
+crash_test
+stress
 lean_end

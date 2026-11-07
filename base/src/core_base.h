@@ -54,13 +54,13 @@ typedef __SIZE_TYPE__ size_t;
 
 /* NULL/offsetof are stddef.h's other two "not really libc, just
  * compiler-level tricks" facilities - same reasoning as size_t above,
- * defined here rather than pulled in via #include. offsetof's
- * ((type*)0)->member trick is the standard's own textbook
- * implementation, not a shortcut version of it. */
+ * defined here rather than pulled in via #include. The compiler builtin
+ * is used, not the ((type*)0)->member trick: that one dereferences a
+ * null pointer, which UBSan reports (found by lean4/lib.sh `sanitize`). */
 #ifndef NULL
 #define NULL ((void *)0)
 #endif
-#define offsetof(type, member) ((size_t)&((type *)0)->member)
+#define offsetof(type, member) __builtin_offsetof(type, member)
 
 /* alignof(type) (C11 <stdalign.h>, no libc dependency needed): the
  * classic struct-offset trick built directly on offsetof above - a
