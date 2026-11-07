@@ -108,7 +108,7 @@ LIBINPUT_CONFIG_TAP_MAP_LMR -- 1/2/3 finger tap maps to left/middle/right
 static const enum libinput_config_tap_button_map button_map = LIBINPUT_CONFIG_TAP_MAP_LRM;
 
 /* If you want to use the windows key for MODKEY, use WLR_MODIFIER_LOGO */
-#define MODKEY WLR_MODIFIER_LOGO   /* Super, same as Hyprland; Alt stays free for Emacs */
+#define MODKEY WLR_MODIFIER_LOGO   /* Super, same as Hyprland; Alt stays free */
 
 #define TAGKEYS(KEY,TAG) \
 	{ MODKEY,                    KEY,            view,            {.ui = 1 << TAG} }, \
@@ -124,7 +124,7 @@ static const char *termcmd[] = { "foot", NULL };
 static const char *menucmd[] = { "dmenu_menu", NULL };   /* apps, games, scripts, calculator, clipboard */
 static const char *runcmd[]  = { "dmenu_run", NULL };    /* every executable in PATH */
 static const char *kbdcmd[]  = { "pkill", "-RTMIN", "wvkbd-mobintl", NULL };   /* toggle the on-screen keyboard */
-static const char *emacscmd[] = { "emacsclient", "-c", "-a", "", NULL };
+static const char *editcmd[] = { "foot", "frost", NULL };
 static const char *shotcmd[]  = { "shot", NULL };
 static const char *shotareacmd[] = { "shot", "area", NULL };
 
@@ -134,7 +134,7 @@ static const Key keys[] = {
 	{ MODKEY,                    XKB_KEY_p,           spawn,            {.v = menucmd} },
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_P,           spawn,            {.v = runcmd} },
 	{ MODKEY,                    XKB_KEY_b,           spawn,            {.v = kbdcmd} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_W,           spawn,            {.v = emacscmd} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_W,           spawn,            {.v = editcmd} },
 	{ 0,                         XKB_KEY_Print,       spawn,            {.v = shotcmd} },
 	{ MODKEY,                    XKB_KEY_Print,       spawn,            {.v = shotareacmd} },
 	{ 0,                         XKB_KEY_XF86AudioRaiseVolume, spawn,   SHCMD("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+") },
