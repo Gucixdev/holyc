@@ -5,6 +5,8 @@
                         (hex & 0xFF) / 255.0f }
 /* appearance */
 static const int sloppyfocus               = 1;  /* focus follows mouse */
+static const int adaptive_sync             = 1;  /* variable refresh rate where the output supports it */
+static const int tearing_allowed           = 1;  /* fullscreen clients may ask for tearing (tearing-control-v1): lowest latency for games */
 static const int bypass_surface_visibility = 0;  /* 1 means idle inhibitors will disable idle tracking even if it's surface isn't visible  */
 static const unsigned int borderpx         = 1;  /* border pixel of windows */
 static const unsigned int snap             = 32; /* snap pixel */

@@ -34,6 +34,7 @@
 #include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
+#include <wlr/types/wlr_tearing_control_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
 #include <wlr/types/wlr_idle_notify_v1.h>
 #include <wlr/types/wlr_input_device.h>
@@ -436,6 +437,7 @@ static struct wlr_scene_rect *locked_bg;
 static struct wlr_session_lock_v1 *cur_lock;
 
 static struct wlr_seat *seat;
+static struct wlr_tearing_control_manager_v1 *tearing_mgr;
 static KeyboardGroup *kb_group;
 static unsigned int cursor_mode;
 static Client *grabc;
@@ -1209,6 +1211,8 @@ createmon(struct wl_listener *listener, void *data)
 	LISTEN(&wlr_output->events.request_state, &m->request_state, requestmonstate);
 
 	wlr_output_state_set_enabled(&state, 1);
+	if (adaptive_sync && wlr_output->adaptive_sync_supported)
+		wlr_output_state_set_adaptive_sync_enabled(&state, 1);   /* VRR (FreeSync/G-Sync compatible) */
 	wlr_output_commit_state(wlr_output, &state);
 	wlr_output_state_finish(&state);
 
@@ -2584,7 +2588,26 @@ rendermon(struct wl_listener *listener, void *data)
 		return;
 	}
 
-	wlr_scene_output_commit(m->scene_output, NULL);
+	{
+		/* a fullscreen client that asked for async presentation (tearing-control-v1, what games and gamescope ask for) is
+		 * page-flipped immediately instead of waiting for vblank: no added latency, tearing allowed. Direct scanout of a
+		 * fullscreen client needs nothing here, wlr_scene does it. If the driver refuses the tearing flip we fall back. */
+		struct wlr_output_state pending;
+		Client *fc = tearing_allowed ? focustop(m) : NULL;
+		int tear = fc && fc->isfullscreen && tearing_mgr &&
+			wlr_tearing_control_manager_v1_surface_hint_from_surface(tearing_mgr, client_surface(fc))
+				== WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC;
+		wlr_output_state_init(&pending);
+		if (wlr_scene_output_build_state(m->scene_output, &pending, NULL)) {
+			if (tear) {
+				pending.tearing_page_flip = true;
+				if (!wlr_output_test_state(m->wlr_output, &pending))
+					pending.tearing_page_flip = false;
+			}
+			wlr_output_commit_state(m->wlr_output, &pending);
+		}
+		wlr_output_state_finish(&pending);
+	}
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
 }
@@ -3017,6 +3040,7 @@ setup(void)
 	wlr_single_pixel_buffer_manager_v1_create(dpy);
 	wlr_fractional_scale_manager_v1_create(dpy, 1);
 	wlr_presentation_create(dpy, backend, 2);
+	tearing_mgr = wlr_tearing_control_manager_v1_create(dpy, 1);
 	wlr_alpha_modifier_v1_create(dpy);
 
 	/* Initializes the interface used to implement urgency hints */
