@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# session - start the dwl desktop: dwl, lemonbar fed by bar, the Emacs daemon, the on-screen keyboard (hidden until Alt+b).
+# From a TTY: ./session   or through the display manager with dwl.desktop (README). 0 arguments.
+# dwl -s runs one command with dwl's stdout piped into its stdin, which is exactly what bar reads.
+set -u
+D=$(dirname "$(readlink -f "$0")")
+H=/data/dev/setup/holyc
+export PATH="$D/bin:$HOME/.local/bin:$PATH"
+export XDG_CURRENT_DESKTOP=dwl XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=dwl MOZ_ENABLE_WAYLAND=1
+mkdir -p "$HOME/.cache"
+( emacs --daemon >/dev/null 2>&1 & )
+exec "$H/dwl/dwl" -s "wvkbd-mobintl --hidden & exec $D/bin/bar | $H/lemonbar/lemonbar -p -b" 2>"$HOME/.cache/dwl.log"
