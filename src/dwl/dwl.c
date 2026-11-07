@@ -13,6 +13,9 @@
 #include <time.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
@@ -2731,6 +2734,216 @@ cmdread(int fd, uint32_t mask, void *data)
 	return 0;
 }
 
+/* control socket: $XDG_RUNTIME_DIR/dwl.sock, one request line -> one reply, then close. Same commands as the fifo, plus
+ *   state            JSON of every output and window (appid, title, pid, tags, floating, geometry, focus)
+ *   save PATH        write that JSON to PATH, one window per line     -> "ok N"
+ *   restore PATH     put the windows that are open now back where PATH has them (tags, floating, geometry, visible tags);
+ *                    windows are matched by output + appid; ones that are not open are listed under "missing"
+ * Reply is JSON for state/restore, "ok" for the fifo-style commands. This is also what the MCP applet talks to. */
+static struct wl_event_source *ctl_src;
+static int ctl_fd = -1;
+static char ctl_path[256];
+
+static void
+jstr(FILE *f, const char *s)
+{
+	fputc('"', f);
+	for (; s && *s; s++) {
+		unsigned char ch = *s;
+		if (ch == '"' || ch == '\\') fprintf(f, "\\%c", ch);
+		else if (ch < 0x20) fprintf(f, "\\u%04x", ch);
+		else fputc(ch, f);
+	}
+	fputc('"', f);
+}
+
+static int
+ctlpid(Client *c)
+{
+	int pid = 0;
+#ifdef XWAYLAND
+	if (client_is_x11(c))
+		return c->surface.xwayland->pid;
+#endif
+	wl_client_get_credentials(c->surface.xdg->client->client, &pid, NULL, NULL);
+	return pid;
+}
+
+static void
+ctlstate(FILE *f)
+{
+	Monitor *m;
+	Client *c;
+	int first = 1;
+	fputs("{\"clients\":[\n", f);
+	wl_list_for_each(m, &mons, link)
+		wl_list_for_each(c, &clients, link) {
+			if (c->mon != m)
+				continue;
+			fprintf(f, "%s{\"output\":", first ? "" : ",\n");
+			first = 0;
+			jstr(f, m->wlr_output->name);
+			fputs(",\"appid\":", f); jstr(f, client_get_appid(c));
+			fputs(",\"title\":", f); jstr(f, client_get_title(c));
+			fprintf(f, ",\"pid\":%d,\"tags\":%"PRIu32",\"floating\":%d,\"fullscreen\":%d,\"focused\":%d,"
+				"\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}", ctlpid(c), c->tags, c->isfloating, c->isfullscreen,
+				c == focustop(m), c->geom.x, c->geom.y, c->geom.width, c->geom.height);
+		}
+	fputs("\n],\"outputs\":[\n", f);
+	first = 1;
+	wl_list_for_each(m, &mons, link) {
+		fprintf(f, "%s{\"name\":", first ? "" : ",\n");
+		first = 0;
+		jstr(f, m->wlr_output->name);
+		fprintf(f, ",\"selected\":%d,\"view\":%"PRIu32",\"layout\":", m == selmon, m->tagset[m->seltags]);
+		jstr(f, m->ltsymbol);
+		fprintf(f, ",\"w\":%d,\"h\":%d}", m->m.width, m->m.height);
+	}
+	fputs("\n]}\n", f);
+}
+
+/* value of "key": in a saved line; string values are copied unescaped-minimal into out (outlen), numbers returned */
+static long
+jfind(const char *line, const char *key, char *out, size_t outlen)
+{
+	char pat[40];
+	const char *p;
+	snprintf(pat, sizeof pat, "\"%s\":", key);
+	if (!(p = strstr(line, pat)))
+		return -1;
+	p += strlen(pat);
+	if (*p == '"' && out) {
+		size_t n = 0;
+		for (p++; *p && *p != '"' && n + 1 < outlen; p++) {
+			if (*p == '\\' && p[1]) p++;
+			out[n++] = *p;
+		}
+		out[n] = 0;
+		return 0;
+	}
+	return strtol(p, NULL, 10);
+}
+
+static void
+ctlrestore(const char *path, FILE *out)
+{
+	char line[2048], oname[64], app[256];
+	FILE *in = fopen(path, "r");
+	Client *used[256];
+	int nused = 0, moved = 0, nmiss = 0;
+	if (!in) {
+		fprintf(out, "{\"error\":\"cannot open %s\"}\n", path);
+		return;
+	}
+	fputs("{\"missing\":[", out);
+	while (fgets(line, sizeof line, in)) {
+		Monitor *m;
+		Client *c, *hit = NULL;
+		long tags;
+		if (jfind(line, "output", oname, sizeof oname) < 0 && jfind(line, "name", oname, sizeof oname) < 0)
+			continue;
+		if (jfind(line, "appid", app, sizeof app) < 0) {
+			/* an output line: put the visible tags back */
+			if ((tags = jfind(line, "view", NULL, 0)) > 0)
+				wl_list_for_each(m, &mons, link)
+					if (!strcmp(m->wlr_output->name, oname)) {
+						m->tagset[m->seltags] = tags & TAGMASK;
+						arrange(m);
+					}
+			continue;
+		}
+		wl_list_for_each(c, &clients, link) {
+			int u = 0;
+			const char *id = client_get_appid(c);
+			if (!c->mon || strcmp(c->mon->wlr_output->name, oname) || strcmp(id ? id : "", app))
+				continue;
+			for (int i = 0; i < nused; i++) u |= used[i] == c;
+			if (!u) { hit = c; break; }
+		}
+		if (!hit) {
+			fprintf(out, "%s", nmiss++ ? "," : "");
+			jstr(out, app);
+			continue;
+		}
+		if (nused < 256) used[nused++] = hit;
+		if ((tags = jfind(line, "tags", NULL, 0)) > 0)
+			hit->tags = tags & TAGMASK;
+		setfloating(hit, jfind(line, "floating", NULL, 0) > 0);
+		if (hit->isfloating) {
+			struct wlr_box g = { jfind(line, "x", NULL, 0), jfind(line, "y", NULL, 0),
+				jfind(line, "w", NULL, 0), jfind(line, "h", NULL, 0) };
+			if (g.width > 0 && g.height > 0)
+				resize(hit, g, 0);
+		}
+		arrange(hit->mon);
+		moved++;
+	}
+	fclose(in);
+	fprintf(out, "],\"restored\":%d}\n", moved);
+	printstatus();
+}
+
+static int
+ctlread(int fd, uint32_t mask, void *data)
+{
+	int cfd = accept(fd, NULL, NULL);
+	char buf[1024];
+	ssize_t r;
+	char *rest, *nl, *mem = NULL;
+	size_t memlen = 0;
+	FILE *out;
+	if (cfd < 0)
+		return 0;
+	fcntl(cfd, F_SETFD, FD_CLOEXEC);
+	/* the client writes one line right after connect; give it a moment but never stall the compositor */
+	struct timeval tv = { 0, 200000 };
+	setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+	r = read(cfd, buf, sizeof buf - 1);
+	if (r <= 0) { close(cfd); return 0; }
+	buf[r] = 0;
+	if ((nl = strchr(buf, '\n'))) *nl = 0;
+	rest = strchr(buf, ' ');
+	if (rest) *rest++ = 0;
+	out = open_memstream(&mem, &memlen);
+	if (!strcmp(buf, "state")) ctlstate(out);
+	else if (!strcmp(buf, "save") && rest) {
+		FILE *f = fopen(rest, "w");
+		if (f) { ctlstate(f); fclose(f); fprintf(out, "ok\n"); }
+		else fprintf(out, "{\"error\":\"cannot write %s\"}\n", rest);
+	} else if (!strcmp(buf, "restore") && rest) ctlrestore(rest, out);
+	else {
+		if (rest) rest[-1] = ' ';
+		cmdrun(buf);
+		fputs("ok\n", out);
+	}
+	fclose(out);
+	if (mem) { if (write(cfd, mem, memlen) < 0) {} free(mem); }
+	close(cfd);
+	return 0;
+}
+
+static void
+ctlinit(void)
+{
+	struct sockaddr_un a = { .sun_family = AF_UNIX };
+	const char *rt = getenv("XDG_RUNTIME_DIR");
+	if (!rt)
+		return;
+	snprintf(ctl_path, sizeof ctl_path, "%s/dwl.sock", rt);
+	snprintf(a.sun_path, sizeof a.sun_path, "%s", ctl_path);
+	unlink(ctl_path);
+	if ((ctl_fd = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
+		return;
+	if (bind(ctl_fd, (struct sockaddr *)&a, sizeof a) < 0 || listen(ctl_fd, 8) < 0) {
+		close(ctl_fd); ctl_fd = -1; ctl_path[0] = 0;
+		return;
+	}
+	chmod(ctl_path, 0600);
+	fcntl(ctl_fd, F_SETFD, FD_CLOEXEC);
+	fd_set_nonblock(ctl_fd);
+	ctl_src = wl_event_loop_add_fd(event_loop, ctl_fd, WL_EVENT_READABLE, ctlread, NULL);
+}
+
 static void
 cmdinit(void)
 {
@@ -2805,9 +3018,12 @@ run(char *startup_cmd)
 	 * loop configuration to listen to libinput events, DRM events, generate
 	 * frame events at the refresh rate, and so on. */
 	cmdinit();
+	ctlinit();
 	wl_display_run(dpy);
 	if (cmd_path[0])
 		unlink(cmd_path);
+	if (ctl_path[0])
+		unlink(ctl_path);
 }
 
 void
