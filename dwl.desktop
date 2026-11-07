@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=dwl
 Comment=dwl with lemonbar, Emacs daemon, on-screen keyboard
-Exec=/data/dev/desktop/session
+Exec=/usr/local/bin/dwl-session
 Type=Application
 DesktopNames=dwl
