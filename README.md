@@ -1,6 +1,16 @@
 # desktop
 
-dwl + dmenu + lemonbar (in /data/dev/github/holyc) with the small pieces around them.
+ONE executable, `./desktop`, built from the C in `src/`: the compositor (dwl, static wlroots 0.20, XWayland), the menu (dmenu + `menu`),
+the status bar (`bar`, C, no forks in the hot path: /proc + NVML via dlopen) and lemonbar. Multi-call like busybox: `desktop dwl`, or a
+symlink named `dwl`/`dmenu`/`lemonbar`/`bar`/`menu`/`stest` (`make` puts them in `bin/`). `make` builds (needs `holyc/dwl/.wlroots`, see
+`holyc/dwl/wlroots-static`), `make install` installs the binary and the applet links.
+
+How one binary holds programs that were separate: each is compiled with `-Dmain=<name>_main`, its objects are joined with `ld -r`, and
+`objcopy --keep-global-symbol=<name>_main` makes every other symbol local, so the copies of drw.c, util.c and the generated protocol code
+never clash and no program had to change. Config is compiled in, dwm style: `src/dwl/config.h`, `src/dmenu/config.h`.
+
+Not in the binary yet: wvkbd (on-screen keyboard) and wtype (cloned third-party C, built by `./run` into `bin/`), the `shot` and `clip`
+scripts (grim/slurp/cliphist wrappers), foot (the terminal) and Emacs.
 
 | piece | where | note |
 |---|---|---|

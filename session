@@ -6,16 +6,16 @@
 # Set DWL_NESTED=1 to run inside another Wayland compositor for testing (no fallback then).
 set -u
 D=$(dirname "$(readlink -f "$0")")
-H=/data/dev/github/holyc
 LOG=$HOME/.cache/dwl.log
 export PATH="$D/bin:$HOME/.local/bin:$PATH"
 export XDG_CURRENT_DESKTOP=dwl XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=dwl MOZ_ENABLE_WAYLAND=1
 mkdir -p "$HOME/.cache"
 fallback() { echo "$(date '+%F %T') dwl failed ($1), starting Hyprland" >> "$LOG"; exec start-hyprland; }
-[ -x "$H/dwl/dwl" ] || fallback "binary missing"
+[ -x "$D/desktop" ] || make -C "$D" >/dev/null 2>>"$LOG"
+[ -x "$D/desktop" ] || fallback "desktop binary missing"
 pgrep -x emacs >/dev/null || ( emacs --daemon >/dev/null 2>&1 & )
 t0=$(date +%s)
-"$H/dwl/dwl" -s "wvkbd-mobintl --hidden & exec $D/bin/bar | $H/lemonbar/lemonbar -p -b -B '#1d2021' -F '#ebdbb2'" 2>>"$LOG"
+"$D/desktop" dwl -s "wvkbd-mobintl --hidden & exec $D/desktop bar | $D/desktop lemonbar -p -b -B '#1d2021' -F '#ebdbb2'" 2>>"$LOG"
 rc=$?
 [ -n "${DWL_NESTED:-}" ] && exit $rc
 [ $rc -ne 0 ] && [ $(( $(date +%s) - t0 )) -lt 15 ] && fallback "exit $rc after $(( $(date +%s) - t0 )) s"
