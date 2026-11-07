@@ -9,7 +9,7 @@ CC       ?= cc
 WLROOTS  ?= /data/dev/github/holyc/dwl/.wlroots
 OPT      ?= -O2
 PREFIX   ?= /usr/local
-APPLETS   = dwl dmenu stest menu lemonbar bar
+APPLETS   = dwl dmenu stest menu lemonbar bar autostart
 
 WLPC  = PKG_CONFIG_PATH=$(WLROOTS)/lib/pkgconfig pkg-config
 DWLCF = `pkg-config --cflags wayland-server xkbcommon libinput xcb xcb-icccm` `$(WLPC) --cflags wlroots-0.20` \
@@ -57,6 +57,10 @@ build/lemonbar.o: $(addprefix src/lemonbar/,$(LEMONBAR_SRC)) | build
 build/bar.o: src/bar.c | build
 	$(CC) -c $(OPT) -std=gnu11 -Wall -Wextra -Dmain=bar_main_unused src/bar.c -o build/bar.raw.o
 	objcopy --keep-global-symbol=bar_main build/bar.raw.o $@
+
+build/autostart.o: src/autostart.c | build
+	$(CC) -c $(OPT) -std=gnu11 -Wall -Wextra -Dmain=autostart_main src/autostart.c -o build/autostart.raw.o
+	objcopy --keep-global-symbol=autostart_main build/autostart.raw.o $@
 
 build/main.o: src/main.c | build
 	$(CC) -c $(OPT) -Wall -Wextra src/main.c -o $@
