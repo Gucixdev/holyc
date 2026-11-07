@@ -147,7 +147,7 @@ potwierdzenia:
   kolei; bez command buffera, bo despawn w trakcie zapytania jest bezpieczny. Później: `Changed`, systemy równolegle.
 - **Biblioteka z holyc (jego słowa, 2026-10-25):** „większy porządek, bo wszystko mogłoby być wrzucone z tamtego do
   lib”, „a nawet priority event queue tam było”. Gemy, które przychodzą z gaelem (`gems/`), to porty modułów z
-  `holyc/base` na gaela: kolejka priorytetowa (jego konwencja: 1 najważniejsze, 0 i mniej na końcu), kolejka zdarzeń z
+  `holyc/core` na gaela: kolejka priorytetowa (jego konwencja: 1 najważniejsze, 0 i mniej na końcu), kolejka zdarzeń z
   tickiem do nagrywania i odtwarzania, FSM, RNG (PCG32), szum, easing, krzywe - po kolei w `PLAN.md`.
 - **Comptime, traity, GPU (2026-10-25):** comptime - kod gaela wykonywany w trakcie kompilacji przez ten sam VM;
   traity - zbiór haków `Typ.nazwa` sprawdzany w kompilacji, wywołania statyczne; MLIR nie (ogromna zależność w C++),

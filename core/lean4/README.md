@@ -8,8 +8,8 @@ the pool's lazy init - are proved to give what the plain versions give. The meth
 ## Run
 
 ```sh
-base/lean4/run          # build, axiom audit, source scan, differential test, mutants (~35 s)
-SEEDS=1000 base/lean4/run
+core/lean4/run          # build, axiom audit, source scan, differential test, mutants (~35 s)
+SEEDS=1000 core/lean4/run
 ```
 
 Needs elan with `leanprover/lean4:v4.26.0` (core Lean only, no Mathlib), gcc, and clang if present. Output on

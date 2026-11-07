@@ -1,4 +1,4 @@
-# base
+# core
 
 A library of single-file C headers: 107 modules, 130 test programs, 6 benchmarks. Types, memory
 allocators, queues and job pools, data structures, hashing, math and noise, binary and text
