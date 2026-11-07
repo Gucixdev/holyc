@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# $EDITOR/$VISUAL wrapper: obrazy leca do mpv (podglad), reszta do emacsa.
+# $EDITOR/$VISUAL wrapper: obrazy leca do mpv (podglad), reszta do frosta (terminal, blokuje az do Ctrl-Q).
 # Uzywane przez nnn (klawisz 'e') - niezaleznie od git commit, ktore ma
 # wlasny, blokujacy core.editor w .gitconfig (ten tu wraca od razu, zeby
 # nnn zostawalo uzywalne, a nie czekalo az zamkniesz okno emacsa).
@@ -13,7 +13,7 @@ case "$mime" in
         disown
         ;;
     *)
-        emacs "$file" &
-        disown
+        # frost runs in this terminal and nnn waits for it (Ctrl-S saves, Ctrl-Q quits)
+        exec frost "$@"
         ;;
 esac
