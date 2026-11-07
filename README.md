@@ -1,6 +1,6 @@
 # desktop
 
-dwl + dmenu + lemonbar (in /data/dev/setup/holyc) with the small pieces around them.
+dwl + dmenu + lemonbar (in /data/dev/github/holyc) with the small pieces around them.
 
 | piece | where | note |
 |---|---|---|

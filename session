@@ -6,7 +6,7 @@
 # Set DWL_NESTED=1 to run inside another Wayland compositor for testing (no fallback then).
 set -u
 D=$(dirname "$(readlink -f "$0")")
-H=/data/dev/setup/holyc
+H=/data/dev/github/holyc
 LOG=$HOME/.cache/dwl.log
 export PATH="$D/bin:$HOME/.local/bin:$PATH"
 export XDG_CURRENT_DESKTOP=dwl XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=dwl MOZ_ENABLE_WAYLAND=1
