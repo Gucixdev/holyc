@@ -14,3 +14,4 @@ cp src/wvkbd/wvkbd-mobintl bin/
 ninja -C src/wtype/build >/dev/null && cp src/wtype/build/wtype bin/
 echo "built: $(ls bin | tr '\n' ' ')"
 echo "put $PWD/bin on PATH; dwl: Alt+b keyboard, Alt+w emacs, Print screenshot (Alt+Print area)"
+echo "bar: dwl -s 'bar | lemonbar -p' (tags, layout, title, battery, volume, net, clock)"
