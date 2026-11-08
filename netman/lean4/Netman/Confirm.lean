@@ -137,30 +137,97 @@ theorem double_apply_timeout (s : St) (n1 n2 c1 c2 t : Nat) (h1 : 0 < c1) (h2 : 
   rw [hk.1] at this
   simpa using this.2.2.2
 
-/-! ### What the model does NOT give: the real watchdog is not atomic.
-    `nmfw__watchdog` checks `nmfw__pending()` once per 100 ms; after the last check it unlinks fw.pid and restores,
-    with no re-check. Model: `decide` = the final check passed, `restoreAct` = restore unconditionally. -/
+/-! ### The watchdog race, before and after the fix.
+    Old C: `nmfw__watchdog` checked `nmfw__pending()` once per 100 ms; after the last check it unlinked fw.pid and
+    restored with no re-check. Model: `decide` = the final check passed, `restoreAct` = restore unconditionally.
+    Fixed C (`nmfw__claim`): confirm and the watchdog both take the pidfile with `rename()`, which succeeds for exactly
+    one caller; the loser backs off (confirm: "too late", watchdog: exits without restoring). Model: `claimed`. -/
 
 structure RS where
   s : St
   committed : Bool
+  claimed : Bool := false
 
 inductive REv | decide | confirm | restoreAct
 
-def rstep (r : RS) : REv → RS
+/-- OLD behaviour (no claim). -/
+def rstepOld (r : RS) : REv → RS
   | .decide => { r with committed := r.s.pending && decide (r.s.deadline ≤ r.s.now) }
   | .confirm => { r with s := doConfirm r.s }
   | .restoreAct =>
     if r.committed then { r with s := { r.s with cur := r.s.snap.getD r.s.cur, snap := none, pending := false, restored := true } }
     else r
 
-def rrun (r : RS) (es : List REv) : RS := es.foldl rstep r
+def rrunOld (r : RS) (es : List REv) : RS := es.foldl rstepOld r
 
-/-- Counterexample: a confirm landing between the final check and the unlink is accepted AND the rollback happens. -/
+/-- Counterexample against the OLD design: a confirm between the final check and the unlink is accepted AND the rollback happens. -/
 theorem race_both :
     let s0 : St := { cur := 2, snap := some 1, pending := true, deadline := 10, now := 10, confirmed := false, restored := false }
-    let r := rrun ⟨s0, false⟩ [.decide, .confirm, .restoreAct]
+    let r := rrunOld ⟨s0, false, false⟩ [.decide, .confirm, .restoreAct]
     r.s.confirmed = true ∧ r.s.restored = true := by
   decide
+
+/-- FIXED behaviour (`nmfw__claim`): the pidfile is claimed atomically by whoever acts first. -/
+def rstep (r : RS) : REv → RS
+  | .decide => { r with committed := r.s.pending && decide (r.s.deadline ≤ r.s.now) }
+  | .confirm =>
+    if r.claimed then r
+    else { r with s := doConfirm r.s, claimed := r.s.pending }
+  | .restoreAct =>
+    if r.committed ∧ r.claimed = false then
+      { r with claimed := true,
+               s := { r.s with cur := r.s.snap.getD r.s.cur, snap := none, pending := false, restored := true } }
+    else r
+
+def rrun (r : RS) (es : List REv) : RS := es.foldl rstep r
+
+/-- Same interleaving as `race_both`: now the confirm wins and the watchdog does NOT restore. -/
+theorem race_fixed :
+    let s0 : St := { cur := 2, snap := some 1, pending := true, deadline := 10, now := 10, confirmed := false, restored := false }
+    let r := rrun ⟨s0, false, false⟩ [.decide, .confirm, .restoreAct]
+    r.s.confirmed = true ∧ r.s.restored = false := by
+  decide
+
+def J (r : RS) : Prop :=
+  ¬ (r.s.confirmed = true ∧ r.s.restored = true) ∧ ((r.s.confirmed = true ∨ r.s.restored = true) → r.claimed = true)
+
+theorem J_step (r : RS) (e : REv) (h : J r) : J (rstep r e) := by
+  obtain ⟨h1, h2⟩ := h
+  cases e with
+  | decide => simpa [rstep, J] using And.intro h1 h2
+  | confirm =>
+    by_cases hc : r.claimed = true
+    · simp [rstep, hc, J, h1, h2]
+    · have hc' : r.claimed = false := by simpa using hc
+      have hnr : r.s.restored = false := by
+        by_cases hr : r.s.restored = true
+        · have := h2 (Or.inr hr); simp_all
+        · simpa using hr
+      by_cases hp : r.s.pending = true
+      · simp [rstep, hc', doConfirm, hp, J, hnr]
+      · have hpf : r.s.pending = false := by simpa using hp
+        have hnc : r.s.confirmed = false := by
+          by_cases hr : r.s.confirmed = true
+          · have := h2 (Or.inl hr); simp_all
+          · simpa using hr
+        simp [rstep, hc', doConfirm, hpf, J, h1, hnr, hnc]
+  | restoreAct =>
+    by_cases hg : r.committed = true ∧ r.claimed = false
+    · have hnc : r.s.confirmed = false := by
+        by_cases hr : r.s.confirmed = true
+        · have := h2 (Or.inl hr); simp_all
+        · simpa using hr
+      simp [rstep, hg, J, hnc]
+    · simp [rstep, hg, J, h1]
+      exact h2
+
+theorem J_run (r : RS) (es : List REv) (h : J r) : J (rrun r es) := by
+  induction es generalizing r with
+  | nil => exact h
+  | cons e es ih => exact ih _ (J_step r e h)
+
+/-- With the atomic claim, whatever the interleaving of final check, confirm and restore: never both. -/
+theorem never_both_claim (r : RS) (h : J r) (es : List REv) :
+    ¬ ((rrun r es).s.confirmed = true ∧ (rrun r es).s.restored = true) := (J_run r es h).1
 
 end Netman.Confirm

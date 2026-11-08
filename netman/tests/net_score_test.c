@@ -95,7 +95,8 @@ static void test_score(void)
 	CHECK(netman_gwstat_loss(&g) == 25, "8 of 32 lost");
 
 	puts("[wifi/gw readers]");
-	CHECK(netman_signal_dbm("no-such-if0") == 0);
+	CHECK(netman_signal_dbm("no-such-if0") == NETMAN_UNKNOWN, "unknown signal is NETMAN_UNKNOWN, not 0");
+	CHECK(netman_signal_dbm("lo") == NETMAN_UNKNOWN && !netman_is_wifi("lo") && !netman_is_wifi("no-such-if0") && !netman_is_wifi("../lo"), "lo is not wifi (type from sysfs, not the signal)");
 	CHECK(netman_gw_ping("lo", "not-an-ip", 10) == -EINVAL);
 }
 

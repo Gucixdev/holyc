@@ -863,11 +863,20 @@ static long nmfw__pending(void) {
     free(s);
     return pid;
 }
+/* Claim the pending pidfile atomically: rename() of a name that exists succeeds for exactly one caller, so the confirm
+ * and the watchdog's rollback can never both win (the check-then-unlink pair they used before could). 1 = claimed. */
+static void (*nmfw__test_window)(void);           /* tests only: runs in the watchdog between its last poll and its claim */
+static int nmfw__claim(void) {
+    char p[560], q[600]; if (nmfw__path(p, sizeof p, "fw.pid")) return 0;
+    snprintf(q, sizeof q, "%s.claim.%ld", p, (long)getpid());
+    if (rename(p, q)) return 0;
+    unlink(q);
+    return 1;
+}
 int nmfw_confirm(void) {
     long pid = nmfw__pending();
     if (!pid) return nmfw__fail("nothing pending: nothing to confirm (already confirmed, or the timer already rolled back)");
-    char p[560]; nmfw__path(p, sizeof p, "fw.pid");
-    unlink(p);                                    /* the watchdog sees its pidfile gone and leaves quietly */
+    if (!nmfw__claim()) return nmfw__fail("too late: the timer already claimed the rollback");
     kill((pid_t)pid, SIGTERM);
     for (int i = 0; i < 50 && kill((pid_t)pid, 0) == 0; i++) { struct timespec ts = {0, 20000000}; nanosleep(&ts, NULL); }
     char f[560]; if (!nmfw__path(f, sizeof f, "fw.rollback")) unlink(f);
@@ -892,7 +901,8 @@ static void nmfw__watchdog(int secs) {
         long cur = nmfw__pending();
         if (cur != (long)me) _exit(0);            /* confirmed or superseded */
     }
-    char p[560]; nmfw__path(p, sizeof p, "fw.pid"); unlink(p);
+    if (nmfw__test_window) nmfw__test_window();
+    if (!nmfw__claim()) _exit(0);                 /* a confirm took the pidfile after the last poll: it won, no rollback */
     nmfw__restore_files();
     nmfw__clear_pending();
     _exit(0);

@@ -14,6 +14,7 @@
 #define NETMAN_ROAMING_H
 
 #include "net.h"
+#include "scoring.h"
 
 typedef struct {
 	netman_lease l;
@@ -362,8 +363,18 @@ typedef struct {
 	netman_profile p;
 	netman_dhcpc d;
 	int valid, active, fails;
+	int scored, score; /* last quality measured while it was connected (netman_roam_score); scored=0: never */
 	time_t backoff, last_ok;
 } netman__slot;
+
+/* Should the connected slot `cur` give way to the higher-priority `cand`? With both quality scores known this is
+ * netman_score_should_leave (scoring.h) = real hysteresis: a dead network (<20) yields to a candidate 6+ better,
+ * a mediocre one (20..69) only to one 15+ better, a good one (>=70) never. Without scores: priority alone, as before. */
+static int netman__may_switch(const netman__slot *cur, const netman__slot *cand)
+{
+	if (!cur->scored || !cand->scored) return 1;
+	return netman_score_should_leave(cur->score, cand->score);
+}
 
 static int netman__bound(const netman__slot *s) { return s->p.dhcp ? s->d.st == 1 : s->active; }
 static void netman__down(netman__slot *s) /* clean teardown: the next network starts from nothing */
@@ -456,7 +467,7 @@ static time_t netman__pass(netman__slot *S, int *nsp)
 			}
 			if (!best) break;
 			if (cur && cur != best) {
-				if (best->p.priority <= cur->p.priority) best = cur;
+				if (best->p.priority <= cur->p.priority || !netman__may_switch(cur, best)) best = cur;
 				else netman__down(cur), cur = NULL;
 			}
 			if (cur == best) { /* already connected: DHCP maintenance only */
@@ -488,7 +499,10 @@ static time_t netman__pass(netman__slot *S, int *nsp)
 				int pr = (netman_probe_ip && *netman_probe_ip) ? netman_probe(ifn, 2000) : -1000, other = 0;
 				for (j = 0; j < ns; j++)
 					if (&S[j] != best && S[j].valid && !strcmp(S[j].p.iface, ifn) && S[j].backoff <= now) other = 1;
-				if (netman_roam_score && netman_roam_score(ifn, pr) < 20) pr = -1; /* dead or weak: same as no connectivity */
+				if (netman_roam_score) {
+					best->score = netman_roam_score(ifn, pr), best->scored = 1;
+					if (best->score < 20) pr = -1; /* dead or weak: same as no connectivity */
+				}
 				if (pr != 0 && pr != -1000 && other) {
 					netman__down(best);
 					netman__penalize(best);

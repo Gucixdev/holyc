@@ -114,16 +114,17 @@ Unknown inputs (`NETMAN_UNKNOWN`) are `Option.none`. A model of the C, not the C
 | `never_both` | after an apply, for ANY sequence of confirm / clock events, "confirmed" and "restored" are never both set | apply / confirm / watchdog | the real processes (fork, pidfile, signals) |
 | `confirm_in_time`, `timeout_restores`, `early_tick_noop`, `late_confirm_noop` | confirm while pending keeps the new ruleset; no confirm by the deadline restores the snapshot; late confirm is a no-op | same | the watchdog polls every 100 ms; model checks at each clock event |
 | `apply_arms`, `reapply_keeps_original`, `double_apply_timeout` | the snapshot is of the state before the FIRST unconfirmed apply; a timeout after two applies returns to it | `if (!nmfw__pending())` snapshot rule in `nmfw__apply_nft` / `_ipt` | contents of rulesets, `nft -c` validation, ip_forward restore, ipt backend |
-| `race_both` | (counterexample, see Findings) | `nmfw__watchdog` | |
+| `race_both` | the OLD design (no claim) accepts a confirm AND rolls back; kept as the counterexample that motivated the fix | old `nmfw__watchdog` | |
+| `race_fixed`, `never_both_claim` | FIXED design: confirm and watchdog both take fw.pid with an atomic `rename()` (`nmfw__claim`); for ANY interleaving of final check / confirm / restore, never both (invariant `J`) | `nmfw__claim`, `nmfw_confirm`, `nmfw__watchdog` | test hook forces the window in tests/fw_test.c |
 
-### Findings
+### Findings (all fixed in the C, 2026-11-08)
 
-1. `src/mods/firewall.h:893-897` (`nmfw__watchdog`): after the last `nmfw__pending()` check the watchdog unlinks fw.pid and
-   restores with no re-check. A `nmfw_confirm()` landing between that check and the `unlink(p)` finds a live pid, returns 0
-   ("confirmed"), and the rollback still happens: both. `race_both` is the minimal trace (decide, confirm, restore).
-   Window is microseconds; fix is for the watchdog to claim the pidfile atomically (e.g. `rename` it, or only restore if
-   `unlink` succeeded) and for confirm to treat an already-claimed pidfile as "too late". Not applied.
-2. `src/mods/scoring.h:114-119` `netman_score_should_leave` has margin 5 below 20 and 15 above, and is called by nothing
-   except `tests/net_score_test.c`; no roaming chooser uses the hysteresis yet. `netman_roam_score` only does `< 20 => dead`.
-3. `src/cli.h:207`: `netman_signal_dbm(..) == NETMAN_UNKNOWN ? "wired" : "wifi"`, but `netman_signal_dbm` returns 0 (never
-   -1000) for "unknown", so every interface is labelled "wifi". Counterexample: any ethernet device in `netman score`.
+1. `nmfw__watchdog` race (confirm between the last poll and the rollback gave "confirmed" AND rolled back): FIXED. Confirm and the
+   watchdog now claim fw.pid with `rename()` (`nmfw__claim`); the loser backs off ("too late" / exit without restoring).
+   Test: tests/fw_test.c forces the interleaving through `nmfw__test_window` (it failed on the old code).
+2. `netman_score_should_leave` was unused: FIXED. `netman__may_switch` (roaming.h) uses it when the connected slot and the
+   higher-priority candidate both have a score from `netman_roam_score`; unscored slots keep the old priority rule. Margins:
+   C is `NETMAN_HYST_DEAD` 6 (the old comment said "5" but the code was `cand > cur + 5`, the same thing) and `NETMAN_HYST` 15,
+   which are the proven numbers. Test: `tests/net_test.c hyst` (no ping-pong for all 0..100 pairs).
+3. `netman_signal_dbm` returned 0 for unknown so `netman score` called everything "wifi": FIXED. It returns `NETMAN_UNKNOWN`
+   and the wired/wifi label comes from `netman_is_wifi` (sysfs `wireless/`, `phy80211/`, `DEVTYPE=wlan`), never the signal.

@@ -1,6 +1,7 @@
 /-! Roaming hysteresis. Model of `netman_score_should_leave` (src/mods/scoring.h) and a two-AP chooser built on it.
-    NOTE: the C function is only called by tests/net_score_test.c, no chooser in src/ uses it yet; the chooser
-    below is the intended use, not code that exists. -/
+    The C function is now called by the roaming chooser (`netman__may_switch` in src/mods/roaming.h, when both slots
+    have a measured score), so the two-AP chooser below mirrors real use. C margins: NETMAN_HYST_DEAD = 6 (cand >=
+    cur + 6, i.e. cand > cur + 5) below 20, NETMAN_HYST = 15 for 20..69, never above 69: exactly the numbers proven. -/
 namespace Netman.Hysteresis
 
 /-- `netman_score_should_leave(cur, cand)`: Q_WEAK = 20, Q_GOOD = 70, HYST = 15. -/

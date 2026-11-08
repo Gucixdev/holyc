@@ -204,7 +204,7 @@ static int h_roam_status(const nc_cmd *c, int n, char **a)
 	printf("threshold %d\n", netman_config_int(&nc_cfg, NC_ROAM_SCORE));
 	for (int i = 0; i < k; i++) {
 		if (!t[i].up || !strcmp(t[i].name, "lo")) continue;
-		printf("%-12s score %3d  %s\n", t[i].name, netman_score_iface(t[i].name, -1), netman_signal_dbm(t[i].name) == NETMAN_UNKNOWN ? "wired" : "wifi");
+		printf("%-12s score %3d  %s\n", t[i].name, netman_score_iface(t[i].name, -1), netman_is_wifi(t[i].name) ? "wifi" : "wired");
 	}
 	return 0;
 }

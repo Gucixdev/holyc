@@ -7,7 +7,8 @@
  *   netman_score_class(score)             NETMAN_Q_GOOD / OK / WEAK / DEAD
  *   netman_score_should_leave(cur, cand)  hysteresis decision used by roaming
  *   netman_gwstat_*                       rolling loss (last 32 probes) + smoothed RTT
- *   netman_signal_dbm(ifn)                /proc/net/wireless (0 = not wifi / unknown)
+ *   netman_signal_dbm(ifn)                /proc/net/wireless (NETMAN_UNKNOWN = not wifi / not listed)
+ *   netman_is_wifi(ifn)                   sysfs wireless/ or phy80211/ dir, or DEVTYPE=wlan (never the signal)
  *   netman_gw_ping(ifn, gw, timeout)      one ICMP echo through an unprivileged ICMP datagram socket (needs
  *                                         net.ipv4.ping_group_range to include the gid); RTT in us or -errno
  *   netman_score_iface(ifn, probe)        measure + score one interface (roaming's netman_roam_score hook)
@@ -24,7 +25,8 @@
 #define NETMAN_Q_GOOD 70
 #define NETMAN_Q_OK 40
 #define NETMAN_Q_WEAK 20
-#define NETMAN_HYST 15 /* a candidate must beat the current network by this much to justify a switch */
+#define NETMAN_HYST 15 /* a candidate must beat a mediocre (20..69) network by this much to justify a switch */
+#define NETMAN_HYST_DEAD 6 /* ... and a dead one (<20) by at least this much (cand > cur + 5): the margin proven in lean4/Netman/Hysteresis.lean */
 
 typedef struct {
 	int wired;     /* 1: signal is irrelevant (counted as perfect) */
@@ -49,7 +51,8 @@ void netman_gwstat_init(netman_gwstat *s);
 void netman_gwstat_add(netman_gwstat *s, int rtt_ms); /* rtt_ms < 0 = lost */
 int netman_gwstat_loss(const netman_gwstat *s);	      /* percent, NETMAN_UNKNOWN when empty */
 
-int netman_signal_dbm(const char *ifn);
+int netman_signal_dbm(const char *ifn); /* NETMAN_UNKNOWN when not wifi or not listed */
+int netman_is_wifi(const char *ifn);
 long netman_gw_ping(const char *ifn, const char *gw, int timeout_ms);
 int netman_score_iface(const char *ifn, int probe_result);
 
@@ -113,7 +116,7 @@ int netman_score_class(int score)
 
 int netman_score_should_leave(int cur, int cand)
 {
-	if (cur < NETMAN_Q_WEAK) return cand > cur + 5;	       /* dead network: any real improvement */
+	if (cur < NETMAN_Q_WEAK) return cand >= cur + NETMAN_HYST_DEAD;	       /* dead network: any real improvement */
 	if (cur >= NETMAN_Q_GOOD) return 0;		       /* good enough, never flap */
 	return cand >= cur + NETMAN_HYST;
 }
@@ -141,9 +144,9 @@ int netman_gwstat_loss(const netman_gwstat *s)
 int netman_signal_dbm(const char *ifn)
 {
 	char line[256], name[32];
-	int dbm = 0;
+	int dbm = NETMAN_UNKNOWN;
 	FILE *f = fopen("/proc/net/wireless", "r");
-	if (!f) return 0;
+	if (!f) return NETMAN_UNKNOWN;
 	while (fgets(line, sizeof line, f)) {
 		float link, lvl;
 		char *c = strchr(line, ':');
@@ -155,6 +158,24 @@ int netman_signal_dbm(const char *ifn)
 	}
 	fclose(f);
 	return dbm;
+}
+
+int netman_is_wifi(const char *ifn)
+{
+	char path[160], line[128];
+	FILE *f;
+	int w = 0;
+	if (!ifn || !*ifn || strchr(ifn, '/')) return 0;
+	snprintf(path, sizeof path, "/sys/class/net/%s/wireless", ifn);
+	if (access(path, F_OK) == 0) return 1;
+	snprintf(path, sizeof path, "/sys/class/net/%s/phy80211", ifn);
+	if (access(path, F_OK) == 0) return 1;
+	snprintf(path, sizeof path, "/sys/class/net/%s/uevent", ifn);
+	if (!(f = fopen(path, "r"))) return 0;
+	while (fgets(line, sizeof line, f))
+		if (!strncmp(line, "DEVTYPE=wlan", 12)) w = 1;
+	fclose(f);
+	return w;
 }
 
 long netman_gw_ping(const char *ifn, const char *gw, int timeout_ms)
@@ -217,13 +238,12 @@ int netman_score_iface(const char *ifn, int probe_result)
 {
 	netman_score_in in;
 	netman_gwstat st;
-	char gw[INET_ADDRSTRLEN], path[96];
+	char gw[INET_ADDRSTRLEN];
 	int i, dbm;
 	netman_score_in_init(&in);
 	in.probe = probe_result;
-	snprintf(path, sizeof path, "/sys/class/net/%s/wireless", ifn);
-	in.wired = access(path, F_OK) != 0;
-	if (!in.wired && (dbm = netman_signal_dbm(ifn)) != 0) in.signal_dbm = dbm;
+	in.wired = !netman_is_wifi(ifn);
+	if (!in.wired && (dbm = netman_signal_dbm(ifn)) != NETMAN_UNKNOWN) in.signal_dbm = dbm;
 	if (netman__gw4(ifn, gw, sizeof gw) == 0) {
 		netman_gwstat_init(&st);
 		for (i = 0; i < 4; i++) {

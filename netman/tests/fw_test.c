@@ -280,6 +280,15 @@ static void test_live_nft(void) {
     CHECK(!has("nft list table inet netman", "8443") && !has("nft list ruleset", "netman_arp") && has("nft list table inet netman", "policy drop"), "no confirm: timer restored the previous (lockdown) ruleset");
     CHECK(has("nft list table inet foreign", "foreignrule"), "foreign table survived rollback");
     CHECK(nmfw_confirm() != 0, "nothing pending after rollback");
+    /* race: a confirm landing exactly between the watchdog's last poll and its rollback (forced interleaving). It used to be accepted AND rolled back. */
+    nmfw__test_window = (void (*)(void))nmfw__claim;
+    CHECK(nmfw_apply(&c, 1) == 0 && has("nft list table inet netman", "8443"), "apply for the race test");
+    settle(2.5);
+    nmfw__test_window = NULL;
+    CHECK(has("nft list table inet netman", "8443"), "confirm won the race: the watchdog must NOT roll back");
+    CHECK(nmfw_confirm() != 0, "pidfile already claimed: a second confirm is refused");
+    nmfw__clear_pending();
+    CHECK(nmfw_apply(&c2, 0) == 0 && !has("nft list table inet netman", "8443"), "back to lockdown after the race test");
     CHECK(nmfw_apply(&c, 60) == 0 && has("nft list table inet netman", "8443"), "apply with long timer");
     CHECK(nmfw_rollback() == 0 && !has("nft list table inet netman", "8443"), "manual rollback: %s", nmfw_error());
     CHECK(nmfw_remove() == 0 && !has("nft list tables", "inet netman") && has("nft list tables", "inet foreign"), "remove deletes only ours");

@@ -2,6 +2,7 @@
 /* net_test.c - CLI + self-test for nmb_net.h.
  *
  *   ./net_test list|print                 read-only, safe on the host
+ *   ./net_test hyst                       pure: roaming hysteresis (safe anywhere)
  *   ./net_test selftest [dnsmasq]         everything else, inside its OWN user+net namespace
  *   ./net_test server IF IP/PLEN POOL LEASE LOG   throw-away DHCP server (SIGUSR1 mute, SIGUSR2 NAK next)
  *
@@ -10,6 +11,7 @@
  */
 #define NETMAN_NET_IMPLEMENTATION
 #define NETMAN_ROAMING_IMPLEMENTATION
+#define NETMAN_SCORING_IMPLEMENTATION
 #include "../src/mods/net.h"
 #include "../src/mods/roaming.h"
 
@@ -650,8 +652,36 @@ done:
 	return fails ? 1 : 0;
 }
 
+/* pure: the roaming chooser's hysteresis (netman__may_switch -> netman_score_should_leave). No namespace, no network. */
+static int hyst_test(void)
+{
+	netman__slot a, b;
+	int sa, sb;
+	memset(&a, 0, sizeof a), memset(&b, 0, sizeof b);
+	a.p.priority = 2, b.p.priority = 1;
+	CHECK(netman__may_switch(&b, &a), "no scores known: priority alone decides (old behaviour)");
+	b.scored = 1, b.score = 45, a.scored = 1, a.score = 50;
+	CHECK(!netman__may_switch(&b, &a), "mediocre 45 does not yield to 50 (needs +15)");
+	a.score = 60;
+	CHECK(netman__may_switch(&b, &a), "45 yields to 60");
+	b.score = 10, a.score = 15;
+	CHECK(!netman__may_switch(&b, &a), "dead 10 does not yield to 15 (needs +6)");
+	a.score = 16;
+	CHECK(netman__may_switch(&b, &a), "dead 10 yields to 16");
+	b.score = 80, a.score = 100;
+	CHECK(!netman__may_switch(&b, &a), "good network is never left");
+	for (sa = 0; sa <= 100; sa++)
+		for (sb = 0; sb <= 100; sb++) {
+			a.score = sa, b.score = sb;
+			if (netman__may_switch(&a, &b) && netman__may_switch(&b, &a)) { CHECK(0, "ping-pong at %d/%d", sa, sb); sa = sb = 101; }
+		}
+	CHECK(sa <= 101 && fails == 0, "no score pair makes A->B and B->A both fire (no ping-pong)");
+	return fails ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
+	if (argc >= 2 && !strcmp(argv[1], "hyst")) return hyst_test();
 	if (argc >= 2 && (!strcmp(argv[1], "list") || !strcmp(argv[1], "print"))) return netman_print(stdout), 0;
 	if (argc >= 2 && !strcmp(argv[1], "selftest")) return selftest(argc > 2 && !strcmp(argv[2], "dnsmasq"));
 	if (argc == 7 && !strcmp(argv[1], "server")) return serve(argv[2], argv[3], argv[4], atoi(argv[5]), argv[6]);
