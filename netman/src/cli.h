@@ -55,7 +55,7 @@ static int nc_vpn_has_profiles(void)
 
 static int nc_enabled(const char *module)
 {
-	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED } };
+	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED }, { "wireguard", NC_WG_ENABLED } };
 	if (!module) return 1;
 	for (unsigned i = 0; i < sizeof t / sizeof *t; i++) if (!strcmp(module, t[i].m)) return netman_config_bool(&nc_cfg, t[i].k);
 	return 1;
@@ -245,6 +245,7 @@ static int h_vpn(const nc_cmd *c, int n, char **a)   /* the library's own front 
 	av[k++] = "vpn"; av[k++] = (char *)sub;
 	for (int i = 0; i < n; i++) av[k++] = a[i];
 	av[k] = NULL;
+	if (!strcmp(sub, "up") && n >= 1 && !nc_enabled("wireguard") && netman_vpn_type(a[0]) == NETMAN_VPN_WG) { fputs("netman: WireGuard is disabled in config (netman config toggle wireguard.enabled)\n", stderr); return 3; }
 	if (!strcmp(sub, "up") && n >= 1 && netman_config_bool(&nc_cfg, NC_VPN_KILLSWITCH)) {
 		int rc = netman_vpn_cmd(k, av);
 		return rc ? rc : netman_vpn_killswitch(a[0], 1);
@@ -442,6 +443,135 @@ static int h_key_show(const nc_cmd *c, int n, char **a)
 	return 0;
 }
 
+/* ---- wireguard (wireguard.c): keys, live peers --------------------------------------------------------------------- */
+
+static int nc_wg_off(void) { if (nc_enabled("wireguard")) return 0; fputs("netman: wireguard is disabled in config (netman config toggle wireguard.enabled)\n", stderr); return 3; }
+static int nc_wg_err(const char *what, int r)
+{
+	if (r >= 0) return 0;
+	fprintf(stderr, "netman: wg %s: %s\n", what, r == -ENOENT ? "no such peer on that interface" : r == -ENODEV ? "no such interface" : r == -EPERM || r == -EACCES ? "not permitted (needs root)" : strerror(-r));
+	return r == -ENOENT || r == -ENODEV ? 1 : r == -EPERM || r == -EACCES ? 4 : 1;
+}
+static int nc_wg_key(const char *s, unsigned char out[32])
+{
+	if (netman_vpn_b64_decode32(s, out)) { fputs("netman: not a WireGuard key (44 characters of base64)\n", stderr); return -1; }
+	return 0;
+}
+static int nc_wg_iface(const char *s)
+{
+	if (netman_vpn_valid_name(s, 15)) return 0;
+	fprintf(stderr, "netman: bad interface name %s\n", s);
+	return -1;
+}
+static int h_wg_genkey(const nc_cmd *c, int n, char **a) { char *av[] = { "vpn", "genkey", NULL }; (void)c; (void)n; (void)a; return netman_vpn_cmd(2, av); }
+static int h_wg_pubkey(const nc_cmd *c, int n, char **a) { char *av[] = { "vpn", "pubkey", NULL }; (void)c; (void)n; (void)a; return netman_vpn_cmd(2, av); }   /* private key on stdin, like `wg pubkey` */
+static int h_wg_genpsk(const nc_cmd *c, int n, char **a)
+{
+	unsigned char k[32]; char b[45]; (void)c; (void)n; (void)a;
+	if (getrandom(k, sizeof k, 0) != (ssize_t)sizeof k) { fputs("netman: no randomness available\n", stderr); return 1; }
+	netman_vpn_b64_encode32(k, b); puts(b);
+	explicit_bzero(k, sizeof k); explicit_bzero(b, sizeof b);
+	return 0;
+}
+static void nc_wg_show_one(const char *ifn)
+{
+	netman_wg_peerinfo *pi; size_t np; netman_wg_stat st; char b[160], hs[48], rx[32], tx[32], ep[96];
+	if (netman_wg_stats(ifn, &st) || netman_wg_peers(ifn, &pi, &np)) { printf("interface: %s (cannot read it: not a wireguard interface, or not root)\n", ifn); return; }
+	printf("interface: %s\n  listening port: %d\n", ifn, st.listen_port);
+	if (st.fwmark) printf("  fwmark: 0x%x\n", st.fwmark);
+	for (size_t i = 0; i < np; i++) {
+		char key[45];
+		netman_vpn_b64_encode32(pi[i].pub, key);
+		netman_vpn__hs_text(pi[i].last_handshake, hs, sizeof hs); netman_vpn__hbytes(pi[i].rx, rx, sizeof rx); netman_vpn__hbytes(pi[i].tx, tx, sizeof tx);
+		printf("\npeer: %s\n  endpoint: %s\n  allowed ips:", key, pi[i].has_ep ? netman_wg_ep_str(&pi[i].ep, ep, sizeof ep) : "(none)");
+		for (size_t j = 0; j < pi[i].nallowed; j++) printf("%s %s/%d", j ? "," : "", netman_vpn__ip_str(&pi[i].allowed[j], b, sizeof b), pi[i].allowed[j].prefix);
+		if (!pi[i].nallowed) fputs(" (none)", stdout);
+		printf("\n  latest handshake: %s\n  transfer: %s received, %s sent\n", hs, rx, tx);
+		if (pi[i].keepalive) printf("  persistent keepalive: every %d seconds\n", pi[i].keepalive);
+	}
+	netman_wg_peers_free(pi, np);
+}
+static int h_wg_show(const nc_cmd *c, int n, char **a)
+{
+	(void)c;
+	if (nc_wg_off()) return 3;
+	if (n >= 1) { if (nc_wg_iface(a[0])) return 2; nc_wg_show_one(a[0]); return 0; }
+	{   /* every wireguard profile that is up */
+		DIR *d = opendir(netman_vpn_conf_dir); struct dirent *e; int any = 0;
+		while (d && (e = readdir(d))) {
+			char nm[64]; char *dot = strrchr(e->d_name, '.');
+			if (!dot || strcmp(dot, ".conf") || (size_t)(dot - e->d_name) >= sizeof nm) continue;
+			memcpy(nm, e->d_name, (size_t)(dot - e->d_name)); nm[dot - e->d_name] = 0;
+			if (if_nametoindex(nm) && netman_wg_is_link(nm)) { if (any++) putchar('\n'); nc_wg_show_one(nm); }
+		}
+		if (d) closedir(d);
+		if (!any) puts("no WireGuard interface is up (netman vpn up NAME, or give an interface: netman wg show IF)");
+	}
+	return 0;
+}
+static int h_wg_peer_add(const nc_cmd *c, int n, char **a)   /* wg peer add IF PUBKEY [allowed=IP,..] [endpoint=H:P] [keepalive=S] [psk-file=F] */
+{
+	netman_wg_peer p; netman_vpn_ip *al = NULL; size_t nal = 0; int r, rc;
+	if (nc_wg_off()) return 3;
+	if (n < 2) return nc_usage(c);
+	memset(&p, 0, sizeof p);
+	if (nc_wg_iface(a[0]) || nc_wg_key(a[1], p.pub)) return 2;
+	for (int i = 2; i < n; i++) {
+		char *v = strchr(a[i], '=');
+		if (!v) { fprintf(stderr, "netman: expected KEY=VALUE, got '%s'\n", a[i]); free(al); return 2; }
+		*v++ = 0;
+		if (!strcmp(a[i], "endpoint")) { if (netman_wg_resolve(v, &p.ep)) { fprintf(stderr, "netman: cannot resolve endpoint '%s' (host:port or [v6]:port)\n", v); free(al); return 2; } p.has_ep = 1; }
+		else if (!strcmp(a[i], "keepalive")) { char *e; long k = strtol(v, &e, 10); if (!*v || *e || k < 0 || k > 65535) { fputs("netman: keepalive is 0-65535 seconds\n", stderr); free(al); return 2; } p.keepalive = (int)k; }
+		else if (!strcmp(a[i], "allowed")) {
+			char *sp = v, *it;
+			while ((it = netman_vpn__tok(&sp))) {
+				netman_vpn_ip ip, *na;
+				if (!*it) continue;
+				if (netman_vpn__ip_parse(it, &ip)) { fprintf(stderr, "netman: bad allowed ip '%s'\n", it); free(al); return 2; }
+				netman_vpn__ip_mask(&ip);
+				na = realloc(al, (nal + 1) * sizeof *na); if (!na) { free(al); return 1; }
+				al = na; al[nal++] = ip;
+			}
+		}
+		else if (!strcmp(a[i], "psk-file")) {
+			size_t l = 0; char *t = netman_vpn__slurp(v, &l, 256, 1);
+			if (!t) { fprintf(stderr, "netman: %s: %s (must be yours or root's, not group/world writable)\n", v, strerror(errno)); free(al); return 1; }
+			t[strcspn(t, "\r\n")] = 0;
+			r = netman_vpn_b64_decode32(t, p.psk); explicit_bzero(t, l); free(t);
+			if (r) { fputs("netman: psk-file does not hold a 44 character base64 key\n", stderr); free(al); return 2; }
+			p.has_psk = 1;
+		}
+		else { fprintf(stderr, "netman: unknown option '%s' (allowed, endpoint, keepalive, psk-file)\n", a[i]); free(al); return 2; }
+	}
+	p.allowed = al; p.nallowed = nal;
+	r = netman_wg_peer_add(a[0], &p);
+	explicit_bzero(p.psk, sizeof p.psk); free(al);
+	rc = nc_wg_err("peer add", r);
+	if (!rc) printf("%s: peer %.8s... set (routes for its allowed ips are not touched)\n", a[0], a[1]);
+	return rc;
+}
+static int h_wg_peer_del(const nc_cmd *c, int n, char **a)
+{
+	unsigned char k[32]; int rc;
+	if (nc_wg_off()) return 3;
+	if (n < 2) return nc_usage(c);
+	if (nc_wg_iface(a[0]) || nc_wg_key(a[1], k)) return 2;
+	rc = nc_wg_err("peer del", netman_wg_peer_del(a[0], k));
+	if (!rc) printf("%s: peer %.8s... removed\n", a[0], a[1]);
+	return rc;
+}
+static int h_wg_peer_endpoint(const nc_cmd *c, int n, char **a)
+{
+	unsigned char k[32]; netman_wg_ep e; int rc;
+	if (nc_wg_off()) return 3;
+	if (n < 3) return nc_usage(c);
+	if (nc_wg_iface(a[0]) || nc_wg_key(a[1], k)) return 2;
+	if (netman_wg_resolve(a[2], &e)) { fprintf(stderr, "netman: cannot resolve endpoint '%s' (host:port or [v6]:port)\n", a[2]); return 2; }
+	rc = nc_wg_err("peer endpoint", netman_wg_peer_endpoint(a[0], k, &e));
+	if (!rc) printf("%s: peer %.8s... now at %s\n", a[0], a[1], a[2]);
+	return rc;
+}
+
 /* ---- config -------------------------------------------------------------------------------------------------------- */
 
 static int h_cfg_show(const nc_cmd *c, int n, char **a) { (void)c; (void)n; (void)a; netman_config_show(&nc_cfg, stdout); return 0; }
@@ -559,6 +689,13 @@ static const nc_cmd nc_table[] = {
 	{ "licence renew", "NAME", h_lic_renew, R_YES, "licence", "renew a licence through enterprise.renew_hook", "The hook gets NAME CURRENT_PATH NEW_PATH and writes the new licence; netman checks it names the same licence and expires later, then swaps atomically and keeps NAME.lic.prev. netman itself never contacts a network." },
 	{ "key rotate", "NAME", h_key_rotate, R_YES, "licence", "new WireGuard key for NAME; prints the new public key", "Writes NAME.key mode 0600, keeps the old one as NAME.key.prev, then runs enterprise.key_apply_hook (NAME PUBKEY); if the hook fails the old key is restored. No `wg` binary needed." },
 	{ "key show", "NAME", h_key_show, R_YES, "licence", "public key of NAME.key", "" },
+	{ "wg show", "[IF]", h_wg_show, R_YES, "wireguard", "live WireGuard state: port, peers, endpoint, allowed ips, handshake age, transfer", "Without IF: every profile of the vpn directory that is up. Reading the device needs root." },
+	{ "wg genkey", "", h_wg_genkey, R_NO, "wireguard", "new private key on stdout (nothing is written)", "" },
+	{ "wg pubkey", "", h_wg_pubkey, R_NO, "wireguard", "public key for the private key on stdin", "" },
+	{ "wg genpsk", "", h_wg_genpsk, R_NO, "wireguard", "new preshared key on stdout", "" },
+	{ "wg peer add", "IF PUBKEY [allowed=IP,..] [endpoint=HOST:PORT] [keepalive=S] [psk-file=FILE]", h_wg_peer_add, R_YES, "wireguard", "add or update ONE peer on a running interface; the other peers and their sessions are not touched", "Allowed ips are written as given (host bits masked). Routes are not changed: a peer inside the interface's own subnet needs none, anything else is a route you add (or put in the profile). A key that already exists has its allowed ips, endpoint and keepalive replaced." },
+	{ "wg peer del", "IF PUBKEY", h_wg_peer_del, R_YES, "wireguard", "remove one peer from a running interface", "Exit 1 when the interface has no such peer." },
+	{ "wg peer endpoint", "IF PUBKEY HOST:PORT", h_wg_peer_endpoint, R_YES, "wireguard", "point an existing peer at a new endpoint (roaming server, new IP) without restarting", "Never creates a peer: an unknown key is an error." },
 	{ "config show", "", h_cfg_show, R_NEV, NULL, "every setting with its value and where it came from", "" },
 	{ "config check", "", h_cfg_check, R_NEV, NULL, "validate the config files and environment", "Errors are FILE:LINE with a did-you-mean for unknown keys." },
 	{ "config set", "SECTION.KEY VALUE", h_cfg_set, R_NEV, NULL, "edit the user config file (atomic, comments kept)", "" },

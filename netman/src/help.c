@@ -62,6 +62,7 @@ static const struct { const char *group, *text; } nc_group_notes[] = {
 	{ "licence", "licence files NAME.lic with expiry, the expiry check (exit 1 when anything expires soon), and hook-driven renewal. Switched by licence.enabled." },
 	{ "key", "WireGuard key rotation (NAME.key in enterprise.licence_dir). Switched by licence.enabled." },
 	{ "wol", "Wake-on-LAN magic packet. Switched by enterprise.enabled." },
+	{ "wg", "native WireGuard over generic netlink (src/mods/wireguard.c), no wg binary: keys and live peer edits on a running interface (add, delete, new endpoint: the other peers keep their sessions). Profiles and routes stay with the vpn commands. Switched by wireguard.enabled; with it off only OpenVPN profiles come up." },
 };
 #define NC_NGROUPNOTES ((int)(sizeof nc_group_notes / sizeof *nc_group_notes))
 static const char *nc_group_note(const char *g, int l)

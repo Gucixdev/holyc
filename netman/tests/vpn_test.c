@@ -1,6 +1,6 @@
 /* vpn_test.c - tests for vpn.h.
  *
- *   cc -std=gnu11 -O1 -o vpn_test vpn_test.c && ./vpn_test        pure tests: crypto vectors, parser, fuzz, JSON, providers, DNS files
+ *   cc -std=gnu11 -O1 -o vpn_test vpn_test.c ../src/mods/wireguard.c && ./vpn_test        pure tests: crypto vectors, parser, fuzz, JSON, providers, DNS files
  *   ./vpn_test ns                                                         + live tests inside `unshare -Urn` (never touches the host network)
  *
  * The live part refuses to run unless it is inside a non-initial user namespace with an empty network namespace (only "lo"),
@@ -99,7 +99,7 @@ static void test_parser(void) {
     netman_vpn_ip ip; netman_vpn__ip_parse("10.1.2.3/20", &ip); netman_vpn__ip_mask(&ip);
     OK(ip.addr[0] == 10 && ip.addr[1] == 1 && ip.addr[2] == 0 && ip.addr[3] == 0, "prefix masking");
     char h[64]; int p;
-    OK(netman_vpn__ep_split("[::1]:51820", h, sizeof h, &p) == 0 && p == 51820 && !strcmp(h, "::1") && netman_vpn__ep_split("a.b:0", h, sizeof h, &p) == -1 && netman_vpn__ep_split("::1:5", h, sizeof h, &p) == -1 && netman_vpn__ep_split("a b:5", h, sizeof h, &p) == -1, "endpoint split");
+    OK(netman_wg_ep_split("[::1]:51820", h, sizeof h, &p) == 0 && p == 51820 && !strcmp(h, "::1") && netman_wg_ep_split("a.b:0", h, sizeof h, &p) == -1 && netman_wg_ep_split("::1:5", h, sizeof h, &p) == -1 && netman_wg_ep_split("a b:5", h, sizeof h, &p) == -1, "endpoint split");
 }
 
 static void test_json_providers(const char *dir) {
@@ -263,6 +263,28 @@ static void live_wireguard(void) {
     OK(wait_byte(fromB[0], 8000), "REAL handshake + data: B received the datagram through WireGuard");
     netman_vpn_wgstat st; OK(netman_vpn_wg_stats("wgA", &st) == 0 && st.present && st.npeers == 1 && st.handshaked == 1 && st.tx > 0 && st.rx > 0, "stats: handshake done, rx/tx counted");
     netman_vpn_out = save; netman_vpn_status("wgA"); netman_vpn_out = NULL;
+    {   /* wireguard.c: live peer list and one-peer changes while the tunnel runs */
+        netman_wg_peerinfo *pi = NULL; size_t np = 0; unsigned char k1[32], k2[32], ub1[32]; netman_wg_ip al[2]; netman_wg_peer np1; netman_wg_ep e2; char eb[64];
+        OK(netman_wg_peers("wgA", &pi, &np) == 0 && np == 1 && pi[0].last_handshake > 0 && pi[0].tx > 0 && pi[0].has_ep && pi[0].nallowed == 1 && pi[0].allowed[0].prefix == 32, "peers: endpoint, handshake, rx/tx and allowed ip read back");
+        netman_wg_ep_str(&pi[0].ep, eb, sizeof eb); CHK(!strcmp(eb, "192.168.55.2:51821"), "peers: endpoint text %s", eb);
+        memcpy(ub1, pi[0].pub, 32); netman_wg_peers_free(pi, np);
+        netman_vpn_genkey(k1); netman_vpn_pubkey(k1, k2);
+        memset(&np1, 0, sizeof np1); memcpy(np1.pub, k2, 32); np1.keepalive = 25;
+        netman_wg_resolve("192.168.55.9:4000", &np1.ep); np1.has_ep = 1;
+        memset(al, 0, sizeof al); al[0].family = AF_INET; al[0].addr[0] = 10; al[0].addr[1] = 99; al[0].addr[3] = 1; al[0].prefix = 32; np1.allowed = al; np1.nallowed = 1;
+        OK(netman_wg_peer_add("wgA", &np1) == 0, "peer add on the running interface");
+        OK(netman_wg_peers("wgA", &pi, &np) == 0 && np == 2, "two peers now"); netman_wg_peers_free(pi, np);
+        OK(netman_wg_stats("wgA", &st) == 0 && st.npeers == 2 && st.handshaked == 1, "the original peer kept its handshake while another was added");
+        OK(netman_wg_resolve("192.168.55.10:4001", &e2) == 0 && netman_wg_peer_endpoint("wgA", k2, &e2) == 0, "endpoint update");
+        OK(netman_wg_peers("wgA", &pi, &np) == 0, "peers read");
+        for (size_t i = 0; i < np; i++) if (!memcmp(pi[i].pub, k2, 32)) { netman_wg_ep_str(&pi[i].ep, eb, sizeof eb); CHK(!strcmp(eb, "192.168.55.10:4001") && pi[i].keepalive == 25, "new endpoint %s, keepalive untouched", eb); }
+        netman_wg_peers_free(pi, np);
+        OK(netman_wg_peer_endpoint("wgA", k1, &e2) == -ENOENT, "endpoint update of an unknown key does not create a peer");
+        OK(netman_wg_peer_del("wgA", k2) == 0 && netman_wg_peer_del("wgA", k2) == -ENOENT, "peer delete, second delete reports no such peer");
+        OK(netman_wg_stats("wgA", &st) == 0 && st.npeers == 1 && st.handshaked == 1, "back to the original peer, still handshaked");
+        OK(udp_send("10.77.0.2", 9999, "after-edits") == 0 && wait_byte(fromB[0], 8000), "data still flows after live edits");
+        (void)ub1;
+    }
     int rtt = netman_vpn_rtt_ms("192.168.55.2", 1000); CHK(rtt >= 0, "icmp rtt over veth (ms=%d)", rtt);
     int mtu = netman_vpn_mtu_probe("192.168.55.2"); CHK(mtu == 1400, "path mtu probe over a 1400 veth found %d", mtu);
     OK(netman_vpn_down("wgA") == 0 && !if_nametoindex("wgA"), "wgA down removes the link");

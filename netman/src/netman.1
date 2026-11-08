@@ -211,6 +211,27 @@ new WireGuard key for NAME; prints the new public key. Writes NAME.key mode 0600
 .B netman key show NAME
 public key of NAME.key
 .TP
+.B netman wg show [IF]
+live WireGuard state: port, peers, endpoint, allowed ips, handshake age, transfer. Without IF: every profile of the vpn directory that is up. Reading the device needs root.
+.TP
+.B netman wg genkey
+new private key on stdout (nothing is written)
+.TP
+.B netman wg pubkey
+public key for the private key on stdin
+.TP
+.B netman wg genpsk
+new preshared key on stdout
+.TP
+.B netman wg peer add IF PUBKEY [allowed=IP,..] [endpoint=HOST:PORT] [keepalive=S] [psk\-file=FILE]
+add or update ONE peer on a running interface; the other peers and their sessions are not touched. Allowed ips are written as given (host bits masked). Routes are not changed: a peer inside the interface's own subnet needs none, anything else is a route you add (or put in the profile). A key that already exists has its allowed ips, endpoint and keepalive replaced.
+.TP
+.B netman wg peer del IF PUBKEY
+remove one peer from a running interface. Exit 1 when the interface has no such peer.
+.TP
+.B netman wg peer endpoint IF PUBKEY HOST:PORT
+point an existing peer at a new endpoint (roaming server, new IP) without restarting. Never creates a peer: an unknown key is an error.
+.TP
 .B netman config show
 every setting with its value and where it came from
 .TP
@@ -244,6 +265,9 @@ WireGuard key rotation (NAME.key in enterprise.licence_dir). Switched by licence
 .TP
 .B wol
 Wake\-on\-LAN magic packet. Switched by enterprise.enabled.
+.TP
+.B wg
+native WireGuard over generic netlink (src/mods/wireguard.c), no wg binary: keys and live peer edits on a running interface (add, delete, new endpoint: the other peers keep their sessions). Profiles and routes stay with the vpn commands. Switched by wireguard.enabled; with it off only OpenVPN profiles come up.
 .SH TUI
 Start it with \fBnetman \-tui\fR; \fB?\fR inside shows the same text:
 .nf
