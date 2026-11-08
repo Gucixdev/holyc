@@ -88,3 +88,20 @@ Reconnect watchdog; ICMP round trip; path-MTU search (IPv4 only).
 Mullvad (WireGuard, local keypair, device registration, optional multihop) and NordVPN (NordLynx). Secrets are read from files named by NMBV_MULLVAD_ACCOUNT_FILE / NMBV_NORD_TOKEN_FILE (mode 0600) and passed to curl on stdin, never on argv. NMBV_MULLVAD_DNS selects the resolver.
 .PP
 Tested: everything WireGuard and OpenVPN (real handshake and data between two user+network namespaces, policy routing, DNS restore, kill switch, watchdog, run, rtt/MTU) and the provider JSON parsers against saved samples (nmb_vpn_test.c, 134 checks, ASan/UBSan clean). Not tested: the live Mullvad and NordVPN APIs (need accounts), Mullvad multihop, --fastest on a real network, PreUp/PostUp hooks in run mode.
+.SH NET: WIRED, IP, DHCP, DNS, ROAMING
+.B nmb_net.h
+is a single-header C library (nmbn_ prefix, no D-Bus, no Python). Interfaces, addresses and routes are read and set over rtnetlink; carrier comes from IFF_LOWER_UP. Ethernet gets route metric 100, wifi (wl*) 600, so wired wins.
+.TP
+.B DHCPv4
+Own client: DISCOVER/OFFER/REQUEST/ACK, renew at T1 (unicast), rebind at T2 (broadcast), NAK handling, expiry teardown, release. Applies address, default route and DNS.
+.TP
+.B DNS
+resolv.conf is written atomically (temp file and rename) and merged per interface, with the original restored when the last interface goes away. If systemd-resolved is running, resolvectl is used instead, never both.
+.TP
+.B Profiles
+/etc/netmanager_blue/NAME.conf, key=value: iface, method=dhcp|static, address, gateway, dns, route=DST/LEN via GW, autoconnect, priority, randmac. Strictly validated on load and save.
+.TP
+.B nmbn_autoconnect()
+Event-driven (netlink events, no polling). Candidates are ranked by priority then last success; a failing profile is dropped and the next one is tried at once, with per-profile backoff (1, 2, 4 s, then 300 s). A switch removes the old addresses, routes and DNS first. Leases are cached per profile and reused with DHCP INIT-REBOOT; full DISCOVER only on NAK or timeout. nmbn_probe() detects a captive portal (HTTP 204 check). randmac=1 gives a stable random MAC per profile.
+.PP
+Tested in a user+network namespace with veth pairs and throw-away DHCP servers (nmb_net_test selftest, 82 checks), measured on one machine against a local server: carrier to address 41-49 ms cold, 29 ms with a cached lease, 58 ms with a NAKed cache, old network teardown 1 ms. Not tested: systemd-resolved, real NICs and access points, dnsmasq as the server, ARP conflict probe and gateway probe, DHCPv6/SLAAC. The library has no wifi scanning; the caller supplies the cache key.
