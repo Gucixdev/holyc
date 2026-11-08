@@ -1,0 +1,4 @@
+#!/bin/sh
+# clip - pick from the clipboard history (cliphist) with dmenu and put it back. Needs `wl-paste --watch cliphist store` running.
+set -eu
+cliphist list | dmenu -l 15 | cliphist decode | wl-copy

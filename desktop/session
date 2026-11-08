@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# session - start the dwl desktop: dwl, lemonbar fed by bar, the on-screen keyboard (hidden until Alt+b).
+# From a TTY: ./session   or through the display manager with dwl.desktop (README). 0 arguments.
+# dwl -s runs one command with dwl's stdout piped into its stdin, which is exactly what bar reads.
+# Safety net: if dwl is missing or dies within 15 s with an error, Hyprland starts instead, so a login never ends on a dead screen.
+# Set DWL_NESTED=1 to run inside another Wayland compositor for testing (no fallback then).
+set -u
+D=$(dirname "$(readlink -f "$0")")
+LOG=$HOME/.cache/dwl.log
+export PATH="$D/bin:$HOME/.local/bin:$PATH"
+export XDG_CURRENT_DESKTOP=dwl XDG_SESSION_TYPE=wayland XDG_SESSION_DESKTOP=dwl MOZ_ENABLE_WAYLAND=1
+mkdir -p "$HOME/.cache"
+# GPU mode. "free" (default): the desktop draws on the CPU (wlroots pixman) and its clients are told not to touch the GPU, so
+# the whole card (4 GB) is left for agents/CUDA. "gaming": GPU rendering, VRR, tearing. Switch: put the word in
+# ~/.config/desktop/gpu (or set DESKTOP_GPU=gaming for one login), then restart the session.
+GPU=${DESKTOP_GPU:-$(cat "$HOME/.config/desktop/gpu" 2>/dev/null)}
+if [ "${GPU:-free}" != gaming ]; then
+  export WLR_RENDERER=pixman
+  export GSK_RENDERER=cairo MOZ_WEBRENDER=0 MOZ_ACCELERATED=0 LIBGL_ALWAYS_SOFTWARE=1 QT_QUICK_BACKEND=software
+fi
+fallback() { echo "$(date '+%F %T') dwl failed ($1), starting Hyprland" >> "$LOG"; exec start-hyprland; }
+[ -x "$D/desktop" ] || make -C "$D" >/dev/null 2>>"$LOG"
+[ -x "$D/desktop" ] || fallback "desktop binary missing"
+# (the Emacs daemon is no longer started here; start it by hand or with Super+Shift+W - emacsclient -a "" starts one on demand)
+t0=$(date +%s)
+"$D/desktop" dwl -s "$D/desktop autostart & wvkbd-mobintl --hidden & exec $D/desktop bar | $D/desktop lemonbar -p -b -B '#1d2021' -F '#ebdbb2'" 2>>"$LOG"
+rc=$?
+[ -n "${DWL_NESTED:-}" ] && exit $rc
+[ $rc -ne 0 ] && [ $(( $(date +%s) - t0 )) -lt 15 ] && fallback "exit $rc after $(( $(date +%s) - t0 )) s"
+exit $rc

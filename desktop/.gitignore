@@ -1,0 +1,12 @@
+src/wvkbd/
+src/wtype/
+bin/wvkbd-mobintl
+bin/wtype
+build/
+/desktop
+bin/dwl
+bin/dmenu
+bin/stest
+bin/menu
+bin/lemonbar
+bin/bar

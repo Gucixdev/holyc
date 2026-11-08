@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# desktop - build the Wayland desktop parts that are not in holyc: wvkbd (on-screen keyboard) and wtype (type from scripts).
+# dwl, dmenu, lemonbar, the menu and the bar are C in src/ and build into ONE executable: ./desktop (make; wlroots static from holyc/dwl/.wlroots).
+# Sources are cloned into src/ (not tracked), binaries go to bin/ next to the scripts shot and clip. 0 arguments.
+set -eu
+cd "$(dirname "$(readlink -f "$0")")"
+mkdir -p src bin
+make >/dev/null
+[ -d src/wvkbd ] || git clone -q --depth 1 https://github.com/jjsullivan5196/wvkbd src/wvkbd
+[ -d src/wtype ] || git clone -q --depth 1 https://github.com/atx/wtype src/wtype
+make -C src/wvkbd LAYOUT=mobintl >/dev/null 2>&1 || true   # the man page needs scdoc; the binary is what counts
+[ -x src/wvkbd/wvkbd-mobintl ] || { echo "wvkbd failed to build" >&2; exit 1; }
+cp src/wvkbd/wvkbd-mobintl bin/
+[ -d src/wtype/build ] || meson setup src/wtype/build src/wtype >/dev/null
+ninja -C src/wtype/build >/dev/null && cp src/wtype/build/wtype bin/
+echo "built: $(ls bin | tr '\n' ' ')"
+echo "put $PWD/bin on PATH; dwl: Alt+b keyboard, Alt+w emacs, Print screenshot (Alt+Print area)"
+echo "one binary: ./desktop dwl|dmenu|lemonbar|bar|menu|stest (or a symlink with that name)"
