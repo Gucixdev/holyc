@@ -1,12 +1,12 @@
 # desktop - build ONE executable from src/: dwl + dmenu + stest + menu + lemonbar (+ bar, tools as they are ported to C).
 # make            -> ./desktop
 # make install    -> $(PREFIX)/bin/desktop and one symlink per applet (dwl, dmenu, ...)
-# wlroots is linked statically from WLROOTS (built once by holyc/dwl/wlroots-static); everything else comes from pkg-config.
+# wlroots is vendored in src/wlroots and linked statically (built once into build/wlroots by ./wlroots-static); everything else comes from pkg-config.
 # How the programs share one binary: each is compiled with -Dmain=<name>_main, its objects are joined with `ld -r`, and objcopy
 # keeps only <name>_main global - every other symbol becomes local, so drw.c, util.c and the generated protocol code can exist
 # once per program without clashing, and no program is changed to fit.
 CC       ?= cc
-WLROOTS  ?= /data/dev/github/holyc/dwl/.wlroots
+WLROOTS  ?= $(CURDIR)/build/wlroots
 OPT      ?= -O2
 PREFIX   ?= /usr/local
 APPLETS   = dwl dmenu stest menu lemonbar bar autostart
@@ -23,6 +23,10 @@ LEMONBAR_SRC = lemonbar.c utils.c util.c drw.c wlr-layer-shell-unstable-v1-proto
 
 all: desktop links
 
+$(WLROOTS)/lib/libwlroots-0.20.a:
+	./wlroots-static
+
+
 # bin/<applet> -> ../desktop, so programs that run "dmenu" or "menu" through PATH find the applets
 links: desktop
 	mkdir -p bin
@@ -32,7 +36,7 @@ build:
 	mkdir -p build
 
 # program object: compile (renaming main), join, hide everything but <name>_main
-build/dwl.o: src/dwl/dwl.c src/dwl/config.h | build
+build/dwl.o: src/dwl/dwl.c src/dwl/config.h $(WLROOTS)/lib/libwlroots-0.20.a | build
 	$(CC) -c $(OPT) $(DWLCF) -Dmain=dwl_main src/dwl/dwl.c -o build/dwl.raw.o
 	objcopy --keep-global-symbol=dwl_main build/dwl.raw.o $@
 
