@@ -50,6 +50,8 @@ typedef struct {
 	lt_timepicker *timepick_h12;
 	lt_timepicker *timepick_spin;
 	lt_sequencer *seq;
+	lt_volumebar *vol[3];                      /* speaker, microphone (horizontal), speaker again (vertical) - all on one fake backend */
+	struct volch { double level; int muted; } vol_ch[2]; int vol_active;
 	double tagw[12];
 	double heat[20 * 7];                       /* a GitHub-contributions-style grid, HCOLS x HROWS */
 	double histsample[300];
@@ -101,6 +103,8 @@ static const char *SPEC =
 	"          custom type=histogram nofocus=1\n"
 	"        panel title=\"pie chart\"\n"
 	"          custom type=piechart nofocus=1\n"
+	"      panel title=\"volumebar (1/2/3 pick a bar; arrows or +/-, PgUp/PgDn, Home/End, m mutes; click, drag, wheel)\" size=8\n"
+	"        custom type=volume\n"
 	"      panel title=\"gauges\" size=10\n"
 	"        custom type=gauges nofocus=1\n"
 	"      table title=\"date & time (a table: x=3 columns, rows 5,9,3; Tab moves between the cells)\" x=3 rows=\"5,9,3\" size=24\n"
@@ -533,6 +537,38 @@ static void draw_minimap(lt_app *a, const char *id, lt_canvas *c, lt_rect r, con
 	int offset = span > 0 ? (int)fmod(s->time * 6.0, (double)span) : 0;
 	lt_minimap(c, r, t, density, s->ndocs, offset, page, marks, nm);
 }
+/* volumebar: a fake backend (two channels in the demo state) behind get/set callbacks; the vertical bar is a second view of the speaker */
+static double vol_get(void *c) { return ((struct volch *)c)->level; }
+static void vol_set(void *c, double v) { ((struct volch *)c)->level = v; }
+static int vol_gm(void *c) { return ((struct volch *)c)->muted; }
+static void vol_sm(void *c, int m) { ((struct volch *)c)->muted = m; }
+static void vol_rects(lt_rect r, lt_rect out[3])
+{
+	out[0] = (lt_rect){r.x, r.y, r.w > 12 ? r.w - 12 : r.w, 1};
+	out[1] = (lt_rect){r.x, r.y + 2, out[0].w, 1};
+	out[2] = (lt_rect){r.x + r.w - 10, r.y, 10, r.h};
+}
+static void draw_volume(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool focused, void *ctx)
+{
+	(void)a; (void)id;
+	S *s = ctx;
+	lt_rect q[3];
+	vol_rects(r, q);
+	for (int i = 0; i < 3; i++) if (r.w > 24 || i < 2) lt_volumebar_draw(s->vol[i], c, q[i], t, focused && s->vol_active == i);
+}
+static lt_wres event_volume(lt_app *a, const char *id, lt_rect r, const lt_event *ev, void *ctx)
+{
+	(void)a; (void)id;
+	S *s = ctx;
+	lt_rect q[3];
+	vol_rects(r, q);
+	if (ev->kind == LT_EV_KEY && ev->key >= '1' && ev->key <= '3') { s->vol_active = ev->key - '1'; return LT_W_HANDLED; }
+	if (ev->kind == LT_EV_MOUSE) {
+		for (int i = 0; i < 3; i++) if ((ev->x >= q[i].x && ev->x < q[i].x + q[i].w && ev->y >= q[i].y && ev->y < q[i].y + q[i].h)) { s->vol_active = i; return lt_volumebar_event(s->vol[i], q[i], ev); }
+		return LT_W_IGNORED;
+	}
+	return lt_volumebar_event(s->vol[s->vol_active], q[s->vol_active], ev);
+}
 static void draw_pixedit(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool focused, void *ctx)
 {
 	(void)a; (void)id;
@@ -739,6 +775,11 @@ static void init_data(S *s)
 	s->timepick_spin = lt_timepicker_new(nowtm.tm_hour, nowtm.tm_min, nowtm.tm_sec);
 	lt_timepicker_set_kind(s->timepick_spin, LT_TIME_SPINBOX);
 
+	s->vol_ch[0].level = 0.65; s->vol_ch[1].level = 0.30;
+	s->vol[0] = lt_volumebar_new("speaker", (lt_volume_cb){vol_get, vol_set, vol_gm, vol_sm, &s->vol_ch[0]});
+	s->vol[1] = lt_volumebar_new("mic", (lt_volume_cb){vol_get, vol_set, vol_gm, vol_sm, &s->vol_ch[1]});
+	s->vol[2] = lt_volumebar_new("spk", (lt_volume_cb){vol_get, vol_set, vol_gm, vol_sm, &s->vol_ch[0]});
+	lt_volumebar_set_vertical(s->vol[2], true);
 	s->seq = lt_sequencer_new(4, 16);
 	lt_sequencer_set_group(s->seq, 4);
 	static const char *const seqnames[4] = {"Kick", "Snare", "HiHat", "Clap"};
@@ -764,6 +805,7 @@ static void register_all(S *s)
 	for (int k = 0; k < 4; k++) { memset(&MAPW[k], 0, sizeof MAPW[k]); MAPW[k].s = s; MAPW[k].kind = k; lt_mapview_init(&MAPW[k].v); lt_app_custom(a, mapnames[k], draw_mapw, event_mapw, &MAPW[k]); }
 	lt_app_custom(a, "spinners", draw_spinners, NULL, s);
 	lt_app_custom(a, "piechart", draw_piechart, NULL, s);
+	lt_app_custom(a, "volume", draw_volume, event_volume, s);
 	lt_app_custom(a, "gauges", draw_gauges, NULL, s);
 	lt_app_custom(a, "linechart", draw_linechart, NULL, s);
 	lt_app_custom(a, "barchart", draw_barchart, NULL, s);
