@@ -10,9 +10,7 @@ is a nod, not a claim: this has nothing to do with TempleOS's HolyC language, it
 | [`lazytui`](lazytui) | Terminal UI library on plain ANSI escapes | C99: `-std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE` | own |
 | [`notcoreutils`](notcoreutils) | `cb cloc colorado dv fzf gtop man netcat sudo tgates tree`, one file each | C11 GNU: `-std=gnu11 -D_GNU_SOURCE` | own |
 | [`vecindex`](vecindex) | Vector database: rotated 4/2/1-bit fast-scan with exact re-scoring, IVF, bit-packed quantizers, BM25 hybrid search; a C API in one library and `vserv`, an epoll server with TLS | C89: `-std=c89 -pedantic`; the sanitizer, crash and server tests `-std=gnu99` | own |
-| [`dwl`](dwl) | Wayland compositor | C99 features; no `-std` flag, built with the compiler default (wlroots' headers need C11) | fork of [dwl](https://codeberg.org/dwl/dwl) |
-| [`dmenu`](dmenu) | Launcher, native Wayland | C99: `-std=c99 -pedantic`; `dmenu_menu.c` is `-std=gnu11` | fork of [dmenu](https://git.suckless.org/dmenu) (`wayland` branch) |
-| [`lemonbar`](lemonbar) | Status bar, native Wayland | C99: `-std=c99 -D_GNU_SOURCE` | fork of [lemonbar](https://github.com/LemonBoy/bar) (`wayland` branch) |
+| [`desktop`](desktop) | Own Wayland desktop: compositor, launcher/menu, bar, settings panel, volume panel in one multi-call binary | C, wlroots 0.20 | built on dwl, dmenu and lemonbar (their licences in `desktop/src/LICENSES`) |
 | [`nnn`](nnn) | File manager | C11: `-std=c11` | fork of [nnn](https://github.com/jarun/nnn) (`debloat` branch) |
 
 The "language" column is what each directory's own Makefile or `run` script passes to the
@@ -113,15 +111,8 @@ search, MCTS over the link graph, embedding servers, a command line), `mem.c` (a
 engine) and `rerank.c` (a cross-encoder second pass). It includes `../vecindex/src/store.c` directly.
 See [`agent_launcher/README.md`](vecindex/examples/agent_launcher/README.md).
 
-### The Wayland desktop: dwl, dmenu, lemonbar, nnn
-Forks kept as `git subtree`s with the full upstream history, so `git log <dir>/` shows who
-wrote what. Local changes on top of upstream:
-
-- **dwl**: i3-style layouts, workspaces and directional focus, the own dmenu wired in as the
-  launcher, window-geometry fixes. Builds against wlroots 0.20.
-- **dmenu**: ported to native Wayland (`wayland-client`, `xkbcommon`, `fontconfig`, `freetype2`)
-  with a layer-shell surface; adds `dmenu_menu`.
-- **lemonbar**: native Wayland port sharing dmenu's drawing code.
+### The Wayland desktop: desktop, nnn
+The former dwl, dmenu and lemonbar forks live on inside [`desktop`](desktop) (see its docs/hacking.md).
 - **nnn**: an arena allocator to fix an O(n²) `dentfill()`, plus opener scripts that open a GUI
   Emacs without blocking nnn. Release engineering of upstream was removed on purpose.
 
@@ -142,8 +133,6 @@ are empty so far and build on core Lean in seconds; vecindex's needs Mathlib.
 | vecindex | a C compiler and bash; python3 for the server's end-to-end tests; numpy and the compared libraries for `./run compare` |
 | agent_launcher | a C compiler, bash and `vecindex/` (`VECINDEX` points at another copy); python3 with torch only for the optional model servers |
 | gtop (in notcoreutils) | optional `nvidia-smi`, `intel_gpu_top`, `lsusb` for GPU and TPU info |
-| dwl | wlroots 0.20, wayland, xkbcommon, pkg-config |
-| dmenu, lemonbar | wayland-client, xkbcommon, fontconfig, freetype2 |
 | nnn | ncurses; readline support is off by default (`O_NORL := 1` in its Makefile) |
 | every `lean4/` | elan with `leanprover/lean4:v4.26.0`; vecindex's also Mathlib, TrustLean and AMO-Lean, which lake fetches |
 

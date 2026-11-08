@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-# lean4/run - build the proofs, audit their axioms, scan the sources for escape hatches; exit 0 when all pass. The
-# steps are in ../../lean4/lib.sh; a differential test against the C code adds diff_test and mutant lines (see
-# base/lean4/run).
-. "$(dirname "$0")/../../lean4/lib.sh" || exit 2
-lean_build
-lean_audit
-lean_scan
-lean_end
