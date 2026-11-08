@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# tests/volume - the volume command, key binding and panel on the NEW build, headless, with the FAKE audio backend (a file in a temp dir):
+# the real volume and mute are never touched. usage: tests/volume   (0 arguments; needs socat, grim, wtype; build build-new first)
+set -u
+D=$(cd "$(dirname "$0")/.." && pwd)
+T=$(mktemp -d /tmp/deskv.XXXXXX)
+export XDG_RUNTIME_DIR=$T/run DESKTOP_CONFIG_DIR=$T/cfg WLR_BACKENDS=headless WLR_RENDERER=pixman PATH="$D/build-new/bin:$D/bin:$PATH"
+export DESKTOP_AUDIO_BACKEND=fake DESKTOP_AUDIO_FILE=$T/audio
+mkdir -p "$XDG_RUNTIME_DIR" "$DESKTOP_CONFIG_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+unset WAYLAND_DISPLAY DISPLAY
+pass=0; fail=0
+ok()  { pass=$((pass+1)); echo "ok    $*"; }
+bad() { fail=$((fail+1)); echo "FAIL  $*"; }
+check() { if eval "$2"; then ok "$1"; else bad "$1   [$2]"; fi; }
+ctl() { printf '%s\n' "$*" | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/dwl.sock"; }
+wait_for() { for _ in $(seq 100); do eval "$1" && return 0; sleep 0.1; done; return 1; }
+st() { ctl volume get | awk -v k="$1" '{for(i=1;i<NF;i++) if($i==k){ if(k=="spk"||k=="mic") print $(i+1), $(i+2); else print $(i+1)}}'; }
+
+printf 'spk 0.50 0\nmic 0.30 0\n' > "$T/audio"
+printf 'Super+Shift+v = volume up\nF9 = volume micmute\n' > "$DESKTOP_CONFIG_DIR/keys.conf"
+"$D/build-new/desktop" dwl > "$T/stdout" 2> "$T/stderr" &
+DWL=$!
+trap 'kill $DWL 2>/dev/null; sleep 0.3; kill -9 $DWL 2>/dev/null; echo "logs in $T"' EXIT
+wait_for '[ -S "$XDG_RUNTIME_DIR/dwl.sock" ]' || { echo "compositor did not start"; cat "$T/stderr"; exit 1; }
+sleep 0.5
+export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep '^wayland-[0-9]*$' | head -1)
+ctl set volume_osd_ms 0 > /dev/null    # first the command alone, no panel
+
+echo "== volume command (fake backend)"
+check "get: 50% / 30%, nothing muted" '[ "$(st spk)" = "50 0" ] && [ "$(st mic)" = "30 0" ]'
+check "up = +5 (step setting)" 'ctl volume up | grep -q ^ok && [ "$(st spk)" = "55 0" ]'
+check "down 20 = -20" 'ctl volume down 20 | grep -q ^ok && [ "$(st spk)" = "35 0" ]'
+check "mic is separate: micup" 'ctl volume micup | grep -q ^ok && [ "$(st mic)" = "35 0" ] && [ "$(st spk)" = "35 0" ]'
+check "clamped at 0" 'ctl volume down 99 >/dev/null; [ "$(st spk)" = "0 0" ]'
+check "clamped at volume_max" 'ctl volume set spk 500 >/dev/null; [ "$(st spk)" = "100 0" ]'
+check "mute toggles the speaker only" 'ctl volume mute >/dev/null; [ "$(st spk)" = "100 1" ] && [ "$(st mic)" = "35 0" ]'
+check "mute off" 'ctl volume mute off >/dev/null; [ "$(st spk)" = "100 0" ]'
+check "micmute toggles the mic only" 'ctl volume micmute >/dev/null; [ "$(st mic)" = "35 1" ] && [ "$(st spk)" = "100 0" ]'
+check "raising a muted channel unmutes it" 'ctl volume micup >/dev/null; [ "$(st mic)" = "40 0" ]'
+check "bad argument is an error" 'ctl volume mute maybe | grep -q ^error && ctl volume bogus | grep -q ^error'
+check "volume_step setting is used" 'ctl set volume_step 10 >/dev/null; ctl volume set spk 50 >/dev/null; ctl volume up >/dev/null; [ "$(st spk)" = "60 0" ]'
+check "settings schema lists the volume settings" 'ctl schema | grep -q "^volume_osd_ms|number" && ctl schema | grep -q "^volume_step|number" && ctl schema | grep -q "^volume_max|number"'
+check "seq grows with every change" '[ "$(st seq)" -ge 10 ]'
+ctl set volume_step 5 > /dev/null
+check "audio file is the fake backend's only state" 'grep -q "^spk 0.60" $T/audio'
+
+echo "== event + key binding"
+printf 'subscribe\n' | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/dwl.sock" > "$T/events" 2>/dev/null &
+SUB=$!
+sleep 0.3
+ctl volume down >/dev/null
+check "user volume event arrives" 'wait_for "grep -q \"^user volume spk 55 0 mic 40 0\" $T/events"'
+kill $SUB 2>/dev/null
+ctl set volume_osd_ms 1500 >/dev/null
+
+echo "== panel (interactive): keys"
+ctl set volume_osd_ms 0 >/dev/null
+export DESKTOP_PANEL_KEYS="Right Right Tab Left m Tab m" DESKTOP_PANEL_DUMP=1
+ctl volume set spk 50 >/dev/null; ctl volume set mic 30 >/dev/null; ctl volume mute off >/dev/null; ctl volume micmute off >/dev/null
+"$D/build-new/desktop" settings volume > "$T/vp.out" 2> "$T/vp.err" &
+VP=$!
+wait_for 'grep -q "^spk=" $T/vp.out' || { kill -0 $VP 2>/dev/null && echo "   (panel still running, no dump)" || { wait $VP; echo "   (panel exited rc=$? err: $(cat $T/vp.err))"; }; }
+unset DESKTOP_PANEL_KEYS DESKTOP_PANEL_DUMP
+sleep 0.4
+check "Right Right raised the speaker 50 -> 60" 'grep -q "^spk=60 " $T/vp.out'
+check "Tab Left lowered the MIC (30 -> 25), speaker kept" 'grep -q " mic=25 " $T/vp.out'
+check "m on the mic row muted the mic then m on the speaker row... (Tab back) muted the speaker" 'grep -q "spkmuted=1 mic=25 micmuted=1" $T/vp.out || grep -q "spkmuted=1 mic=25 micmuted=0" $T/vp.out'
+check "compositor state matches the panel (spk muted, mic level 25)" '[ "$(st spk)" = "60 1" ] && [ "$(st mic | cut -d" " -f1)" = 25 ]'
+grim "$T/panel-keys.png" 2>"$T/grim.err" && ok "grim: panel screenshot ($T/panel-keys.png)" || bad "grim: $(cat $T/grim.err)"
+cp "$T/panel-keys.png" /tmp/desktop-volume-panel.png 2>/dev/null
+check "a change from OUTSIDE shows up in the open panel (no restart)" 'ctl volume set mic 77 >/dev/null; sleep 0.5; grim "$T/panel-ext.png" && [ -s "$T/panel-ext.png" ] && ! cmp -s "$T/panel-ext.png" "$T/panel-keys.png"'
+wtype -k Tab; sleep 0.3   # the first wtype key can be lost while its virtual keyboard joins the group, so only the next ones are asserted
+wtype -k Right; sleep 0.4; wtype -k Right; sleep 0.4
+check "wtype (the real keyboard path): Right raised the selected row, and raising unmuted it" '[ "$(st spk)" = "70 0" ] || [ "$(st mic)" = "87 0" ]'
+check "wtype Escape closes the panel" 'wtype -k Escape; wait_for "! kill -0 $VP 2>/dev/null"'
+kill $VP 2>/dev/null
+
+echo "== panel (mouse paths): click / wheel / mute text"
+ctl set volume_osd_ms 0 >/dev/null
+export DESKTOP_PANEL_KEYS="click:spk:80 click:mic:10 wheelup wheeldown wheeldown mute:mic" DESKTOP_PANEL_DUMP=1
+ctl volume micmute off >/dev/null; ctl volume mute off >/dev/null
+"$D/build-new/desktop" settings volume > "$T/vm.out" 2> "$T/vm.err" &
+VM=$!
+wait_for 'grep -q "^spk=" $T/vm.out'; sleep 0.3
+unset DESKTOP_PANEL_KEYS DESKTOP_PANEL_DUMP
+kill $VM 2>/dev/null
+check "click on the bar sets the level (spk 80, wheel up/down/down net -5 = 75 on the selected row)" 'grep -q "^spk=75 " $T/vm.out'
+check "click on the mic bar sets 10 and mute:mic muted it" 'grep -q " mic=10 micmuted=1" $T/vm.out'
+
+echo "== OSD: a key-press command pops the panel up without taking the keyboard, then it times out"
+ctl set volume_osd_ms 1200 >/dev/null
+ctl volume mute off >/dev/null; ctl volume micmute off >/dev/null; sleep 0.5; pkill -f "settings volume --osd" 2>/dev/null
+ctl volume up >/dev/null
+check "the OSD process is up" 'wait_for "pgrep -f \"settings volume --osd\" >/dev/null"'
+sleep 0.3
+grim "$T/osd.png" 2>/dev/null && cp "$T/osd.png" /tmp/desktop-volume-osd.png && ok "grim: OSD screenshot (/tmp/desktop-volume-osd.png)"
+ctl volume up >/dev/null; ctl volume up >/dev/null
+check "no second OSD piles up (one process)" '[ "$(pgrep -fc "settings volume --osd")" -le 2 ]'
+check "the OSD closes by itself after the timeout" 'wait_for "! pgrep -f \"settings volume --osd\" >/dev/null"'
+
+echo "== usable while a dmenu holds the keyboard"
+printf 'one\ntwo\n' | dmenu > "$T/dmenu.out" 2>/dev/null &
+DM=$!
+sleep 0.8
+kill -0 $DM 2>/dev/null && ok "dmenu is open (exclusive keyboard)" || bad "dmenu did not stay open"
+before=$(st spk)
+ctl volume up >/dev/null
+check "volume command works with the dmenu open" '[ "$(st spk)" != "$before" ]'
+check "and the OSD still appears over it" 'wait_for "pgrep -f \"settings volume --osd\" >/dev/null"'
+grim "$T/osd-dmenu.png" 2>/dev/null && cp "$T/osd-dmenu.png" /tmp/desktop-volume-osd-dmenu.png
+check "the dmenu is still open (the OSD did not steal the keyboard)" 'kill -0 $DM 2>/dev/null'
+kill $DM 2>/dev/null
+
+echo "== bound key through the compositor (runtime keys.conf, Super+Shift+v)"
+ctl set volume_osd_ms 0 >/dev/null
+before=$(st spk)
+if command -v wtype >/dev/null; then
+  wtype -M logo -M shift -k v -m shift -m logo 2>/dev/null; sleep 0.4
+  check "Super+Shift+v ran 'volume up'" '[ "$(st spk)" != "$before" ]'
+fi
+
+echo; echo "$pass passed, $fail failed"
+[ "$fail" = 0 ]

@@ -127,8 +127,8 @@ ctlstate(FILE *f)
 			fputs(",\"title\":", f); jstr(f, client_get_title(c));
 			fputs(",\"cmd\":", f); ctlcmd(f, ctlpid(c));
 			fprintf(f, ",\"pid\":%d,\"tags\":%"PRIu32",\"floating\":%d,\"fullscreen\":%d,\"focused\":%d,"
-				"\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}", ctlpid(c), c->tags, c->isfloating, c->isfullscreen,
-				c == focustop(m), c->geom.x, c->geom.y, c->geom.width, c->geom.height);
+				"\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d,\"visible\":%d}", ctlpid(c), c->tags, c->isfloating, c->isfullscreen,
+				c == focustop(m), c->geom.x, c->geom.y, c->geom.width, c->geom.height, VISIBLEON(c, m) && c->scene->node.enabled);
 		}
 	fputs("\n],\"outputs\":[\n", f);
 	first = 1;
@@ -138,6 +138,15 @@ ctlstate(FILE *f)
 		jstr(f, m->wlr_output->name);
 		fprintf(f, ",\"selected\":%d,\"view\":%"PRIu32",\"layout\":", m == selmon, m->tagset[m->seltags]);
 		jstr(f, m->ltsymbol);
+		fputs(",\"layouts\":[", f);
+		for (int t = 0; t < TAGCOUNT; t++) {
+			const Layout *l = m->tlt[t];
+			size_t li = l ? (size_t)(l - layouts) : 0;
+			static const char *const nm[] = { "tile", "float", "monocle", "deck", "grid", "stack", "tabbed" };
+			fprintf(f, "%s\"%s\"", t ? "," : "", li < sizeof nm / sizeof *nm ? nm[li] : "?");
+		}
+		fprintf(f, "],\"tabs\":%d,\"tabactive\":", tabs_layout(m) ? m->ntabs : 0);
+		jstr(f, tabs_layout(m) && m->tabsel ? client_get_title(m->tabsel) : "");
 		fprintf(f, ",\"w\":%d,\"h\":%d}", m->m.width, m->m.height);
 	}
 	fputs("\n]}\n", f);

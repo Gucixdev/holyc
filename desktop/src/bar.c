@@ -44,12 +44,12 @@ static struct output *get(const char *name)
 	return o;
 }
 
-/* one letter per layout, no frame: s stack, t tabbed, f float, = tile, g grid */
+/* one letter per layout, no frame: = tile, f float, m monocle, d deck, g grid, s stack, t tabbed */
 static const char *lname(const char *s)
 {
 	if (!strcmp(s, "[]=")) return "=";
 	if (!strcmp(s, "><>")) return "f";
-	if (s[0] == '[' && s[1] && s[2] == ']') return s[1] == 'D' ? "s" : "t"; /* [D] stack, [M] tabbed */
+	if (s[0] == '[' && s[1] && s[2] == ']') return s[1] == 'D' ? "d" : s[1] == 'M' ? "m" : s[1] == 'S' ? "s" : "t"; /* [D] deck, [M] monocle, [S] stack, [T] tabbed */
 	if (!strcmp(s, "HHH")) return "g";
 	return s;
 }

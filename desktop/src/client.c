@@ -84,7 +84,14 @@ arrange(Monitor *m)
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node,
 			(c = focustop(m)) && c->isfullscreen);
 
+	/* each (monitor, tag) remembers its own layout: take the one of the shown view */
+	{
+		unsigned int ts = m->tagset[m->seltags] & TAGMASK;
+		if (ts && m->tlt[__builtin_ctz(ts)])
+			m->lt[m->sellt] = m->tlt[__builtin_ctz(ts)];
+	}
 	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
+	tabs_hide(m); /* tabbed / stack draw it again */
 
 	/* We move all clients (except fullscreen and unmanaged) to LyrTile while
 	 * in floating layout to avoid "real" floating clients be always on top */
@@ -287,6 +294,8 @@ focusclient(Client *c, int lift)
 		 * handling a drag operation */
 		if (!exclusive_focus && !seat->drag)
 			client_set_border_color(c, focuscolor);
+		if (tabs_wants(c->mon, c))
+			arrange(c->mon); /* tabbed / stack: show the window that just got focus */
 	}
 
 	/* If an overlay is focused, don't focus or activate the client,
@@ -708,10 +717,15 @@ setlayout(const Arg *arg)
 {
 	if (!selmon)
 		return;
-	if (!arg || !arg->v || arg->v != selmon->lt[selmon->sellt])
-		selmon->sellt ^= 1;
-	if (arg && arg->v)
-		selmon->lt[selmon->sellt] = (Layout *)arg->v;
+	{
+		/* layout of the shown view on THIS monitor only; asking for the current one (or none) swaps with the previous */
+		const Layout *cur = selmon->lt[selmon->sellt], *want = arg && arg->v ? arg->v : cur;
+		if (want == cur && selmon->prevlt)
+			want = selmon->prevlt;
+		if (want != cur)
+			selmon->prevlt = cur;
+		monsetlt(selmon, want, 0);
+	}
 	strncpy(selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, LENGTH(selmon->ltsymbol));
 	arrange(selmon);
 	printstatus();
@@ -977,6 +991,8 @@ void
 updatetitle(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, set_title);
+	if (c->mon)
+		tabs_refresh(c->mon);
 	if (c == focustop(c->mon))
 		printstatus();
 
@@ -1000,6 +1016,8 @@ urgent(struct wl_listener *listener, void *data)
 		return;
 
 	c->isurgent = 1;
+	if (c->mon)
+		tabs_refresh(c->mon);
 	printstatus();
 
 	if (client_surface(c)->mapped)
@@ -1019,32 +1037,24 @@ view(const Arg *arg)
 	printstatus();
 }
 
-/* shiftview/tagshiftview: real replacement for the user's own real
- * Hyprland setup, a custom $HOME/.config/src/workspcswitch script
- * bound to Z/X (prev/next) and Shift+Z/X (move client, then follow) -
- * that script's own real, documented behaviour is "oba monitory
- * jednoczesnie" (both monitors simultaneously): every connected
- * output's active tag shifts together by the same delta, not just
- * selmon's. dwl's tags are natively per-output already (each Monitor
- * has its own tagset[]), so this walks the real `mons` list instead
- * of only touching selmon, matching that synchronized-shift
- * behaviour for real rather than approximating it. */
+/* shiftview/tagshiftview: previous / next workspace (tag) of the FOCUSED monitor only. The other monitors keep their view,
+ * layout and windows exactly as they are (each Monitor has its own tagset[] and layout per tag). */
 void
 shiftview(const Arg *arg)
 {
-	Monitor *m;
+	Monitor *m = selmon;
 	unsigned int cur, next;
 
-	wl_list_for_each(m, &mons, link) {
-		cur = m->tagset[m->seltags];
-		if (arg->i > 0)
-			next = (cur == (1u << (TAGCOUNT - 1))) ? 1u : cur << 1;
-		else
-			next = (cur == 1u) ? (1u << (TAGCOUNT - 1)) : cur >> 1;
-		m->seltags ^= 1;
-		m->tagset[m->seltags] = next;
-		arrange(m);
-	}
+	if (!m)
+		return;
+	cur = m->tagset[m->seltags];
+	if (arg->i > 0)
+		next = (cur == (1u << (TAGCOUNT - 1))) ? 1u : cur << 1;
+	else
+		next = (cur == 1u) ? (1u << (TAGCOUNT - 1)) : cur >> 1;
+	m->seltags ^= 1;
+	m->tagset[m->seltags] = next;
+	arrange(m);
 	focusclient(focustop(selmon), 1);
 	printstatus();
 }
@@ -1092,9 +1102,12 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 				!(node = wlr_scene_node_at(&layers[layer]->node, x, y, nx, ny)))
 			continue;
 
-		if (node->type == WLR_SCENE_NODE_BUFFER)
-			surface = wlr_scene_surface_try_from_buffer(
-					wlr_scene_buffer_from_node(node))->surface;
+		if (node->type == WLR_SCENE_NODE_BUFFER) {
+			/* the tab bar is a buffer too, without a surface behind it */
+			struct wlr_scene_surface *ss = wlr_scene_surface_try_from_buffer(wlr_scene_buffer_from_node(node));
+			if (ss)
+				surface = ss->surface;
+		}
 	}
 
 	if (psurface) *psurface = surface;

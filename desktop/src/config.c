@@ -20,6 +20,8 @@ const Layout layouts[] = {
 	{ "[M]",      monocle },    /* i3 "tabbed" */
 	{ "[D]",      deck },       /* i3 "stacking" */
 	{ "HHH",      grid },
+	{ "[S]",      stack },      /* i3 stacking: title rows above the one shown window */
+	{ "[T]",      tabbed },     /* i3 tabbed: one tab bar, one shown window */
 };
 
 /* monitors */
