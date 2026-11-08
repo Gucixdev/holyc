@@ -20,6 +20,8 @@ shows ethernet, wifi and bluetooth. The wifi backend is chosen automatically: wp
 exists (this needs root), otherwise iwd. The interface can be changed with NMB_IFACE.
 .B fw
 prints the nft ruleset (root).
+.SH LIBRARY
+The logic lives in the stb-style single header netmanager_blue.h (define NMB_IMPLEMENTATION in one .c file; functions nmb_status, nmb_wifi_*, nmb_bt_*, nmb_fw; output redirectable via nmb_out/nmb_err). This program is a thin CLI over it.
 .SH NOT YET
 WPS, VPN, ethernet configuration, a TUI, bluetooth pairing agent (PIN entry); wifi forget works with iwd only.
 .SH SEE ALSO
