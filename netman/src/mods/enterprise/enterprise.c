@@ -701,6 +701,20 @@ int netman_ent_bond_add(const netman_ent *e)
 	return netman_link_set(e->name, 1);
 }
 int netman_ent_bond_del(const netman_ent *e) { return ent__dellink(e->name); }
+/* add / remove ONE slave of a live bond (bonding.c re-exports this) */
+int netman_ent_bond_slave(const char *bond, const char *slave, int add)
+{
+	ent_req q;
+	int bi = ent_idx(bond), si = ent_idx(slave), r;
+	if (bi < 0) return ent_fail(bi, "no such bond '%s'", bond);
+	if (si < 0) return ent_fail(si, "no such interface '%s'", slave);
+	if (add) return ent__enslave(slave, bi);
+	ent_req_init(&q, RTM_NEWLINK, NLM_F_ACK, sizeof(struct ifinfomsg));
+	q.m.i.ifi_index = si;
+	ent__a32(&q, IFLA_MASTER, 0);
+	if ((r = ent_nl(&q, NULL, NULL)) < 0) return ent_fail(r, "cannot release %s: %s", slave, strerror(-r));
+	return 0;
+}
 int netman_ent_bond_show(const netman_ent *e, FILE *f)
 {
 	netman_ent_info i;
