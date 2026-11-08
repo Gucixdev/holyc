@@ -1,0 +1,62 @@
+.TH WLCB 1 "2026-11-08" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+wlcb \- Wayland clipboard manager with history
+.SH SYNOPSIS
+.B wlcb
+[\fB\-p\fR] \fBcopy\fR [\fITEXT\fR...]
+.br
+.B wlcb paste
+.br
+.B wlcb list
+.br
+.B wlcb select
+\fIN\fR
+.br
+.B wlcb
+[\fB\-p\fR]
+.SH DESCRIPTION
+.B wlcb
+is the Wayland twin of
+.BR xcb (1):
+the same commands and the same behaviour, so scripts can swap one for the
+other. It uses the data\-control protocol (\fIext\-data\-control\-v1\fR if the
+compositor offers it, otherwise \fIzwlr_data_control_manager_v1\fR), which
+needs no focused window, so it works under dwl and other wlroots compositors.
+It watches the clipboard for text (\fItext/plain;charset=utf\-8\fR and
+\fItext/plain\fR), keeps a RAM ring buffer of history, and re\-activates an old
+entry by owning the selection itself. When the application that owned the
+clipboard exits, the last entry is re\-owned so it is not lost.
+.PP
+The first
+.BR copy / paste /TUI
+invocation auto\-starts a background daemon with a Unix socket at
+.I $XDG_RUNTIME_DIR/wlcb.sock
+(or
+.I /tmp/.wlcb-<uid>.sock
+if that is unset). History lives only in the daemon's RAM.
+.SH COMMANDS
+.TP
+.B copy \fR[\fITEXT\fR...]
+Copy TEXT (or stdin, if no TEXT is given) onto the clipboard.
+.TP
+.B paste
+Print the current clipboard contents.
+.TP
+.B list
+Print the full history, most recent first.
+.TP
+.B select \fIN\fR
+Re\-activate history entry N.
+.TP
+.B (no args)
+Interactive TUI: fuzzy\-search history, Enter to re\-activate an entry.
+.SH OPTIONS
+.TP
+.B \-p
+When this invocation starts the daemon, also record the PRIMARY
+(middle\-click) selection into history. Ignored if a daemon is already running.
+.SH ENVIRONMENT
+.B WAYLAND_DISPLAY
+selects the compositor, as usual.
+.SH SEE ALSO
+.BR xcb (1)

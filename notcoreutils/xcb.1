@@ -1,0 +1,59 @@
+.TH XCB 1 "2026-11-08" "notcoreutils" "notcoreutils Manual"
+.SH NAME
+xcb \- clipboard manager with history
+.SH SYNOPSIS
+.B xcb copy
+[\fITEXT\fR...]
+.br
+.B xcb paste
+.br
+.B xcb list
+.br
+.B xcb select
+\fIN\fR
+.br
+.B xcb
+.SH DESCRIPTION
+.B xcb
+is a real clipboard manager: it owns the X11 CLIPBOARD selection
+(the same ICCCM pattern proven in this codebase's own
+.BR st (1)
+clipboard patch \- XSetSelectionOwner/SelectionRequest/
+XConvertSelection), keeps a RAM ring buffer of history (not just the
+single most recent entry), and is reachable from anywhere: plain
+CLI, an interactive TUI, and any real GUI app on the system (since it
+is a real CLIPBOARD owner, Ctrl+V in a browser or GUI text field
+works exactly as it would against any other clipboard manager).
+.PP
+Daemon + client, one binary: the first
+.BR copy / paste /TUI
+invocation auto\-starts a background daemon (an X11 connection plus a
+Unix socket at
+.IR $XDG_RUNTIME_DIR/xcb.sock ,
+or
+.I /tmp/.xcb-<uid>.sock
+if that is unset) if one is not already running; every later
+invocation is just a client talking to it over the socket. The
+daemon holds all clipboard state in RAM (a fixed\-size static ring
+buffer, no dynamic allocation, no disk\-backed history file) for as
+long as it is alive.
+.SH COMMANDS
+.TP
+.B copy \fR[\fITEXT\fR...]
+Copy TEXT (or stdin, if no TEXT is given) onto the clipboard.
+.TP
+.B paste
+Print the current clipboard contents.
+.TP
+.B list
+Print the full history, most recent first.
+.TP
+.B select \fIN\fR
+Re\-activate history entry N as the current clipboard contents.
+.TP
+.B (no args)
+Launch an interactive TUI: fuzzy\-search history, Enter to
+re\-activate an old entry.
+.SH SEE ALSO
+.BR wlcb (1),
+.BR st (1)

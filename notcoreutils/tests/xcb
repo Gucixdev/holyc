@@ -1,0 +1,44 @@
+#!/bin/sh
+# xcb tests under a private Xvfb (never touches your real display).
+# Needs Xvfb and xclip (to play "another application"); skips (exit 0) without them.
+#   BIN=/path/to/bin sh tests/xcb
+cd "$(dirname "$0")/.." || exit 1
+BIN=${BIN:-$PWD/bin}
+[ -x "$BIN/xcb" ] || { echo "build first: make"; exit 1; }
+command -v Xvfb > /dev/null && command -v xclip > /dev/null || { echo "xcb tests: need Xvfb and xclip, skipped"; exit 0; }
+
+T=$(mktemp -d) || exit 1
+cleanup() {
+	for p in $(pgrep -u "$(id -u)" -f "$BIN/xcb"); do
+		grep -qa "XDG_RUNTIME_DIR=$T/xdg" "/proc/$p/environ" 2> /dev/null && kill "$p" 2> /dev/null
+	done
+	kill $XPID 2> /dev/null
+	rm -rf "$T"
+}
+trap cleanup EXIT INT TERM
+mkdir -p "$T/xdg" && chmod 700 "$T/xdg"
+export XDG_RUNTIME_DIR=$T/xdg
+unset WAYLAND_DISPLAY
+D=:$((90 + $$ % 100))
+Xvfb "$D" -nolisten tcp > /dev/null 2>&1 &
+XPID=$!
+sleep 1
+export DISPLAY=$D
+
+pass=0 fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); echo "FAIL $1"; [ -n "$2" ] && echo "     $2"; }
+same() { if [ "$2" = "$3" ]; then ok; else bad "$1" "expected [$2] got [$3]"; fi; }
+
+"$BIN/xcb" bogus > /dev/null 2>&1 < /dev/null; same "unknown subcommand exits 2" 2 $?
+"$BIN/xcb" copy hello; same "copy exits 0" 0 $?
+same "paste returns it" hello "$("$BIN/xcb" paste)"
+same "another X client sees it" hello "$(xclip -o -selection clipboard)"
+printf 'second' | "$BIN/xcb" copy
+same "newest is current" second "$("$BIN/xcb" paste)"
+same "history has both" 2 "$("$BIN/xcb" list | wc -l | tr -d ' ')"
+"$BIN/xcb" select 1; same "select exits 0" 0 $?
+same "select re-activates old entry" hello "$(xclip -o -selection clipboard)"
+
+echo "xcb: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

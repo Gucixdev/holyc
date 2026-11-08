@@ -1,0 +1,95 @@
+#!/bin/sh
+# wlcb tests against a fake data-control compositor (tests/wlcb-fakecomp.c),
+# once for ext-data-control-v1 and once for zwlr_data_control_manager_v1.
+# Needs wayland-scanner and libwayland-server; skips (exit 0) without them.
+#   BIN=/path/to/bin sh tests/wlcb
+cd "$(dirname "$0")/.." || exit 1
+SRC=$PWD
+BIN=${BIN:-$PWD/bin}
+[ -x "$BIN/wlcb" ] || { echo "build first: make"; exit 1; }
+command -v wayland-scanner > /dev/null || { echo "wlcb tests: no wayland-scanner, skipped"; exit 0; }
+
+T=$(mktemp -d) || exit 1
+cleanup() {
+	for p in $(pgrep -u "$(id -u)" -f "$BIN/wlcb"); do
+		grep -qa "XDG_RUNTIME_DIR=$T/xdg" "/proc/$p/environ" 2> /dev/null && kill "$p" 2> /dev/null
+	done
+	kill $COMP 2> /dev/null
+	rm -rf "$T"
+}
+trap cleanup EXIT INT TERM
+mkdir -p "$T/xdg" "$T/gen" && chmod 700 "$T/xdg"
+export XDG_RUNTIME_DIR=$T/xdg WAYLAND_DISPLAY=wlcb-fake
+EXT=${EXT_XML:-/usr/share/wayland-protocols/staging/ext-data-control/ext-data-control-v1.xml}
+WLR=$SRC/deps/wlr-data-control-unstable-v1.xml
+
+pass=0 fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); echo "FAIL $1"; [ -n "$2" ] && echo "     $2"; }
+same() { if [ "$2" = "$3" ]; then ok; else bad "$1" "expected [$2] got [$3]"; fi; }
+tell() { echo "$1" >&3; sleep 0.4; }
+# got: ask the fake app for the clipboard content it would paste
+got() { n=$(grep -c '^GOT:' "$T/out"); echo read >&3; i=0; while [ $i -lt 40 ] && [ "$(grep -c '^GOT:' "$T/out")" = "$n" ]; do sleep 0.1; i=$((i + 1)); done; sed -n 's/^GOT://p' "$T/out" | tail -1; }
+
+$BIN/wlcb bogus > /dev/null 2>&1 < /dev/null; same "wlcb: unknown subcommand exits 2" 2 $?
+
+for proto in ext wlr; do
+	echo "== wlcb ($proto)"
+	if [ $proto = ext ]; then X=$EXT D=; H=ext-data-control-v1; else X=$WLR D=-DWLR; H=wlr-data-control-unstable-v1; fi
+	wayland-scanner server-header "$X" "$T/gen/$H-server-protocol.h" &&
+	wayland-scanner private-code "$X" "$T/gen/$H-protocol.c" &&
+	cc -w $D -I"$T/gen" -o "$T/fc-$proto" "$SRC/tests/wlcb-fakecomp.c" "$T/gen/$H-protocol.c" -lwayland-server \
+		|| { echo "wlcb tests: cannot build the fake compositor, skipped"; exit 0; }
+
+	mkfifo "$T/in-$proto"; exec 3<> "$T/in-$proto"
+	: > "$T/out"
+	"$T/fc-$proto" wlcb-fake < "$T/in-$proto" >> "$T/out" &
+	COMP=$!
+	i=0; while [ $i -lt 40 ] && ! grep -q READY "$T/out"; do sleep 0.1; i=$((i + 1)); done
+
+	"$BIN/wlcb" copy hello; same "copy exits 0" 0 $?
+	same "paste returns it" hello "$("$BIN/wlcb" paste)"
+	same "other apps see it" hello "$(got)"
+	printf 'a b\nc' | "$BIN/wlcb" copy
+	same "stdin copy keeps inner newline" "a b
+c" "$("$BIN/wlcb" paste)"
+
+	tell "copy from-app"
+	same "app copy lands in history" from-app "$("$BIN/wlcb" paste)"
+	same "history is newest first" "0: from-app
+1: a b
+2: hello" "$("$BIN/wlcb" list | sed 's/^ *//')"
+	tell "copy from-app"
+	same "same text is not duplicated" 3 "$("$BIN/wlcb" list | wc -l | tr -d ' ')"
+
+	"$BIN/wlcb" select 2; same "select exits 0" 0 $?
+	same "select re-activates the old entry" hello "$(got)"
+	same "...and paste agrees" hello "$("$BIN/wlcb" paste)"
+
+	tell "clear"
+	same "clipboard survives its owner leaving" hello "$(got)"
+
+	tell "primary mid-click"
+	same "primary ignored without -p" 3 "$("$BIN/wlcb" list | wc -l | tr -d ' ')"
+
+	# a fresh daemon with -p records the primary selection too
+	for p in $(pgrep -u "$(id -u)" -f "$BIN/wlcb"); do
+		grep -qa "XDG_RUNTIME_DIR=$T/xdg" "/proc/$p/environ" 2> /dev/null && kill "$p"
+	done
+	sleep 0.3
+	"$BIN/wlcb" -p copy first
+	tell "primary mid-click"
+	case "$("$BIN/wlcb" list)" in *mid-click*) ok ;; *) bad "primary recorded with -p" ;; esac
+
+	# the daemon dies cleanly with the compositor
+	tell quit
+	exec 3>&-
+	wait $COMP 2> /dev/null
+	for p in $(pgrep -u "$(id -u)" -f "$BIN/wlcb"); do
+		grep -qa "XDG_RUNTIME_DIR=$T/xdg" "/proc/$p/environ" 2> /dev/null && kill "$p"
+	done
+	sleep 0.3
+done
+
+echo "wlcb: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]
