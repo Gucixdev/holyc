@@ -1,0 +1,5 @@
+type "x"
+bogus 1
+wait 5parsecs
+key Enter Nonsense
+size 3x3

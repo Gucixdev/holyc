@@ -1,0 +1,19 @@
+# demo of ls in a private HOME
+size 80x16
+theme dark
+title "ls"
+setup printf "PS1='\\$ '\n" > $HOME/.bashrc
+setup mkdir -p $HOME/proj/src && touch $HOME/proj/README.md $HOME/proj/Makefile $HOME/proj/src/main.c
+cd /tmp
+slide "ls" "list directory contents" 1500ms
+run bash -i
+caption "Colorful listing, one command" bottom
+wait 500ms
+type "cd ~/proj && ls --color=always -la" 45
+key Enter
+wait 1s
+caption "Now recurse" bottom
+type "ls --color=always -R" 45
+key Enter
+wait 1500ms
+loop

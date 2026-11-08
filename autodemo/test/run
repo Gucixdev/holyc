@@ -1,0 +1,20 @@
+#!/bin/sh
+# tests: script validation, render to webp (container check), ascii preview. 0 arguments.
+set -eu
+cd "$(dirname "$0")/.."
+A=./autodemo; T=$(mktemp -d /tmp/autodemo-test-XXXXXX); fail() { echo "FAIL: $*"; exit 1; }
+$A check examples/ls.demo >/dev/null || fail "check good"
+if $A check test/bad.demo 2>$T/err; then fail "bad demo accepted"; fi
+for s in "input before" "unknown command" "bad duration" "bad key" "size WxH"; do grep -q "$s" $T/err || fail "missing diagnostic: $s"; done
+$A render examples/ls.demo -o $T/o.webp --snap 6000 $T/s.ppm >/dev/null || fail render
+python3 -I - "$T/o.webp" <<'P' || fail "webp container"
+import sys
+d=open(sys.argv[1],'rb').read()
+assert d[:4]==b'RIFF' and d[8:12]==b'WEBP' and b'ANIM' in d[:64] and d.count(b'ANMF')>10, "not animated webp"
+assert len(d)<200_000, len(d)
+P
+head -c 2 $T/s.ppm | grep -q P6 || fail snap
+$A preview examples/ls.demo | grep -q "README.md" || fail preview
+$A render examples/ls.demo -o $T/o.webm >/dev/null || fail webm
+[ -s $T/o.webm ] || fail "webm empty"
+echo "all tests passed"
