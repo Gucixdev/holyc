@@ -3,21 +3,21 @@
 The logic is done and tested in real `.c` modules; core netman only needs the interface lines below. Nothing in
 `src/cli.h`, `src/config.h`, `src/config.c`, `src/help.c`, `src/netman.1` or `run` was touched by this work.
 
-Modules: `src/mods/enterprise.{h,c}` (bonding/team, bridge+STP+vlan filtering, vlan/QinQ, macvlan, ipvlan, veth, dummy,
+Modules: `src/mods/enterprise/enterprise.{h,c}` (bonding/team, bridge+STP+vlan filtering, vlan/QinQ, macvlan, ipvlan, veth, dummy,
 routes/rules/tables, ECMP failover, link settings, IPv6/PD, Wake-on-LAN, wired 802.1X, `.ent` profiles),
-`src/mods/tether.c` (USB/BT detect, share-out, client mode, BT PAN), `src/mods/licence.{h,c}` (licences, hook renewal,
-WireGuard key rotation), `src/mods/entcore.h` (private helpers, not an API). Test: `tests/enterprise_test.c`.
+`src/mods/enterprise/tether.c` (USB/BT detect, share-out, client mode, BT PAN), `src/mods/enterprise/licence.{h,c}` (licences, hook renewal,
+WireGuard key rotation), `src/mods/enterprise/entcore.h` (private helpers, not an API). Test: `tests/enterprise_test.c`.
 
 ## 1. Build (run)
 
 `netman.c` stays one translation unit; the three new modules are separate `.c` files. In `run` the cc line becomes
 
-    "$cc" -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c -o bin/netman.tmp
+    "$cc" -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c -o bin/netman.tmp
 
 and in `src/netman.c`, after `#include "mods/net.h"` (net.h supplies the implementation the modules link against):
 
-    #include "mods/enterprise.h"
-    #include "mods/licence.h"
+    #include "mods/enterprise/enterprise.h"
+    #include "mods/enterprise/licence.h"
 
 Bluetooth PAN additionally needs `-DNETMAN_ENT_DBUS` and dbus.h's implementation in the same translation unit as
 tether.c, which a separate .c cannot get from netman.c's static dbus code. Until bluez PAN is wanted, leave the flag off:
@@ -26,7 +26,7 @@ tether.c, which a separate .c cannot get from netman.c's static dbus code. Until
 
 Test build and run (needs only a compiler; it makes its own user+net namespace and never touches the host network):
 
-    cc -O2 -o tests/enterprise_test tests/enterprise_test.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c
+    cc -O2 -o tests/enterprise_test tests/enterprise_test.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c
     nice -n 19 tests/enterprise_test
 
 ## 2. Config: `src/config.h` (add inside NC_KEYS, before the TUI lines) and `src/config.c`

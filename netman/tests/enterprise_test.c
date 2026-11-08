@@ -1,17 +1,17 @@
 #define _GNU_SOURCE
-/* enterprise_test.c - self-test for src/mods/enterprise.c, tether.c and licence.c.
+/* enterprise_test.c - self-test for src/mods/enterprise/enterprise.c, tether.c and licence.c.
  *
  *   ./enterprise_test            runs everything inside its OWN user+net namespace (the host network is never touched;
  *                                it refuses to run if the namespace cannot be made)
  *
- * Build (from netman/): cc -O2 -o tests/enterprise_test tests/enterprise_test.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c
+ * Build (from netman/): cc -O2 -o tests/enterprise_test tests/enterprise_test.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c
  * Things the kernel/driver/namespace does not allow are reported as SKIP, not as failures.
  * `ip` and `nsenter` are used by the TEST only, as an independent cross-check and to set up the peer netns.
  */
 #define NETMAN_NET_IMPLEMENTATION
 #include "../src/mods/net.h"
-#include "../src/mods/enterprise.h"
-#include "../src/mods/licence.h"
+#include "../src/mods/enterprise/enterprise.h"
+#include "../src/mods/enterprise/licence.h"
 
 #include <sched.h>
 #include <sys/prctl.h>

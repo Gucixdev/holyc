@@ -101,7 +101,7 @@ and a global observer of both ends can still correlate. Local services on 127.0.
 
 ## tests (`tests/`)
 
-    cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c src/mods/wireguard.c && /tmp/nm_logic   76 checks (parsers, width, render, modals)
+    cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c src/mods/wireguard.c && /tmp/nm_logic   76 checks (parsers, width, render, modals)
     tests/pty                                    the real binary in tmux against fake iwd / wpa_supplicant / bluez (tests/fakes.c): 105 checks
     tests/cli_test                               help, man sync, config, module gating, exit codes (41)
     cc -std=gnu11 -Isrc -o /tmp/nm_priv tests/priv_test.c; cc ... tests/config_test.c src/config.c [src/netman.conf.example]   15 / 77

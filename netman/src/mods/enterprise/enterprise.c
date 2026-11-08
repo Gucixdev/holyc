@@ -3,7 +3,7 @@
 #define _GNU_SOURCE
 #include "enterprise.h"
 #include "entcore.h"
-#include "net.h"
+#include "../net.h"
 
 #include <arpa/inet.h>
 #include <dirent.h>
