@@ -286,4 +286,42 @@ theorem dup_vt_first_wins :
     seatActive (activate ⟨[a, b], 0⟩ 2) 1 = some 1 := by
   decide
 
+/-! ### After the fix (2026-11-08): VT uniqueness at create, `closing` assigned before removal. -/
+
+/-- `m_createsession` guard: a session with a VT is refused while a non-closing session already sits on that seat+VT. -/
+def vtFree (w : World) (seat vt : Nat) : Bool :=
+  vt == 0 || !(w.sess.any (fun s => s.closing == false && s.seat == seat && s.vtnr == vt))
+
+def createChecked (w : World) (s : Sess) : Option World :=
+  if vtFree w s.seat s.vtnr then some (create w s) else none
+
+/-- The Finding-2 witness is now refused. -/
+theorem dup_vt_refused :
+    let a : Sess := ⟨1, 1, 2, false, false⟩
+    let b : Sess := ⟨2, 1, 2, false, false⟩
+    (createChecked ⟨[a], 0⟩ b).isNone = true := by
+  decide
+
+/-- Distinct VTs / VT-less sessions are still accepted. -/
+theorem other_vt_accepted :
+    let a : Sess := ⟨1, 1, 2, false, false⟩
+    let b : Sess := ⟨2, 1, 3, false, false⟩
+    (createChecked ⟨[a], 0⟩ b).isSome = true := by
+  decide
+
+/-- `l1_drop_session`, first half: `closing := true`, then `l1_refresh_active`. -/
+def markClosing (w : World) (x : Nat) : World :=
+  refresh { w with sess := w.sess.map (fun s => if s.id = x then { s with closing := true } else s) }
+
+/-- A session being closed is never active and reads State "closing" (so the seat has already handed over before removal). -/
+theorem markClosing_state (w : World) (x : Nat) :
+    ∀ s ∈ (markClosing w x).sess, s.id = x → s.active = false ∧ s.state = .closing := by
+  intro s hs hx
+  unfold markClosing refresh at hs
+  simp only [List.mem_map] at hs
+  obtain ⟨s1, ⟨s0, _, rfl⟩, rfl⟩ := hs
+  by_cases h : s0.id = x
+  · simp [h, Sess.state]
+  · simp [h] at hx
+
 end Qlogin.Session

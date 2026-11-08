@@ -33,7 +33,7 @@ when `XDG_SESSION_ID` is exported by the session starter (qlogin does this). Thi
 | ListSeats | -> a(so) | loginctl-likes | T (busctl) |
 | ListInhibitors | -> a(ssssuu) | desktops (unverified) | T |
 | CreateSession | uusssssussbssa(sv) -> soshusub | pam_elogind-like callers, qlogin itself | T |
-| ReleaseSession | s | pam_elogind-like callers | T |
+| ReleaseSession | s | pam_elogind-like callers | T (session passes through State "closing": PropertiesChanged before SessionRemoved) |
 | ActivateSession | s | desktops / loginctl | T |
 | LockSession, UnlockSession, LockSessions, UnlockSessions | s / - | desktops | T |
 | KillSession | ssi | loginctl-likes | T (leader mode, bad mode; "all" = "leader") |
@@ -61,6 +61,8 @@ FlushDevices, SetWallMessage, ...) is NOT implemented.
 | Signals PauseDevice(uus), ResumeDevice(uuh), Lock, Unlock | | libseat, desktops | T |
 | Properties Id Name User(uo) Seat(so) VTNr Type Class Active State Remote Leader TTY Display Service Desktop Scope IdleHint LockedHint CanIdle CanLock | | libseat (Active, via Get + PropertiesChanged), desktops | T (every listed property is readable) |
 | org.freedesktop.DBus.Properties Get/GetAll + PropertiesChanged for Active, State, IdleHint, LockedHint | | libseat | T (PropertiesChanged on VT switch) |
+
+Behaviour choices: CreateSession refuses a second session on the same seat+VT (System.Error.EBUSY; same leader PID still returns the existing session); TakeDevice refuses a device another session holds (System.Error.EBUSY, stricter than logind); Activate / ActivateSession on a session without a VT returns System.Error.ENOTSUP.
 
 Not implemented: Terminate, Kill, SetClass/SetDisplay/SetTTY, SetBrightness, AuditSessionID values.
 

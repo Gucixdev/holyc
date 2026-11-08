@@ -29,22 +29,21 @@ as the model is faithful. The last column says where it is not. Sources: `../src
 | Device `inv_*` (takeControl, releaseControl, takeDevice, releaseDevice, setActive), `takeDevice_paused_flag` | invariant "every device's paused flag = session not active; devices only with a controller; no duplicate keys" is preserved by every operation; a new device starts paused iff the session is not active | `m_s_take*`, `m_s_release*`, `l1_apply_active` | controller loss when the peer leaves the bus (not in the model), PauseDeviceComplete |
 | Device `pause_resume`, `resume_pause`, `setActive_keeps_keys` | pause then resume restores the session exactly; the device set is never changed by pause/resume | `l1_apply_active` | the signals themselves (PauseDevice/ResumeDevice), that the fd really works after resume |
 | Device `unpaused_unique` | with at most one active session per seat (Session) a device key is held UNPAUSED by at most one session of the seat | combination of the two | |
-| Device `two_holders_possible` | counterexample to "a device is held by at most one session": two sessions can both hold the same major:minor (one paused) | `l1_find_dev` is per session | see Findings 3 |
+| Device `two_holders_possible` | the OLD per-session `l1_find_dev` design let two sessions hold the same major:minor (kept as the counterexample) | old `m_s_takedevice` | see Findings 3 |
+| Device `two_holders_refused`, `takeDeviceG_free` | FIXED design: a take succeeds only if no OTHER session holds the key (system-wide) | `l1_dev_holder` + `m_s_takedevice` | |
+| Session `dup_vt_refused`, `other_vt_accepted` | the old `dup_vt_first_wins` witness is now refused at create; other VTs still accepted | `vtFree` guard in `m_createsession` | |
+| Session `markClosing_state` | a session being dropped is not active and reads State "closing" | first half of `l1_drop_session` | |
 
-## Findings (nothing in the C was changed)
+## Findings (all four fixed in the C, 2026-11-08; the original text is kept in the git history)
 
-1. `closing` is never set. `login1.h` reads `s->closing` in `l1_seat_active` (line 176), `l1_refresh_active` (427), the State
-   property (269, 361, 607) and `l1_by_pid` (240), but no code assigns it (sessions are `memset` to 0 at `m_createsession`, 861 ff.,
-   and ReleaseSession calls `l1_drop_session` directly). The "closing" state in the online/active/closing machine is unreachable
-   in the C; the model keeps the flag and the proofs hold for any value of it, so they stay valid if it gets wired in.
-2. Two sessions can share a VT on the same seat: `m_createsession` (login1.h:806-875) checks only leader pid + uid for
-   reuse, not `vtnr`. `l1_seat_active` returns the FIRST on the current VT, so `Activate` on the second leaves the first active
-   (`dup_vt_first_wins`: sessions 1 and 2, seat 1, vt 2: `activate 2` names session 1). Minimal call: CreateSession twice with
-   different leader pids, same seat0 and vtnr=2, then Activate the later one.
-3. "A device is held by at most one session" is not enforced: `l1_find_dev` (login1.h:1056) looks only inside the calling
-   session. Two sessions (even of different seats, since the device is not checked against the seat) can TakeDevice the same
-   maj:min; one of them is paused (`two_holders_possible`). What does hold, per seat, is that at most one holder is unpaused
-   (`unpaused_unique`). This matches logind's behaviour, so it is a note rather than a bug.
-4. Smaller: `m_activatesession` / `m_s_activate` on a session with `vtnr == 0` returns success and does nothing (`l1_set_vt`
-   returns at once, login1.h:888); a seat can have NO active session (e.g. the active VT session exits while `curvt` matches no
-   remaining session): the model proves "at most one", not "exactly one", because the C allows zero.
+1. `closing` was never set: FIXED. `l1_drop_session` now sets it, refreshes the seat (another session may become active, the
+   dying one's devices are paused) and sends PropertiesChanged State="closing" before SessionRemoved. Test: login1_test checks the
+   signal precedes SessionRemoved. Model: `markClosing_state`.
+2. Two sessions on one seat+VT: FIXED. `m_createsession` refuses a NEW session whose seat+VT is used by a non-closing session
+   (System.Error.EBUSY); the same-leader "existing session" path is unchanged. Model: `dup_vt_refused`.
+3. Device held by two sessions: FIXED, not just a note. `l1_dev_holder` checks every session; TakeDevice on a device another
+   session holds fails with System.Error.EBUSY (a device frees up on ReleaseDevice / ReleaseControl / session drop). This is
+   stricter than logind. Model: `takeDeviceG_free`, `two_holders_refused`.
+4. Activate on a VT-less session: FIXED. `Session.Activate`, `Manager.ActivateSession` and `Seat.ActivateSession` now return
+   System.Error.ENOTSUP instead of succeeding silently. Still true and by design: a seat may have NO active session; the model
+   proves "at most one", not "exactly one".

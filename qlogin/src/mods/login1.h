@@ -434,7 +434,13 @@ static int l1_user_count(uid_t uid) { int n = 0; for (int i = 0; i < L1.nsess; i
 
 static void l1_drop_session(int idx)
 {
-	l1_session s = L1.sess[idx];
+	l1_session s;
+	/* online/active -> closing -> gone: mark it first so the seat picks another active session, its devices are paused
+	 * and State reads "closing" (also announced via PropertiesChanged) before SessionRemoved */
+	L1.sess[idx].closing = 1;
+	l1_refresh_active();
+	l1_session_changed(&L1.sess[idx], 0, 1, 0, 0);
+	s = L1.sess[idx];
 	char p[100];
 	l1_sess_path(&s, p, sizeof p);
 	l1_release_control(&L1.sess[idx]);
@@ -833,6 +839,9 @@ static int m_createsession(l1_ctx *x)
 	for (int i = 0; i < L1.nsess; i++) if (L1.sess[i].leader == pid && L1.sess[i].uid == uid) { s = &L1.sess[i]; existing = 1; }
 	if (!s) {
 		int first;
+		if (vtnr) for (int i = 0; i < L1.nsess; i++)   /* one session per seat+VT: the VT decides which one is active */
+			if (!L1.sess[i].closing && !strcmp(L1.sess[i].seat, seat) && L1.sess[i].vtnr == vtnr)
+				return l1_err(x, "System.Error.EBUSY", "VT %u on %s is already used by session %s", vtnr, seat, L1.sess[i].id);
 		if (L1.nsess >= L1_MAXSESS) return l1_err(x, "org.freedesktop.login1.TooManySessions", "Too many sessions");
 		s = &L1.sess[L1.nsess];
 		memset(s, 0, sizeof *s);
@@ -901,6 +910,7 @@ static int m_activatesession(l1_ctx *x)
 	l1_session *s = l1_find(id);
 	if (!s) return l1_err(x, E_NOSESS, "No session '%s' known", id);
 	if (!l1_owns(x, s) && !l1_authorized(x)) return l1_err(x, E_DENIED, "Not authorized");
+	if (!s->vtnr) return l1_err(x, "System.Error.ENOTSUP", "Session %s has no VT to activate", s->id);
 	l1_set_vt(x, s->vtnr);
 	return 0;
 }
@@ -1002,7 +1012,14 @@ static const l1_signal l1_mgr_signals[] = {
 };
 
 /* session methods */
-static int m_s_activate(l1_ctx *x) { l1_session *s = x->obj.s; if (!l1_owns(x, s) && !l1_authorized(x)) return l1_err(x, E_DENIED, "Not authorized"); l1_set_vt(x, s->vtnr); return 0; }
+static int m_s_activate(l1_ctx *x)
+{
+	l1_session *s = x->obj.s;
+	if (!l1_owns(x, s) && !l1_authorized(x)) return l1_err(x, E_DENIED, "Not authorized");
+	if (!s->vtnr) return l1_err(x, "System.Error.ENOTSUP", "Session %s has no VT to activate", s->id);
+	l1_set_vt(x, s->vtnr);
+	return 0;
+}
 static int m_s_lock(l1_ctx *x) { if (!l1_authorized(x)) return l1_err(x, E_DENIED, "Not authorized"); return l1_lock_one(x->obj.s, 1); }
 static int m_s_unlock(l1_ctx *x) { if (!l1_authorized(x)) return l1_err(x, E_DENIED, "Not authorized"); return l1_lock_one(x->obj.s, 0); }
 static int m_s_setidle(l1_ctx *x)
@@ -1058,6 +1075,12 @@ static l1_dev *l1_find_dev(l1_session *s, unsigned maj, unsigned min)
 	for (int i = 0; i < s->ndev; i++) if (s->dev[i].maj == maj && s->dev[i].min == min) return &s->dev[i];
 	return NULL;
 }
+/* a device (major:minor) is held by at most one session, system-wide (like logind: one DRM master / input owner) */
+static l1_session *l1_dev_holder(unsigned maj, unsigned min)
+{
+	for (int i = 0; i < L1.nsess; i++) if (l1_find_dev(&L1.sess[i], maj, min)) return &L1.sess[i];
+	return NULL;
+}
 static int m_s_takedevice(l1_ctx *x)
 {
 	l1_session *s = x->obj.s;
@@ -1066,6 +1089,7 @@ static int m_s_takedevice(l1_ctx *x)
 	int fd;
 	if (strcmp(s->controller, x->m->sender)) return l1_err(x, "System.Error.EPERM", "You are not in control of this session");
 	if (l1_find_dev(s, maj, min)) return l1_err(x, "System.Error.EALREADY", "Device already taken");
+	{ l1_session *h = l1_dev_holder(maj, min); if (h) return l1_err(x, "System.Error.EBUSY", "Device %u:%u is held by session %s", maj, min, h->id); }
 	if (s->ndev >= L1_MAXDEV) return l1_err(x, "System.Error.E2BIG", "Too many devices");
 	if ((fd = l1_dev_open(maj, min)) < 0) return l1_err(x, "System.Error.ENODEV", "Cannot open device %u:%u: %s", maj, min, strerror(errno));
 	d = &s->dev[s->ndev++];

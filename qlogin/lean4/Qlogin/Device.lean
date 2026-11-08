@@ -272,4 +272,27 @@ theorem two_holders_possible :
     (takeDevice b 20 (226, 0)).map (fun r => r.devs.map Dev.paused) = some [true] := by
   decide
 
+/-! ### After the fix (2026-11-08): one holder per device across ALL sessions (`l1_dev_holder`). -/
+
+/-- `m_s_takedevice` with the system-wide check: refused while ANOTHER session holds the key. -/
+def takeDeviceG (all : List DS) (s : DS) (caller : Nat) (k : Nat × Nat) : Option DS :=
+  if all.any (fun o => o.id != s.id && held o k) then none else takeDevice s caller k
+
+/-- The `two_holders_possible` witness is now refused (EBUSY): b cannot take what a holds. -/
+theorem two_holders_refused :
+    let a : DS := ⟨1, 0, true, some 10, [⟨(226, 0), false⟩]⟩
+    let b : DS := ⟨2, 0, false, some 20, []⟩
+    takeDeviceG [a, b] b 20 (226, 0) = none := by
+  decide
+
+/-- Whenever the global take succeeds, no other session held the key beforehand. -/
+theorem takeDeviceG_free (all : List DS) (s : DS) (caller : Nat) (k : Nat × Nat) (r : DS)
+    (h : takeDeviceG all s caller k = some r) : ∀ o ∈ all, o.id ≠ s.id → held o k = false := by
+  intro o ho hne
+  unfold takeDeviceG at h
+  by_cases hc : all.any (fun o => o.id != s.id && held o k) = true
+  · simp [hc] at h
+  · have hc' : ∀ x ∈ all, ¬ x.id = s.id → held x k = false := by simpa using hc
+    exact hc' o ho hne
+
 end Qlogin.Device

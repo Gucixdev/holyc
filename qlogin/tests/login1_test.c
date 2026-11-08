@@ -18,7 +18,7 @@
 static int fails, checks;
 #define CHECK(x) do { checks++; if (!(x)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); fails++; } } while (0)
 
-typedef struct { char member[40], path[100]; uint32_t a, b; char s[40]; int fd; int bval; } seen_t;
+typedef struct { char member[40], path[100]; uint32_t a, b; char s[40], v[24]; int fd; int bval; } seen_t;
 static seen_t seen[64]; static int nseen;
 
 static void pump(qd_conn *c, int ms)
@@ -34,7 +34,7 @@ static void pump(qd_conn *c, int ms)
 			else if (!strcmp(m.sig, "uuh")) { s->a = qd_r_u32(&r); s->b = qd_r_u32(&r); if (m.nfds) { s->fd = m.fds[0]; m.fds[0] = -1; } }
 			else if (!strcmp(m.sig, "b")) s->bval = qd_r_u32(&r);
 			else if (!strcmp(m.sig, "so")) snprintf(s->s, sizeof s->s, "%s", qd_r_str(&r));
-			else if (!strcmp(m.sig, "sa{sv}as")) { qd_r_str(&r); size_t end = qd_r_array(&r, 8); while (r.pos < end && !r.bad) { r.pos = (r.pos + 7) & ~7u; const char *k = qd_r_str(&r); const char *vs = qd_r_sig(&r); snprintf(s->s, sizeof s->s, "%s", k); s->bval = *vs == 'b' ? (int)qd_r_u32(&r) : 0; if (*vs != 'b') qd_r_skip(&r, &vs); } }
+			else if (!strcmp(m.sig, "sa{sv}as")) { qd_r_str(&r); size_t end = qd_r_array(&r, 8); while (r.pos < end && !r.bad) { r.pos = (r.pos + 7) & ~7u; const char *k = qd_r_str(&r); const char *vs = qd_r_sig(&r); snprintf(s->s, sizeof s->s, "%s", k); s->bval = *vs == 'b' ? (int)qd_r_u32(&r) : 0; if (*vs == 's') snprintf(s->v, sizeof s->v, "%s", qd_r_str(&r)); else if (*vs != 'b') qd_r_skip(&r, &vs); } }
 		}
 		qd_msg_free(&m);
 		ms = 0;
@@ -185,6 +185,11 @@ int main(void)
 	CHECK(prop_bool(&A, p2, SESS, "Active", &bv) == 0 && bv == 0);
 	CHECK(create_session(&A, kid, 2, str, sizeof str, &(int){0}, &ex) == 0 && ex == 1 && !strcmp(str, id2));   /* same leader = existing session */
 
+	/* two sessions on the same seat+VT are refused (no session names VT 2 twice) */
+	{ char dup[16]; int f3 = -1, e3 = 0;
+	  CHECK(create_session(&A, 4242, 2, dup, sizeof dup, &f3, &e3) != 0 && f3 < 0);
+	  CHECK(create_session(&A, 4242, 1, dup, sizeof dup, &f3, &e3) != 0 && f3 < 0); }
+
 	/* devices: mock layer, real SCM_RIGHTS */
 	snprintf(tmp, sizeof tmp, "%s/13:64", devdir);
 	{ FILE *f = fopen(tmp, "w"); fputs("evdev-mock", f); fclose(f); }
@@ -198,6 +203,9 @@ int main(void)
 	if (r.nfds == 1) { char buf[32] = ""; qd_rd rd = { r.body, 0, r.blen, 0 }; qd_r_u32(&rd); CHECK(qd_r_u32(&rd) == 0); CHECK(read(r.fds[0], buf, 31) == 10 && !strcmp(buf, "evdev-mock")); }
 	qd_msg_free(&r);
 	CHECK(err_is(&A, p1, SESS, "TakeDevice", "uu", (b.n = 0, qd_put_u32(&b, 13), qd_put_u32(&b, 99), &b), "System.Error.ENODEV"));
+	/* one holder per device across sessions: c2 (controlled by B) cannot take what c1 holds, but may once c1 let go */
+	CHECK(call(&B, &r, p2, SESS, "TakeControl", "b", (b.n = 0, qd_put_u32(&b, 0), &b)) == 0); qd_msg_free(&r);
+	CHECK(err_is(&B, p2, SESS, "TakeDevice", "uu", (b.n = 0, qd_put_u32(&b, 13), qd_put_u32(&b, 64), &b), "System.Error.EBUSY"));
 	forget();
 	write_vt(vtfile, 2);   /* switch away: PauseDevice to the controller, Active false */
 	{ seen_t *s = find(&A, "PauseDevice", 2500); CHECK(s && s->a == 13 && s->b == 64 && !strcmp(s->s, "pause")); }
@@ -212,6 +220,10 @@ int main(void)
 	  if (s && s->fd >= 0) { char buf[32] = ""; lseek(s->fd, 0, SEEK_SET); CHECK(read(s->fd, buf, 31) == 10 && !strcmp(buf, "evdev-mock")); } }
 	CHECK(prop_bool(&A, p1, SESS, "Active", &bv) == 0 && bv == 1);
 	CHECK(call(&A, &r, p1, SESS, "ReleaseDevice", "uu", (b.n = 0, qd_put_u32(&b, 13), qd_put_u32(&b, 64), &b)) == 0); qd_msg_free(&r);
+	CHECK(call(&B, &r, p2, SESS, "TakeDevice", "uu", (b.n = 0, qd_put_u32(&b, 13), qd_put_u32(&b, 64), &b)) == 0); qd_msg_free(&r);   /* free now */
+	CHECK(err_is(&A, p1, SESS, "TakeDevice", "uu", (b.n = 0, qd_put_u32(&b, 13), qd_put_u32(&b, 64), &b), "System.Error.EBUSY"));   /* and c1 is refused in turn */
+	CHECK(call(&B, &r, p2, SESS, "ReleaseDevice", "uu", (b.n = 0, qd_put_u32(&b, 13), qd_put_u32(&b, 64), &b)) == 0); qd_msg_free(&r);
+	CHECK(call(&B, &r, p2, SESS, "ReleaseControl", NULL, NULL) == 0); qd_msg_free(&r);
 	CHECK(call(&A, &r, p1, SESS, "ReleaseControl", NULL, NULL) == 0); qd_msg_free(&r);
 	/* a controller that vanishes loses control */
 	CHECK(call(&B, &r, p1, SESS, "TakeControl", "b", (b.n = 0, qd_put_u32(&b, 0), &b)) == 0); qd_msg_free(&r);
@@ -362,10 +374,21 @@ int main(void)
 		{ int st = 0; CHECK(waitpid(kid, &st, 0) == kid && WIFSIGNALED(st) && WTERMSIG(st) == SIGUSR1); }
 	}
 
-	/* release + fifo semantics */
+	/* Activate on a session without a VT is an error, not a silent no-op (Session.Activate and Manager.ActivateSession) */
+	{ char idn[16]; char pn[100]; int fn = -1, en = 0;
+	  CHECK(create_session(&A, 4243, 0, idn, sizeof idn, &fn, &en) == 0);
+	  sess_path(idn, pn, sizeof pn);
+	  CHECK(err_is(&A, pn, SESS, "Activate", NULL, NULL, "System.Error.ENOTSUP"));
+	  CHECK(err_is(&A, ROOT, MGR, "ActivateSession", "s", (b.n = 0, qd_put_str(&b, idn), &b), "System.Error.ENOTSUP"));
+	  CHECK(call(&A, &r, ROOT, MGR, "ReleaseSession", "s", (b.n = 0, qd_put_str(&b, idn), &b)) == 0); qd_msg_free(&r);
+	  if (fn >= 0) close(fn); }
+
+	/* release + fifo semantics; the released session passes through "closing" (visible as State) before SessionRemoved */
 	forget();
 	CHECK(call(&A, &r, ROOT, MGR, "ReleaseSession", "s", (b.n = 0, qd_put_str(&b, id2), &b)) == 0); qd_msg_free(&r);
 	CHECK(find(&A, "SessionRemoved", 1000) != NULL);
+	{ int ic = -1, ir = -1; for (int i = 0; i < nseen; i++) { if (!strcmp(seen[i].member, "PropertiesChanged") && !strcmp(seen[i].path, p2) && !strcmp(seen[i].v, "closing") && ic < 0) ic = i; if (!strcmp(seen[i].member, "SessionRemoved")) ir = i; }
+	  CHECK(ic >= 0 && ir > ic); }
 	snprintf(str, sizeof str, "%s/systemd/sessions/c2", run); CHECK(access(str, F_OK) != 0);
 	kill(kid, SIGKILL); waitpid(kid, NULL, 0);   /* the child inherited a copy of the fifo write end */
 	close(fifo1);   /* closing the last writer ends session c1 */
