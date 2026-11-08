@@ -731,6 +731,39 @@ void lt_volumebar_set_muted(lt_volumebar *v, bool muted);
 void lt_volumebar_draw(lt_volumebar *v, lt_canvas *c, lt_rect r, const lt_theme *t, bool focused);
 lt_wres lt_volumebar_event(lt_volumebar *v, lt_rect r, const lt_event *ev);
 
+/* ---- system-monitor widgets (ported from notcoreutils/gtop.c) -----------------------------------------------------------------------------
+ * histgraph: a history graph stretched (interpolated) to the full width, r.h rows of eighth blocks; hi > 0 = fixed ceiling (100 for percent),
+ *   hi <= 0 = its own maximum. Returns the ceiling used. lt_human_bytes / lt_human_rate format "1.5MB" / "1.5MB/s".
+ * segbar: one row, stacked segments (user/sys/io, used/cache/free) summing to `total`, the last segment takes the rounding remainder, then a suffix.
+ * corebars: one row per CPU core: label, percent, caller info ("3400MHz 55C"), load-tier colour (lt_load_slot), history graph. `first` scrolls.
+ * ratepanel: one row per rate (disk read, eth0 rx, ...): label, human rate, optional peak, auto-scaled rate history.
+ * proctable: process table with a header, sortable columns, tree rows (parent = index of the parent row, -1 = top), cursor, scroll, keys + mouse
+ *   (see proctable.c). lt_proctable_set copies the rows; the selection is kept by pid; expanded nodes stay expanded across sets. */
+double lt_histgraph(lt_canvas *c, lt_rect r, const lt_theme *t, const double *values, int n, double hi, lt_slot slot);
+void lt_human_bytes(double v, char *out, size_t n);
+void lt_human_rate(double v, char *out, size_t n);
+void lt_segbar(lt_canvas *c, lt_rect r, const lt_theme *t, const double *values, const lt_slot *slots, int n, double total, const char *suffix);
+typedef struct { const char *label; double pct; const char *info; const double *hist; int nhist; } lt_core;
+lt_slot lt_load_slot(double pct);                                                    /* <= 60 ok, <= 85 warn, above err */
+int lt_corebars(lt_canvas *c, lt_rect r, const lt_theme *t, const lt_core *cores, int n, int first);   /* rows drawn */
+typedef struct { const char *label; double rate; double peak; const double *hist; int nhist; } lt_rate;
+int lt_ratepanel(lt_canvas *c, lt_rect r, const lt_theme *t, const lt_rate *rows, int n);              /* rows drawn */
+typedef enum { LT_PROC_NAME, LT_PROC_PID, LT_PROC_CPU, LT_PROC_MEM, LT_PROC_DISK, LT_PROC_COLS } lt_proc_col;
+typedef struct { const char *name; int pid; int parent; double cpu, mem, disk; bool expanded; } lt_proc;   /* mem bytes, disk bytes/s */
+typedef struct lt_proctable lt_proctable;
+lt_proctable *lt_proctable_new(void);
+void lt_proctable_free(lt_proctable *t);
+void lt_proctable_set(lt_proctable *t, const lt_proc *rows, int n);
+void lt_proctable_set_sort(lt_proctable *t, lt_proc_col col, bool descending);
+lt_proc_col lt_proctable_sort_col(const lt_proctable *t);
+bool lt_proctable_sort_desc(const lt_proctable *t);
+int lt_proctable_count(const lt_proctable *t);                                       /* visible rows (collapsed children excluded) */
+int lt_proctable_selected(const lt_proctable *t);                                    /* index into the array given to set, -1 if empty */
+int lt_proctable_selected_pid(const lt_proctable *t);
+const char *lt_proctable_row_name(const lt_proctable *t, int visible);
+void lt_proctable_draw(lt_proctable *t, lt_canvas *c, lt_rect r, const lt_theme *th, bool focused);
+lt_wres lt_proctable_event(lt_proctable *t, lt_rect r, const lt_event *ev);          /* CHANGED: cursor / sort / tree moved; ACTIVATE: Enter on a leaf, double click */
+
 /* ---- navigation: tabs, breadcrumbs, menus, tree bar -------------------------------------------------------------------------------------
  * tabs: a strip of tabs on any side of a pane (lt_tabs_pane says where the content goes); click / arrows / Home / End / wheel switch (CHANGED).
  * breadcrumbs: a path as clickable segments "home > user > dev", the middle collapsed to "..." when it does not fit; click = ACTIVATE that segment.

@@ -52,6 +52,7 @@ typedef struct {
 	lt_sequencer *seq;
 	lt_volumebar *vol[3];                      /* speaker, microphone (horizontal), speaker again (vertical) - all on one fake backend */
 	struct volch { double level; int muted; } vol_ch[2]; int vol_active;
+	lt_proctable *ptab;                        /* monitor widgets (from gtop): the process table keeps state, the rest draw synthetic data from s->time */
 	double tagw[12];
 	double heat[20 * 7];                       /* a GitHub-contributions-style grid, HCOLS x HROWS */
 	double histsample[300];
@@ -105,6 +106,17 @@ static const char *SPEC =
 	"          custom type=piechart nofocus=1\n"
 	"      panel title=\"volumebar (1/2/3 pick a bar; arrows or +/-, PgUp/PgDn, Home/End, m mutes; click, drag, wheel)\" size=8\n"
 	"        custom type=volume\n"
+	"      panel title=\"piebar, textbar, scramble (one line each)\" size=5\n"
+	"        custom type=oneliners nofocus=1 animated=1\n"
+	"      panel title=\"monitor: segbar + histgraph (one line each)\" size=6\n"
+	"        custom type=mon_seg nofocus=1 animated=1\n"
+	"      row size=10\n"
+	"        panel title=\"corebars (per-core rows)\"\n"
+	"          custom type=mon_cores nofocus=1 animated=1\n"
+	"        panel title=\"ratepanel (disk / net rates)\"\n"
+	"          custom type=mon_rates nofocus=1 animated=1\n"
+	"      panel title=\"proctable (Up/Down, s sort column, r reverse, Right/Left expand, click header sorts)\" size=14\n"
+	"        custom id=ptab type=ptab\n"
 	"      panel title=\"gauges\" size=10\n"
 	"        custom type=gauges nofocus=1\n"
 	"      table title=\"date & time (a table: x=3 columns, rows 5,9,3; Tab moves between the cells)\" x=3 rows=\"5,9,3\" size=24\n"
@@ -569,6 +581,77 @@ static lt_wres event_volume(lt_app *a, const char *id, lt_rect r, const lt_event
 	}
 	return lt_volumebar_event(s->vol[s->vol_active], q[s->vol_active], ev);
 }
+static void draw_oneliners(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool f, void *ctx)
+{
+	(void)a; (void)id; (void)f;
+	S *s = ctx;
+	lt_slice sl[3] = {{"used", s->z[0], LT_DEFAULT}, {"cache", s->z[1], LT_DEFAULT}, {"free", s->z[2], LT_DEFAULT}};
+	lt_piebar(c, (lt_rect){r.x, r.y, r.w, 1}, t, sl, 3, true);
+	lt_textbar(c, (lt_rect){r.x, r.y + 1, r.w, 1}, t, "textbar: a line of text in a theme slot", LT_T_ACCENT);
+	lt_scramble(c, (lt_rect){r.x, r.y + 2, r.w, 1}, t, "scramble: decodes from random glyphs", fmod(s->time * 0.4, 1.4), s->time);
+}
+/* monitor widgets (ported from gtop): synthetic, time-driven data so the page shows motion without a real /proc */
+static double mon_wave(double time, int k, int i) { return 50 + 45 * sin(time * 0.7 + k * 1.3 + i * 0.25) * sin(i * 0.11 + k); }
+static void draw_mon_seg(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool f, void *ctx)
+{
+	(void)a; (void)id; (void)f;
+	S *s = ctx;
+	double u = 20 + 15 * sin(s->time), sy = 8 + 4 * sin(s->time * 1.7), io = 3 + 2 * sin(s->time * 0.5), hist[60];
+	lt_slot sl[3] = {LT_T_OK, LT_T_WARN, LT_T_ERR};
+	double v[3] = {u, sy, io};
+	char suf[48];
+	snprintf(suf, sizeof suf, " %.0f%% L%.1f", u + sy + io, 1.0 + sin(s->time) * 0.3);
+	lt_segbar(c, (lt_rect){r.x, r.y, r.w, 1}, t, v, sl, 3, 100, suf);
+	for (int i = 0; i < 60; i++) hist[i] = mon_wave(s->time, 0, i);
+	lt_histgraph(c, (lt_rect){r.x, r.y + 1, r.w, r.h > 2 ? r.h - 1 : 1}, t, hist, 60, 100, LT_T_ACCENT);
+}
+static void draw_mon_cores(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool f, void *ctx)
+{
+	(void)a; (void)id; (void)f;
+	S *s = ctx;
+	enum { N = 8 };
+	static double h[N][40]; static char lab[N][8], info[N][24];
+	lt_core cores[N];
+	for (int k = 0; k < N; k++) {
+		for (int i = 0; i < 40; i++) h[k][i] = mon_wave(s->time, k, i);
+		snprintf(lab[k], sizeof lab[k], "c%d", k); snprintf(info[k], sizeof info[k], "%dMHz %dC", 3400 + k * 20, 48 + k);
+		cores[k] = (lt_core){lab[k], h[k][39], info[k], h[k], 40};
+	}
+	lt_corebars(c, r, t, cores, N, 0);
+}
+static void draw_mon_rates(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool f, void *ctx)
+{
+	(void)a; (void)id; (void)f;
+	S *s = ctx;
+	static double h[3][50];
+	const char *lab[3] = {"nvme read", "eth0 rx", "eth0 tx"};
+	lt_rate rows[3];
+	for (int k = 0; k < 3; k++) {
+		double pk = 0;
+		for (int i = 0; i < 50; i++) { h[k][i] = mon_wave(s->time, k + 3, i) * (k ? 2.5e4 : 1.2e6); if (h[k][i] > pk) pk = h[k][i]; }
+		rows[k] = (lt_rate){lab[k], h[k][49], pk, h[k], 50};
+	}
+	lt_ratepanel(c, r, t, rows, 3);
+}
+static void ptab_fill(S *s)
+{
+	static const lt_proc P[] = {
+		{"firefox", 100, -1, 22.5, 1.2e9, 4e5, true}, {"Web Content", 101, 0, 15.0, 6e8, 1e5, false}, {"Web Content", 102, 0, 4.2, 3e8, 0, false},
+		{"Isolated Web", 103, 0, 1.1, 2e8, 0, false}, {"dwl", 200, -1, 3.0, 8e7, 0, false}, {"gtop", 300, -1, 1.5, 1.2e7, 2e3, false},
+		{"pipewire", 400, -1, 0.7, 2.4e7, 0, false}, {"kworker/0:1", 12, -1, 0.0, 0, 0, false}, {"cc1", 500, -1, 91.0, 3e8, 8e6, false},
+	};
+	lt_proctable_set(s->ptab, P, (int)(sizeof P / sizeof P[0]));
+}
+static void draw_ptab(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool focused, void *ctx)
+{
+	(void)a; (void)id;
+	lt_proctable_draw(((S *)ctx)->ptab, c, r, t, focused);
+}
+static lt_wres event_ptab(lt_app *a, const char *id, lt_rect r, const lt_event *ev, void *ctx)
+{
+	(void)a; (void)id;
+	return lt_proctable_event(((S *)ctx)->ptab, r, ev);
+}
 static void draw_pixedit(lt_app *a, const char *id, lt_canvas *c, lt_rect r, const lt_theme *t, bool focused, void *ctx)
 {
 	(void)a; (void)id;
@@ -806,6 +889,12 @@ static void register_all(S *s)
 	lt_app_custom(a, "spinners", draw_spinners, NULL, s);
 	lt_app_custom(a, "piechart", draw_piechart, NULL, s);
 	lt_app_custom(a, "volume", draw_volume, event_volume, s);
+	s->ptab = lt_proctable_new(); ptab_fill(s);
+	lt_app_custom(a, "oneliners", draw_oneliners, NULL, s);
+	lt_app_custom(a, "mon_seg", draw_mon_seg, NULL, s);
+	lt_app_custom(a, "mon_cores", draw_mon_cores, NULL, s);
+	lt_app_custom(a, "mon_rates", draw_mon_rates, NULL, s);
+	lt_app_custom(a, "ptab", draw_ptab, event_ptab, s);
 	lt_app_custom(a, "gauges", draw_gauges, NULL, s);
 	lt_app_custom(a, "linechart", draw_linechart, NULL, s);
 	lt_app_custom(a, "barchart", draw_barchart, NULL, s);

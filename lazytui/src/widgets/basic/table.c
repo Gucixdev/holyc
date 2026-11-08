@@ -2,7 +2,7 @@
  * cell (the child's label=...), box-drawing rules between them, the frame in the theme's border colour (purple by default).
  * Needs: lt_app (the app layer: appint.h) - it is a kind of the spec language, so it only makes sense with app.c, not alone.
  * One file, one kind: delete it and the spec language loses `table`, nothing else changes. */
-#include "../../appint.h"
+#include "appint.h"
 #include <stdlib.h>
 #include <string.h>
 
