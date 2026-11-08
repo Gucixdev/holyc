@@ -9,7 +9,7 @@ CC       ?= cc
 WLROOTS  ?= $(CURDIR)/build/wlroots
 OPT      ?= -O2
 PREFIX   ?= /usr/local
-APPLETS   = dwl dmenu stest menu lemonbar bar autostart
+APPLETS   = dwl dmenu stest menu lemonbar bar autostart wsw
 
 WLPC  = PKG_CONFIG_PATH=$(WLROOTS)/lib/pkgconfig pkg-config
 DWLCF = `pkg-config --cflags wayland-server xkbcommon libinput xcb xcb-icccm` `$(WLPC) --cflags wlroots-0.20` \
@@ -65,6 +65,10 @@ build/bar.o: src/bar.c | build
 build/autostart.o: src/autostart.c | build
 	$(CC) -c $(OPT) -std=gnu11 -Wall -Wextra -Dmain=autostart_main src/autostart.c -o build/autostart.raw.o
 	objcopy --keep-global-symbol=autostart_main build/autostart.raw.o $@
+
+build/wsw.o: src/wsw.c | build
+	$(CC) -c $(OPT) -std=gnu11 -D_DEFAULT_SOURCE -Wall -Wextra -Dmain=wsw_main src/wsw.c -o build/wsw.raw.o
+	objcopy --keep-global-symbol=wsw_main build/wsw.raw.o $@
 
 build/main.o: src/main.c | build
 	$(CC) -c $(OPT) -Wall -Wextra src/main.c -o $@

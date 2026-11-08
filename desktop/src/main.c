@@ -14,10 +14,11 @@ int menu_main(int, char **);
 int lemonbar_main(int, char **);
 int bar_main(int, char **);
 int autostart_main(int, char **);
+int wsw_main(int, char **);
 
 static const struct { const char *name; int (*fn)(int, char **); } applets[] = {
 	{ "dwl", dwl_main }, { "dmenu", dmenu_main }, { "stest", stest_main },
-	{ "menu", menu_main }, { "lemonbar", lemonbar_main }, { "bar", bar_main }, { "autostart", autostart_main },
+	{ "menu", menu_main }, { "lemonbar", lemonbar_main }, { "bar", bar_main }, { "autostart", autostart_main }, { "wsw", wsw_main },
 };
 #define NAPPLETS (sizeof applets / sizeof *applets)
 
