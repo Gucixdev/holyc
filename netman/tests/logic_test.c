@@ -29,11 +29,11 @@ static int render_text(const nm_ui *u, int w, int h)
 			size_t j = i + 2;
 			int a = 0, b = 0, seen = 0;
 			while (j < len && (isdigit((unsigned char)buf[j]) || buf[j] == ';' || buf[j] == '?')) { if (buf[j] == ';') seen = 1; else if (isdigit((unsigned char)buf[j])) { if (seen) b = b * 10 + buf[j] - '0'; else a = a * 10 + buf[j] - '0'; } j++; }
-			if (buf[j] == 'H') { row = a - 1; col = 0; (void)b; }
+			if (buf[j] == 'H') { row = a - 1; col = seen && b > 0 ? b - 1 : 0; if (row >= 0 && row < 64) for (int k = (int)strlen(frame[row]); k < col && k < 399; k++) frame[row][k] = ' '; }
 			i = j;
 			continue;
 		}
-		if (row >= 0 && row < 64 && col < 399) frame[row][col++] = buf[i];
+		if (row >= 0 && row < 64 && col < 399) { if (col >= (int)strlen(frame[row])) frame[row][col + 1] = 0; frame[row][col++] = buf[i]; }
 	}
 	free(buf);
 	(void)w; (void)h;
@@ -100,7 +100,7 @@ int main(void)
 		snprintf(u.swifi, sizeof u.swifi, "connected to Home");
 		snprintf(u.sbt, sizeof u.sbt, "adapter on");
 		render_text(&u, 80, 24);
-		CHECK(strstr(frame[0], "1 Wi-Fi") && strstr(frame[0], "2 Ethernet/IP") && strstr(frame[0], "3 Bluetooth") && strstr(frame[0], "4 VPN") && strstr(frame[0], "netmanager"), "tabs: '%s'", frame[0]);
+		CHECK(strstr(frame[0], "1 Wi-Fi") && strstr(frame[0], "2 Ethernet/IP") && strstr(frame[0], "3 Bluetooth") && strstr(frame[0], "4 VPN") && strstr(frame[0], "netman"), "tabs: '%s'", frame[0]);
 		CHECK(strstr(frame[1], "wifi: connected to Home") && strstr(frame[1], "bt: adapter on"), "summary '%s'", frame[1]);
 		CHECK(strstr(frame[3], "Home") && strstr(frame[3], "psk") && strstr(frame[3], "-52 dBm") && strstr(frame[3], "saved auto") && frame[3][0] == '*', "row '%s'", frame[3]);
 		CHECK(strstr(frame[4], "Guest cafe") && strstr(frame[4], "open"), "row2 '%s'", frame[4]);
@@ -140,7 +140,13 @@ int main(void)
 		u.mode = NM_PROMPT; u.masked = 1; u.pkind = 1; snprintf(u.label, sizeof u.label, "passphrase: ");
 		nm_ui_key(&u, 's'); nm_ui_key(&u, 'e'); nm_ui_key(&u, 'c');
 		render_text(&u, 80, 24);
-		CHECK(strstr(frame[22], "passphrase: ***") && !strstr(frame[22], "sec"), "masked '%s'", frame[22]);
+		{
+			int found = 0, leak = 0;
+			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "passphrase: ***")) found = 1; if (strstr(frame[i], "sec")) leak = 1; }
+			CHECK(found && !leak, "masked prompt in a modal, typed text never shown"); if (!(found && !leak)) for (int i = 0; i < 24; i++) printf("  [%02d] %s\n", i, frame[i]);
+			for (int i = 0; i < 24; i++) if (strstr(frame[i], "passphrase")) { CHECK(frame[i][0] == ' ' || frame[i][0] == '+' || frame[i][0] == '|', "modal row starts with the border: '%s'", frame[i]); break; }
+			CHECK(strstr(frame[22], "enter") == NULL || strstr(frame[23], "enter ok"), "keybar shows enter/esc");
+		}
 		nm_ui_key(&u, NM_K_BS);
 		CHECK(u.inlen == 2, "backspace");
 		nm_ui_key(&u, NM_K_ESC);
@@ -172,8 +178,12 @@ int main(void)
 		{ int idx[NM_MAXNET]; CHECK(!u.filter[0] && nm_ui_visible(&u, idx, NM_MAXNET) == 3, "esc clears the filter"); }
 		nm_ui_key(&u, '?');
 		CHECK(u.mode == NM_HELP, "help");
-		nm_ui_key(&u, 'x');
-		CHECK(u.mode == NM_NORMAL, "any key closes help");
+		nm_ui_key(&u, NM_K_ESC);
+		CHECK(u.mode == NM_NORMAL, "esc closes help");
+		nm_ui_key(&u, '?'); nm_ui_key(&u, 'q');
+		CHECK(u.mode == NM_NORMAL && !u.quit, "q closes help (does not quit)");
+		nm_ui_key(&u, '?'); nm_ui_key(&u, '?');
+		CHECK(u.mode == NM_NORMAL, "? closes help");
 		nm_ui_key(&u, '3');
 		CHECK(u.tab == NM_BT, "3 -> bluetooth");
 		nm_ui_key(&u, 9); nm_ui_key(&u, 9);
@@ -190,6 +200,140 @@ int main(void)
 		CHECK(u.mode == NM_CONFIRM && !strcmp(u.cwhat, "alpha"), "x -> confirm");
 		nm_ui_key(&u, 'n');
 		CHECK(u.mode == NM_NORMAL, "n backs out");
+	}
+
+	/* ---- help popup ---- */
+	{
+		static nm_ui u;
+		int last = 0;
+		nm_ui_init(&u, 80, 24);
+		u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
+		u.nnets = nm_parse_wifi("* Home psk -52 dBm  (known)\n", u.nets, NM_MAXNET);
+		nm_ui_key(&u, '?');
+		render_text(&u, 80, 24);
+		{
+			int top = 0, wifi = 0, list = 0;
+			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "+- help 1-")) top = 1; if (strstr(frame[i], "WI-FI")) wifi = 1; if (strstr(frame[i], "Home")) list = 1; }
+			CHECK(top && wifi, "help popup: titled box with the WI-FI group (top %d wifi %d)", top, wifi);
+			CHECK(strstr(frame[0], "1 Wi-Fi") && strstr(frame[23], "esc") && strstr(frame[23], "scroll"), "tabs stay, keybar says scroll/close: '%s'", frame[23]);
+			(void)list;
+		}
+		for (int i = 0; i < 80; i++) nm_ui_key(&u, 'j');
+		last = u.hoff;
+		render_text(&u, 80, 24);
+		{
+			int priv = 0, back = 0;
+			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "Not tested on real hardware")) back = 1; if (strstr(frame[i], "PRIVILEGES")) priv = 1; }
+			CHECK(last > 0 && back, "scrolled to the end: last line visible (hoff %d)", last);
+			(void)priv;
+		}
+		nm_ui_key(&u, 'g');
+		CHECK(u.hoff == 0, "g jumps back to the top");
+		nm_ui_key(&u, NM_K_PGDN);
+		CHECK(u.hoff > 0, "page down scrolls");
+		nm_ui_key(&u, NM_K_ESC);
+		u.w = 40; u.h = 12; render_text(&u, 40, 12);
+		nm_ui_key(&u, '?');
+		render_text(&u, 40, 12);
+		{
+			int wide = 0, box = 0;
+			for (int i = 0; i < 12; i++) { if (width_of(frame[i]) > 40) wide = 1; if (strstr(frame[i], "+- help")) box = 1; }
+			CHECK(box && !wide, "help popup fits 40x12 (box %d, too wide %d)", box, wide);
+		}
+		nm_ui_key(&u, NM_K_ESC);
+	}
+
+	/* ---- modal / spinner / scrollbar / sparkline / worker ---- */
+	{
+		static nm_ui u;
+		char s1[16][400], sp[96];
+		nm_theme th;
+		int rc;
+		nm_ui_init(&u, 80, 24);
+		u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
+		u.nnets = nm_parse_wifi("  alpha psk -50 dBm\n", u.nets, NM_MAXNET);
+		/* confirm modal: box, text, key hints */
+		nm_ui_key(&u, 'x');
+		render_text(&u, 80, 24);
+		{
+			int box = 0, txt = 0;
+			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "+- confirm")) box = 1; if (strstr(frame[i], "| forget alpha?")) txt = 1; }
+			CHECK(box && txt && strstr(frame[23], "y yes") && strstr(frame[23], "n no"), "confirm modal: box %d text %d keybar '%s'", box, txt, frame[23]);
+		}
+		nm_ui_key(&u, 'n');
+		/* busy: spinner frame changes with u.spin, label + esc hint shown, at 80x24 and 40x12 */
+		u.busy = 1; snprintf(u.blabel, sizeof u.blabel, "scanning networks");
+		u.spin = 0; render_text(&u, 80, 24);
+		for (int i = 0; i < 16; i++) snprintf(s1[i], sizeof s1[i], "%.399s", frame[i]);
+		{
+			int lab = 0, esc = 0;
+			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "scanning networks")) lab = 1; if (strstr(frame[i], "esc cancels")) esc = 1; }
+			CHECK(lab && esc, "busy modal shows label and esc hint");
+		}
+		u.spin = 1; render_text(&u, 80, 24);
+		{
+			int diff = 0;
+			for (int i = 0; i < 16; i++) if (strcmp(s1[i], frame[i])) diff = 1;
+			CHECK(diff, "spinner advances between frames");
+		}
+		u.w = 40; u.h = 12; render_text(&u, 40, 12);
+		{
+			int lab = 0, wide = 0;
+			for (int i = 0; i < 12; i++) { if (strstr(frame[i], "scanning networks")) lab = 1; if (width_of(frame[i]) > 40) wide = 1; }
+			CHECK(lab && !wide, "busy modal fits 40x12 (label %d, too wide %d)", lab, wide);
+		}
+		u.busy = 0; u.w = 80; u.h = 24;
+		/* scrollbar: appears when the list is longer than the window; thumb moves with the offset */
+		{
+			char list[4000] = "";
+			int n;
+			for (int i = 0; i < 40; i++) { char l[80]; snprintf(l, sizeof l, "  net%02d psk -%d dBm\n", i, 50 + i % 30); strcat(list, l); }
+			nm_ui_init(&u, 80, 12);
+			u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
+			n = u.nnets = nm_parse_wifi(list, u.nets, NM_MAXNET);
+			CHECK(n == 40, "40 networks parsed");
+			render_text(&u, 80, 12);
+			CHECK(frame[3][79] == '#' && frame[4][79] == '|' && frame[9][79] == '|', "scrollbar thumb at the top: '%c' '%c' '%c'", frame[3][79], frame[4][79], frame[9][79]);
+			u.sel[NM_WIFI] = 39; u.top[NM_WIFI] = 33;
+			render_text(&u, 80, 12);
+			CHECK(frame[9][79] == '#' && frame[3][79] == '|', "thumb at the bottom: '%c' '%c'", frame[9][79], frame[3][79]);
+			nm_ui_init(&u, 80, 24);
+			u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
+			u.nnets = nm_parse_wifi("  alpha psk -50 dBm\n", u.nets, NM_MAXNET);
+			render_text(&u, 80, 24);
+			CHECK(frame[3][79] == 0 || frame[3][79] == ' ', "no scrollbar when everything fits");
+		}
+		/* signal history -> sparkline */
+		nm_theme_default(&th, 1);
+		nm_ui_init(&u, 80, 24);
+		u.nnets = nm_parse_wifi("* Home psk -90 dBm\n", u.nets, NM_MAXNET);
+		nm_hist_push(&u); u.nets[0].dbm = -70; nm_hist_push(&u); u.nets[0].dbm = -40; nm_hist_push(&u);
+		rc = nm_hist_spark(&u, &th, "Home", sp, sizeof sp);
+		CHECK(rc == 3 && strlen(sp) == 9 && !strncmp(sp, th.spark[0], 3) && !strncmp(sp + 6, th.spark[7], 3), "sparkline low..high (%d samples, %zu bytes)", rc, strlen(sp));
+		CHECK(nm_hist_spark(&u, &th, "nope", sp, sizeof sp) == 0 && !sp[0], "unknown network -> empty");
+		for (int i = 0; i < 40; i++) nm_hist_push(&u);
+		CHECK(nm_hist_spark(&u, &th, "Home", sp, sizeof sp) == 16, "history is capped at 16");
+		/* status line: connected network + address + gauge + sparkline */
+		nm_theme_default(&th, 0);
+		nm_ui_init(&u, 80, 24);
+		u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
+		u.nnets = nm_parse_wifi("* Home psk -52 dBm  (known)\n", u.nets, NM_MAXNET);
+		nm_hist_push(&u);
+		u.nifs = nm_parse_status("wlan0    wifi  up         38:00:25:04:4e:e9 192.168.1.58\nwifi     connected to Home\nbt       adapter on\n", u.ifs, NM_MAXIF, u.swifi, u.sbt, sizeof u.swifi);
+		render_text(&u, 80, 24);
+		CHECK(strstr(frame[1], "Home") && strstr(frame[1], "192.168.1.58") && strstr(frame[1], "-52 dBm") && strstr(frame[1], "bt: adapter on"), "status line '%s'", frame[1]);
+		/* worker: output + return code come back through the pipe; a crash in the worker does not take the UI down */
+		nm_ui_init(&u, 80, 24);
+		nmb_out = nmb_err = NULL;
+		rc = NM_CALL(&u, "test", (fputs("hello out\n", nmb_out), fputs("hello err\n", nmb_err), 7));
+		CHECK(rc == 7 && nm__co && !strcmp(nm__co, "hello out\n") && nm__ce && !strcmp(nm__ce, "hello err\n"), "worker rc %d out '%s' err '%s'", rc, nm__co ? nm__co : "(null)", nm__ce ? nm__ce : "(null)");
+		nm__cap_free();
+		rc = NM_CALL(&u, "test", (abort(), 0));
+		CHECK(rc != 0 && nm__ce && strstr(nm__ce, "died") && !u.busy, "crashing worker: rc %d err '%s'", rc, nm__ce ? nm__ce : "(null)");
+		nm__cap_free();
+		rc = NM_CALL(&u, "test", 0);
+		CHECK(rc == 0 && nm__co && !*nm__co && !u.busy, "silent worker, rc 0");
+		nm__cap_free();
 	}
 
 	printf("%d checks, %d failed\n", checks, fails);

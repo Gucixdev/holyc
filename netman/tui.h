@@ -8,7 +8,11 @@
  * (nm_ui_render) are plain functions so they can be tested without a terminal and without a network.
  *
  * Tabs: Wi-Fi | Ethernet/IP | Bluetooth | VPN. Ethernet/IP shows links from `nmb_status`; its profile editor and the VPN tab are placeholders
- * until nm_net / nm_vpn are wired in (the tab structure is already here). Colours come only from nm_theme.
+ * until nm_net / nm_vpn are wired in (the tab structure is already here). Colours and glyphs come only from nm_theme.
+ *
+ * Look and feel borrowed from lazytui (../lazytui, widgets/basic): the DOTS spinner, lt_scrollbar, lt_sparkline's eighth blocks, a bordered
+ * modal for prompts. Library calls (scan / connect / WPS / pair ...) run in a forked worker that sends its captured output back over a
+ * pipe, so the UI keeps animating the spinner and esc cancels the call (the worker is killed) instead of freezing the terminal.
  */
 #ifndef NM_TUI_H
 #define NM_TUI_H
@@ -29,9 +33,15 @@ typedef struct { char addr[18], alias[64]; int c, p, t, dbm; } nm_dev;          
 typedef struct { char name[16], kind[8], state[16], mac[18], ip[48]; int nolink; } nm_if;
 
 typedef struct {
-	const char *reset, *title, *tab, *tabsel, *dim, *head, *sel, *ok, *err, *key;
+	const char *reset, *title, *tab, *tabsel, *dim, *head, *sel, *ok, *err, *key, *modal;
 	const char *bar_on[4], *bar_off;
+	const char *spin[10]; int nspin;                     /* spinner frames */
+	const char *bx[6];                                   /* box: top-left, top-right, bottom-left, bottom-right, horizontal, vertical */
+	const char *track, *thumb;                           /* scrollbar */
+	const char *spark[8];                                /* eighth blocks, low to high */
 } nm_theme;
+
+typedef struct { char name[64]; signed char v[16]; int n; } nm_hist;   /* last signal readings of one network */
 
 enum { NM_WIFI, NM_ETH, NM_BT, NM_VPN, NM_NTAB };
 enum { NM_NORMAL, NM_FILTER, NM_PROMPT, NM_CONFIRM, NM_HELP, NM_WPS };
@@ -47,6 +57,10 @@ typedef struct {
 	char in[128], label[96], pa[128];   /* prompt: input buffer, label, value saved from an earlier stage */
 	int inlen, masked, pkind, ckind;
 	char cwhat[96];                     /* what a confirmation is about */
+	int hoff;                           /* help popup scroll offset */
+	int busy, spin;                     /* a worker is running; spinner frame counter */
+	char blabel[96];                    /* what the worker is doing */
+	nm_hist hist[NM_MAXNET]; int nhist;
 } nm_ui;
 
 int nm_parse_wifi(const char *text, nm_net *o, int max);                     /* `wifi list` output (iwd and wpa_supplicant forms) */
@@ -58,6 +72,8 @@ void nm_theme_default(nm_theme *t, int unicode);
 void nm_ui_init(nm_ui *u, int w, int h);
 int nm_ui_visible(const nm_ui *u, int *idx, int max);                        /* rows of the current tab that pass the filter */
 void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o);
+void nm_hist_push(nm_ui *u);                                                  /* record the current readings of every listed network */
+int nm_hist_spark(const nm_ui *u, const nm_theme *t, const char *name, char *out, size_t n);   /* sparkline string; returns the sample count */
 void nm_ui_key(nm_ui *u, int key);                                           /* one key press; may call the library */
 int nm_tui(void);
 
@@ -78,6 +94,7 @@ int nm_tui(void);
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -247,12 +264,65 @@ int nm_bars(int dbm)
 	return 0;
 }
 
+/* signal history: one slot per network name, the last 16 readings; fed by every refresh */
+void nm_hist_push(nm_ui *u)
+{
+	for (int i = 0; i < u->nnets; i++) {
+		nm_hist *h = NULL;
+		for (int j = 0; j < u->nhist; j++) if (!strcmp(u->hist[j].name, u->nets[i].name)) { h = &u->hist[j]; break; }
+		if (!h) {
+			if (u->nhist >= NM_MAXNET) continue;
+			h = &u->hist[u->nhist++];
+			memset(h, 0, sizeof *h);
+			snprintf(h->name, sizeof h->name, "%s", u->nets[i].name);
+		}
+		if (h->n == 16) { memmove(h->v, h->v + 1, 15); h->n = 15; }
+		h->v[h->n++] = (signed char)(u->nets[i].dbm < -127 ? -127 : u->nets[i].dbm > 0 ? 0 : u->nets[i].dbm);
+	}
+}
+
+int nm_hist_spark(const nm_ui *u, const nm_theme *t, const char *name, char *out, size_t n)
+{
+	out[0] = 0;
+	for (int j = 0; j < u->nhist; j++) {
+		const nm_hist *h = &u->hist[j];
+		size_t used = 0;
+		if (strcmp(h->name, name)) continue;
+		for (int i = 0; i < h->n; i++) {
+			int lvl = (h->v[i] + 95) * 8 / 55;   /* -95 dBm = lowest block, -40 dBm = highest */
+			size_t l;
+			if (lvl < 0) lvl = 0;
+			if (lvl > 7) lvl = 7;
+			l = strlen(t->spark[lvl]);
+			if (used + l + 1 > n) break;
+			memcpy(out + used, t->spark[lvl], l);
+			used += l;
+			out[used] = 0;
+		}
+		return h->n;
+	}
+	return 0;
+}
+
 /* ---- theme + state ------------------------------------------------------------------------------------------------ */
 
 void nm_theme_default(nm_theme *t, int unicode)
 {
 	t->reset = "\x1b[0m"; t->title = "\x1b[1m"; t->tab = "\x1b[2m"; t->tabsel = "\x1b[7;1m"; t->dim = "\x1b[2m"; t->head = "\x1b[4;2m";
-	t->sel = "\x1b[7m"; t->ok = "\x1b[32m"; t->err = "\x1b[31;1m"; t->key = "\x1b[1;36m";
+	t->sel = "\x1b[7m"; t->ok = "\x1b[32m"; t->err = "\x1b[31;1m"; t->key = "\x1b[1;36m"; t->modal = "\x1b[36m";
+	if (unicode) {
+		static const char *sp[10] = { "\xe2\xa0\x8b", "\xe2\xa0\x99", "\xe2\xa0\xb9", "\xe2\xa0\xb8", "\xe2\xa0\xbc", "\xe2\xa0\xb4", "\xe2\xa0\xa6", "\xe2\xa0\xa7", "\xe2\xa0\x87", "\xe2\xa0\x8f" };
+		static const char *sk[8] = { "\xe2\x96\x81", "\xe2\x96\x82", "\xe2\x96\x83", "\xe2\x96\x84", "\xe2\x96\x85", "\xe2\x96\x86", "\xe2\x96\x87", "\xe2\x96\x88" };
+		static const char *bx[6] = { "\xe2\x94\x8c", "\xe2\x94\x90", "\xe2\x94\x94", "\xe2\x94\x98", "\xe2\x94\x80", "\xe2\x94\x82" };
+		memcpy(t->spin, sp, sizeof sp); t->nspin = 10; memcpy(t->spark, sk, sizeof sk); memcpy(t->bx, bx, sizeof bx);
+		t->track = "\xe2\x94\x82"; t->thumb = "\xe2\x96\x88";
+	} else {
+		static const char *sp[10] = { "|", "/", "-", "\\", "|", "/", "-", "\\", "|", "/" };
+		static const char *sk[8] = { ".", ":", "-", "=", "+", "*", "#", "@" };
+		static const char *bx[6] = { "+", "+", "+", "+", "-", "|" };
+		memcpy(t->spin, sp, sizeof sp); t->nspin = 4; memcpy(t->spark, sk, sizeof sk); memcpy(t->bx, bx, sizeof bx);
+		t->track = "|"; t->thumb = "#";
+	}
 	if (unicode) { t->bar_on[0] = "\xe2\x96\x82"; t->bar_on[1] = "\xe2\x96\x84"; t->bar_on[2] = "\xe2\x96\x86"; t->bar_on[3] = "\xe2\x96\x88"; t->bar_off = "\xc2\xb7"; }
 	else { t->bar_on[0] = "."; t->bar_on[1] = ":"; t->bar_on[2] = "|"; t->bar_on[3] = "#"; t->bar_off = " "; }
 }
@@ -347,6 +417,7 @@ static void nm__keybar(const nm_ui *u, const nm_theme *t, nm__Row *r)
 	static const nm__Key oth[] = { { "r", "refresh" }, { "/", "filter" } };
 	const nm__Key *k = u->tab == NM_WIFI ? wifi : u->tab == NM_BT ? bt : oth;
 	int n = u->tab == NM_WIFI ? 8 : u->tab == NM_BT ? 7 : 2, fixed = 14;
+	if (u->mode == NM_HELP) { nm__row_raw(r, t->key); nm__row_add(r, "j/k", -1); nm__row_raw(r, t->reset); nm__row_add(r, " scroll  ", -1); nm__row_raw(r, t->key); nm__row_add(r, "esc", -1); nm__row_raw(r, t->reset); nm__row_add(r, " close", -1); return; }
 	if (u->mode == NM_PROMPT) { nm__row_raw(r, t->key); nm__row_add(r, "enter", -1); nm__row_raw(r, t->reset); nm__row_add(r, " ok  ", -1); nm__row_raw(r, t->key); nm__row_add(r, "esc", -1); nm__row_raw(r, t->reset); nm__row_add(r, " cancel", -1); return; }
 	if (u->mode == NM_CONFIRM) { nm__row_raw(r, t->key); nm__row_add(r, "y", -1); nm__row_raw(r, t->reset); nm__row_add(r, " yes  ", -1); nm__row_raw(r, t->key); nm__row_add(r, "n", -1); nm__row_raw(r, t->reset); nm__row_add(r, " no", -1); return; }
 	for (int i = 0; i < n; i++) {
@@ -360,18 +431,179 @@ static void nm__keybar(const nm_ui *u, const nm_theme *t, nm__Row *r)
 }
 
 static const char *nm__help[] = {
-	"  tab / shift-tab, h / l, 1-4    switch tab",
-	"  j k  or  arrows, g G, pgup/dn  move",
-	"  /                              filter (esc clears)",
-	"  r                              refresh the current tab",
-	"  Wi-Fi:  enter connect (asks for the passphrase if needed)",
-	"          d disconnect   x forget   a toggle autoconnect",
-	"          w WPS (p button / i pin / c cancel)   H hotspot (empty SSID stops it)",
-	"  Bluetooth: enter connect/disconnect   p pair (asks a PIN, enter = 0000)",
-	"          t trust   x remove   s scan 5s   o adapter power",
-	"  Ethernet/IP, VPN: read-only for now (backends not wired yet)",
-	"  q  quit        press any key to close this help",
+	"GENERAL",
+	"  tab / shift-tab, h l, 1-4   switch tab",
+	"  j k, arrows, g G, pgup/dn   move",
+	"  /                           filter (esc clears it)",
+	"  r                           refresh the current tab",
+	"  ?                           this help          q   quit",
+	"  esc while a call is running cancels it",
+	"",
+	"WI-FI",
+	"  enter   connect (a popup asks for the passphrase when needed)",
+	"  d       disconnect",
+	"  x       forget the saved network (asks first)",
+	"  a       autoconnect on/off for a saved network",
+	"  w       WPS: p push-button, i pin, c cancel",
+	"  H       hotspot (empty SSID stops it)",
+	"",
+	"BLUETOOTH",
+	"  enter   connect / disconnect",
+	"  p       pair (asks a PIN, empty = 0000)",
+	"  t       trust       x   remove (asks first)",
+	"  s       scan 5 s    o   adapter power on/off",
+	"",
+	"ETHERNET/IP",
+	"  lists the links; profiles, DHCP, static IP and DNS are not wired in yet",
+	"",
+	"VPN",
+	"  placeholder; WireGuard / OpenVPN and Mullvad / NordVPN plug in here",
+	"",
+	"PRIVILEGES",
+	"  netman asks for your sudo password before the screen is drawn, but only",
+	"  when it needs root: wpa_supplicant's control socket, firewall, and later",
+	"  netlink / DHCP / DNS / VPN.  iwd: group network or wheel is enough.",
+	"  bluez: any user.  NM_SUDO=never skips the prompt, =always forces it.",
+	"",
+	"BACKENDS",
+	"  Wi-Fi: iwd (D-Bus) or wpa_supplicant (control socket), found automatically",
+	"  Bluetooth: bluez (D-Bus), the pairing agent is built in",
+	"  Not tested on real hardware: only against fakes (see the readme).",
+	NULL
 };
+#define NM_NHELP ((int)(sizeof nm__help / sizeof *nm__help) - 1)
+
+/* ---- modal: a bordered box centred over the list area (prompt / confirm / WPS / busy) ---------------------------------- */
+
+typedef struct { char text[160]; const char *style; } nm__ML;   /* one line of modal text (plain; the style applies to the whole line) */
+
+static void nm__clip(char *s, int max)   /* cut to max cells without splitting a UTF-8 sequence */
+{
+	int cells = 0;
+	for (char *p = s; *p; p++) {
+		if (((unsigned char)*p & 0xC0) != 0x80 && ++cells > max) { *p = 0; break; }
+	}
+}
+
+static void nm__modal(const nm_ui *u, const nm_theme *t, FILE *o, const char *title, const nm__ML *l, int nl)
+{
+	int bw = 0, top, left, ah = u->h - 5 > 1 ? u->h - 5 : 1, bh = nl + 2;
+	char tt[160];
+	for (int i = 0; i < nl; i++) { int c = nm__cells(l[i].text); if (c > bw) bw = c; }
+	bw += 4;
+	if (bw < 30) bw = 30;
+	if (bw > u->w - 2) bw = u->w - 2;
+	if (bw < 12) bw = 12;
+	top = 4 + (ah - bh) / 2;
+	if (top < 4) top = 4;
+	left = (u->w - bw) / 2 + 1;
+	/* top border with the title */
+	snprintf(tt, sizeof tt, " %s ", title);
+	nm__clip(tt, bw - 4);
+	fprintf(o, "\x1b[%d;%dH%s%s", top, left, t->modal, t->bx[0]);
+	{
+		int tc = nm__cells(tt);
+		fputs(t->bx[4], o);
+		fprintf(o, "%s%s%s", t->title, tt, t->modal);
+		for (int i = 1 + tc; i < bw - 2; i++) fputs(t->bx[4], o);
+	}
+	fprintf(o, "%s%s", t->bx[1], t->reset);
+	for (int i = 0; i < nl; i++) {
+		char s[160];
+		int c;
+		snprintf(s, sizeof s, "%s", l[i].text);
+		nm__clip(s, bw - 4);
+		c = nm__cells(s);
+		fprintf(o, "\x1b[%d;%dH%s%s%s %s%s", top + 1 + i, left, t->modal, t->bx[5], t->reset, l[i].style ? l[i].style : "", s);
+		for (int k = c; k < bw - 4; k++) fputc(' ', o);
+		fprintf(o, "%s %s%s%s", t->reset, t->modal, t->bx[5], t->reset);
+	}
+	fprintf(o, "\x1b[%d;%dH%s%s", top + 1 + nl, left, t->modal, t->bx[2]);
+	for (int i = 0; i < bw - 2; i++) fputs(t->bx[4], o);
+	fprintf(o, "%s%s", t->bx[3], t->reset);
+}
+
+/* help popup geometry: inner rows shown (also used by the key handler to clamp the scroll offset) */
+static int nm__help_inner(const nm_ui *u) { int ah = u->h - 3; int in = (ah > NM_NHELP + 2 ? NM_NHELP + 2 : ah) - 2; return in < 1 ? 1 : in; }
+
+static void nm__help_modal(const nm_ui *u, const nm_theme *t, FILE *o)
+{
+	int bw = u->w - 2 < 74 ? u->w - 2 : 74, inner = nm__help_inner(u), bh = inner + 2, top = 3 + (u->h - 3 - bh) / 2, left = (u->w - bw) / 2 + 1;
+	int off = u->hoff, th, pos;
+	char tt[80];
+	if (bw < 20) bw = 20;
+	if (off > NM_NHELP - inner) off = NM_NHELP - inner;
+	if (off < 0) off = 0;
+	snprintf(tt, sizeof tt, " help %d-%d/%d ", off + 1, off + inner < NM_NHELP ? off + inner : NM_NHELP, NM_NHELP);
+	nm__clip(tt, bw - 4);
+	fprintf(o, "\x1b[%d;%dH%s%s%s", top, left, t->modal, t->bx[0], t->bx[4]);
+	fprintf(o, "%s%s%s", t->title, tt, t->modal);
+	for (int i = 1 + nm__cells(tt); i < bw - 2; i++) fputs(t->bx[4], o);
+	fprintf(o, "%s%s", t->bx[1], t->reset);
+	th = NM_NHELP > inner ? inner * inner / NM_NHELP : inner;
+	if (th < 1) th = 1;
+	pos = NM_NHELP > inner ? off * (inner - th) / (NM_NHELP - inner) : 0;
+	for (int i = 0; i < inner; i++) {
+		char s[160] = "";
+		int c;
+		const char *ln = off + i < NM_NHELP ? nm__help[off + i] : "";
+		int head = ln[0] && ln[0] != ' ';
+		snprintf(s, sizeof s, "%s", ln);
+		nm__clip(s, bw - 5);
+		c = nm__cells(s);
+		fprintf(o, "\x1b[%d;%dH%s%s%s %s%s", top + 1 + i, left, t->modal, t->bx[5], t->reset, head ? t->key : "", s);
+		for (int k = c; k < bw - 5; k++) fputc(' ', o);
+		fprintf(o, "%s ", t->reset);
+		if (NM_NHELP > inner) fprintf(o, "%s%s%s", t->modal, i >= pos && i < pos + th ? t->thumb : t->bx[5], t->reset);
+		else fprintf(o, "%s%s%s", t->modal, t->bx[5], t->reset);
+	}
+	fprintf(o, "\x1b[%d;%dH%s%s", top + 1 + inner, left, t->modal, t->bx[2]);
+	{
+		const char *hint = " j/k scroll   esc close ";
+		int hc = nm__cells(hint);
+		fputs(t->bx[4], o);
+		if (bw - 3 > hc) { fprintf(o, "%s%s%s", t->reset, hint, t->modal); for (int i = 1 + hc; i < bw - 2; i++) fputs(t->bx[4], o); }
+		else for (int i = 1; i < bw - 2; i++) fputs(t->bx[4], o);
+	}
+	fprintf(o, "%s%s", t->bx[3], t->reset);
+}
+
+static void nm__overlay(const nm_ui *u, const nm_theme *t, FILE *o)
+{
+	nm__ML l[4];
+	memset(l, 0, sizeof l);
+	if (u->mode == NM_HELP) {
+		nm__help_modal(u, t, o);
+	} else if (u->busy) {
+		snprintf(l[0].text, sizeof l[0].text, "%s %s", t->spin[u->spin % t->nspin], u->blabel);
+		l[0].style = t->key;
+		snprintf(l[1].text, sizeof l[1].text, "esc cancels");
+		l[1].style = t->dim;
+		nm__modal(u, t, o, "working", l, 2);
+	} else if (u->mode == NM_PROMPT) {
+		int maxin = u->w - 12, shown = u->inlen;
+		char in[160] = "";
+		if (maxin > 60) maxin = 60;
+		if (shown > maxin && maxin > 0) shown = maxin;
+		if (u->masked) { for (int i = 0; i < shown && (int)strlen(in) < (int)sizeof in - 4; i++) strcat(in, "*"); }
+		else snprintf(in, sizeof in, "%.*s", shown, u->in + (u->inlen - shown));
+		snprintf(l[0].text, sizeof l[0].text, "%s%s_", u->label, in);
+		snprintf(l[1].text, sizeof l[1].text, "enter ok   esc cancel");
+		l[1].style = t->dim;
+		nm__modal(u, t, o, u->masked ? "hidden input" : "input", l, 2);
+	} else if (u->mode == NM_CONFIRM) {
+		snprintf(l[0].text, sizeof l[0].text, "%s %s?", u->ckind == 1 ? "forget" : "remove", u->cwhat);
+		l[0].style = t->err;
+		snprintf(l[1].text, sizeof l[1].text, "y yes   n no");
+		l[1].style = t->dim;
+		nm__modal(u, t, o, "confirm", l, 2);
+	} else if (u->mode == NM_WPS) {
+		snprintf(l[0].text, sizeof l[0].text, "p push-button   i pin   c cancel");
+		snprintf(l[1].text, sizeof l[1].text, "esc back");
+		l[1].style = t->dim;
+		nm__modal(u, t, o, "WPS", l, 2);
+	}
+}
 
 void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 {
@@ -387,14 +619,30 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 			nm__row_raw(&r, t->reset);
 			nm__row_add(&r, " ", -1);
 		}
-		if (w - r.col >= 11) { nm__row_pad(&r, w - 10); nm__row_raw(&r, t->title); nm__row_add(&r, "netmanager", -1); }
+		if (w - r.col >= 11) { nm__row_pad(&r, w - 10); nm__row_raw(&r, t->title); nm__row_add(&r, "netman", -1); }
 	}
 	nm__row_emit(&r, t, o, 1);
-	/* row 2: summary */
+	/* row 2: summary - wifi (connected network, its address, signal gauge + sparkline) | bluetooth */
 	nm__row_init(&r, w);
-	nm__row_raw(&r, t->dim);
-	nm__row_fmt(&r, w >= 50 ? w * 2 / 5 : -1, " wifi: %s", u->swifi[0] ? u->swifi : "-");
-	if (w >= 50) { nm__row_pad(&r, w * 2 / 5 + 1); nm__row_fmt(&r, -1, " | bt: %s", u->sbt[0] ? u->sbt : "-"); }
+	{
+		char wf[200], sp[96] = "", ip[48] = "", g[16] = "";
+		const nm_net *cn = NULL;
+		int wcol = w >= 70 ? w - 24 : w >= 50 ? w * 2 / 5 : -1;
+		for (int i = 0; i < u->nnets; i++) if (u->nets[i].connected) { cn = &u->nets[i]; break; }
+		for (int i = 0; i < u->nifs; i++) if (!strcmp(u->ifs[i].kind, "wifi") && u->ifs[i].ip[0]) { snprintf(ip, sizeof ip, "%s", u->ifs[i].ip); break; }
+		snprintf(wf, sizeof wf, "%s", u->swifi[0] ? u->swifi : "-");
+		if (cn && wcol > 0) {
+			int lvl = nm_bars(cn->dbm);
+			g[0] = 0;
+			for (int b = 0; b < 4; b++) strncat(g, b < lvl ? t->bar_on[b] : t->bar_off, sizeof g - strlen(g) - 1);
+			nm_hist_spark(u, t, cn->name, sp, sizeof sp);
+			if (ip[0] && !strstr(wf, ip)) { size_t l = strlen(wf); snprintf(wf + l, sizeof wf - l, "  %s", ip); }
+			{ size_t l = strlen(wf); snprintf(wf + l, sizeof wf - l, "  %s %d dBm%s%s", g, cn->dbm, sp[0] ? " " : "", sp); }
+		}
+		nm__row_raw(&r, t->dim);
+		nm__row_fmt(&r, wcol, " wifi: %s", wf);
+		if (wcol > 0) { nm__row_pad(&r, wcol + 1); nm__row_fmt(&r, -1, " | bt: %s", u->sbt[0] ? u->sbt : "-"); }
+	}
 	nm__row_emit(&r, t, o, 2);
 	/* row 3: column header (+ the active filter at the right edge) */
 	nm__row_init(&r, w);
@@ -410,14 +658,12 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 		if (f[0] && w > nm__cells(f) + 20) { nm__row_raw(&r, t->key); nm__row_add(&r, f, -1); }
 	}
 	nm__row_emit(&r, t, o, 3);
-	/* list area */
+	/* list area; a scrollbar takes the last column when the list is longer than the window */
 	for (int i = 0; i < rows; i++) {
 		int row = 4 + i, k = u->top[u->tab] + i, selected = k == u->sel[u->tab] && k < n;
-		nm__row_init(&r, w);
-		if (u->mode == NM_HELP) {
-			nm__row_raw(&r, t->dim);
-			if (i < (int)(sizeof nm__help / sizeof *nm__help)) nm__row_add(&r, nm__help[i], -1);
-		} else if (u->tab == NM_VPN) {
+		int scroll = u->tab != NM_VPN && n > rows, lw = scroll ? w - 1 : w;
+		nm__row_init(&r, lw);
+		if (u->tab == NM_VPN) {
 			static const char *vpn[] = { "", "  VPN: backend not wired yet.", "  WireGuard / OpenVPN profiles and providers (Mullvad, NordVPN) will list here once nm_vpn is plugged in.", "  The CLI side is built separately; this tab keeps its place so nothing else moves." };
 			nm__row_raw(&r, t->dim);
 			if (i < 4) nm__row_add(&r, vpn[i], -1);
@@ -439,18 +685,18 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 				}
 				if (!selected) nm__row_raw(&r, t->reset);
 				nm__row_add(&r, "  ", -1);
-				{ int nw = w - r.col - rl - 1; if (nw < 4) nw = 4; nm__row_fmt(&r, nw, "%s", e->name[0] ? e->name : "(hidden)"); }
-				nm__row_pad(&r, w - rl);
+				{ int nw = lw - r.col - rl - 1; if (nw < 4) nw = 4; nm__row_fmt(&r, nw, "%s", e->name[0] ? e->name : "(hidden)"); }
+				nm__row_pad(&r, lw - rl);
 				nm__row_add(&r, right, -1);
 			} else if (u->tab == NM_BT) {
 				const nm_dev *e = &u->devs[idx[k]];
 				nm__row_fmt(&r, -1, " %c%c%c  %s  %s", e->c ? 'C' : '-', e->p ? 'P' : '-', e->t ? 'T' : '-', e->addr, e->alias[0] ? e->alias : "?");
-				if (e->dbm) { char s[16]; snprintf(s, sizeof s, "%d dBm ", e->dbm); nm__row_pad(&r, w - nm__cells(s)); nm__row_add(&r, s, -1); }
+				if (e->dbm) { char s[16]; snprintf(s, sizeof s, "%d dBm ", e->dbm); nm__row_pad(&r, lw - nm__cells(s)); nm__row_add(&r, s, -1); }
 			} else {
 				const nm_if *e = &u->ifs[idx[k]];
 				nm__row_fmt(&r, -1, " %-8s %-5s %-9s %-17s %s%s", e->name, e->kind, e->state, e->mac, e->ip, e->nolink ? "  no link" : "");
 			}
-			if (selected) nm__row_pad(&r, w);
+			if (selected) nm__row_pad(&r, lw);
 		} else if (i == 0 && n == 0) {
 			nm__row_raw(&r, t->dim);
 			nm__row_add(&r, u->filter[0] ? "  nothing matches the filter" : u->loaded[u->tab] ? "  nothing found (r to refresh)" : "  loading...", -1);
@@ -459,23 +705,23 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 			nm__row_add(&r, "  profiles / DHCP / static IP / DNS: backend not wired yet", -1);
 		}
 		nm__row_emit(&r, t, o, row);
+		if (scroll) {   /* lt_scrollbar: thumb size = window / total, position = offset / (total - window) */
+			int th = rows * rows / n, off, pos;
+			if (th < 1) th = 1;
+			off = u->top[u->tab];
+			pos = n > rows ? off * (rows - th) / (n - rows) : 0;
+			fprintf(o, "\x1b[%d;%dH%s%s%s", row, w, t->dim, i >= pos && i < pos + th ? t->thumb : t->track, t->reset);
+		}
 	}
 	/* message / prompt row */
 	nm__row_init(&r, w);
-	if (u->mode == NM_PROMPT || u->mode == NM_FILTER) {
-		const char *lab = u->mode == NM_FILTER ? "/" : u->label;
-		int shown = u->inlen, maxin = w - nm__cells(lab) - 3;
-		nm__row_raw(&r, t->key); nm__row_add(&r, lab, -1); nm__row_raw(&r, t->reset);
+	if (u->mode == NM_FILTER) {
+		int shown = u->inlen, maxin = w - 4;
+		nm__row_raw(&r, t->key); nm__row_add(&r, "/", -1); nm__row_raw(&r, t->reset);
 		if (shown > maxin && maxin > 0) shown = maxin;
-		if (u->masked && u->mode == NM_PROMPT) { for (int i = 0; i < shown; i++) nm__row_add(&r, "*", 1); }
-		else nm__row_add(&r, u->in + (u->inlen - shown), shown);
+		nm__row_add(&r, u->in + (u->inlen - shown), shown);
 		nm__row_raw(&r, t->sel); nm__row_add(&r, " ", 1);
-	} else if (u->mode == NM_CONFIRM) {
-		nm__row_raw(&r, t->err); nm__row_fmt(&r, -1, " %s %s? ", u->ckind == 1 ? "forget" : "remove", u->cwhat);
-	} else if (u->mode == NM_WPS) {
-		nm__row_raw(&r, t->key); nm__row_add(&r, " WPS: ", -1); nm__row_raw(&r, t->reset);
-		nm__row_add(&r, "p push-button   i pin   c cancel   esc back", -1);
-	} else if (u->msg[0]) {
+	} else if (u->msg[0] && u->mode != NM_PROMPT && u->mode != NM_CONFIRM && u->mode != NM_WPS && !u->busy) {
 		nm__row_raw(&r, u->msgerr ? t->err : t->ok);
 		nm__row_fmt(&r, -1, " %s", u->msg);
 	}
@@ -487,6 +733,7 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 	nm__row_raw(&r, t->reset);
 	nm__keybar(u, t, &r);
 	nm__row_emit(&r, t, o, h);
+	nm__overlay(u, t, o);
 }
 
 /* ---- actions (the only place the library is called) --------------------------------------------------------------- */
@@ -495,8 +742,6 @@ static void (*nm__redraw)(nm_ui *) = NULL;
 static char *nm__co, *nm__ce;
 static size_t nm__cos, nm__ces;
 
-static void nm__cap_begin(void) { nm__co = nm__ce = NULL; nmb_out = open_memstream(&nm__co, &nm__cos); nmb_err = open_memstream(&nm__ce, &nm__ces); }
-static void nm__cap_end(void) { fclose(nmb_out); fclose(nmb_err); nmb_out = nmb_err = NULL; }
 static void nm__cap_free(void) { free(nm__co); free(nm__ce); nm__co = nm__ce = NULL; }
 
 static void nm__lastline(const char *text, char *out, size_t n)
@@ -515,11 +760,114 @@ static void nm__say(nm_ui *u, int err, const char *what, const char *detail)
 	u->msgerr = err;
 }
 
-static void nm__busy(nm_ui *u, const char *what)
+/* ---- worker: every library call runs in a forked child that sends rc + captured stdout/stderr back over a pipe ------------ */
+/* The parent keeps drawing (spinner) and watches the keyboard; esc / ctrl-c kills the child. Not interactive (tests, no tty): it simply waits. */
+
+static int nm__read_key(void);
+static int nm__raw_on;
+static int nm__pfd = -1, nm__cancelled;
+static pid_t nm__kid;
+static const char *nm__klabel;
+static nm_ui *nm__kui;
+
+static void nm__wr(int fd, const void *b, size_t n)
 {
-	nm__say(u, 0, what, "...");
-	if (nm__redraw) nm__redraw(u);
+	const char *p = b;
+	while (n) { ssize_t w = write(fd, p, n); if (w < 0 && errno == EINTR) continue; if (w <= 0) return; p += w; n -= (size_t)w; }
 }
+
+/* returns 0 in the child (output capture already on), 1 in the parent */
+static int nm__fork(nm_ui *u, const char *label)
+{
+	int fd[2];
+	nm__cancelled = 0;
+	nm__kui = u;
+	nm__klabel = label;
+	if (pipe(fd) < 0) { nm__pfd = -1; return 1; }
+	nm__kid = fork();
+	if (nm__kid < 0) { close(fd[0]); close(fd[1]); nm__pfd = -1; return 1; }
+	if (nm__kid == 0) {
+		close(fd[0]);
+		nm__pfd = fd[1];
+		signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL); signal(SIGHUP, SIG_DFL); signal(SIGWINCH, SIG_DFL);
+		nm__raw_on = 0;   /* a child must never touch the terminal modes */
+		nm__co = nm__ce = NULL;
+		nmb_out = open_memstream(&nm__co, &nm__cos);
+		nmb_err = open_memstream(&nm__ce, &nm__ces);
+		return 0;
+	}
+	close(fd[1]);
+	nm__pfd = fd[0];
+	return 1;
+}
+
+static int nm__child_exit(int rc)   /* child only: ship the result and leave without running any cleanup */
+{
+	unsigned hdr[3];
+	fflush(nmb_out); fflush(nmb_err);
+	hdr[0] = (unsigned)rc; hdr[1] = (unsigned)(nm__co ? strlen(nm__co) : 0); hdr[2] = (unsigned)(nm__ce ? strlen(nm__ce) : 0);
+	nm__wr(nm__pfd, hdr, sizeof hdr);
+	if (hdr[1]) nm__wr(nm__pfd, nm__co, hdr[1]);
+	if (hdr[2]) nm__wr(nm__pfd, nm__ce, hdr[2]);
+	_exit(0);
+}
+
+static int nm__wait(void)
+{
+	nm_ui *u = nm__kui;
+	char *buf = NULL;
+	size_t len = 0, cap = 0;
+	int status, rc = 1, killed = 0;
+	nm__co = nm__ce = NULL;
+	if (nm__pfd < 0) { nm__ce = strdup("could not start a worker"); return 1; }
+	u->busy = 1; u->spin = 0;
+	snprintf(u->blabel, sizeof u->blabel, "%s", nm__klabel);
+	for (;;) {
+		struct pollfd p[2] = { { nm__pfd, POLLIN, 0 }, { 0, POLLIN, 0 } };
+		int pr = poll(p, nm__raw_on ? 2 : 1, 80);
+		if (pr > 0 && (p[0].revents & (POLLIN | POLLHUP))) {
+			char tmp[4096];
+			ssize_t n = read(nm__pfd, tmp, sizeof tmp);
+			if (n > 0) {
+				if (len + (size_t)n + 1 > cap) { cap = (len + (size_t)n + 1) * 2; buf = realloc(buf, cap); }
+				memcpy(buf + len, tmp, (size_t)n);
+				len += (size_t)n;
+				continue;
+			}
+			if (n == 0 || (errno != EINTR && errno != EAGAIN)) break;
+		}
+		if (pr > 0 && nm__raw_on && (p[1].revents & POLLIN) && !killed) {
+			int k = nm__read_key();
+			if (k == NM_K_ESC || k == 3) { kill(nm__kid, SIGKILL); killed = nm__cancelled = 1; }
+		}
+		if (pr == 0 || pr < 0) {
+			u->spin++;
+			if (nm__redraw && nm__raw_on) nm__redraw(u);
+		}
+	}
+	close(nm__pfd);
+	nm__pfd = -1;
+	while (waitpid(nm__kid, &status, 0) < 0 && errno == EINTR) {}
+	u->busy = 0;
+	if (killed) { free(buf); nm__ce = strdup("cancelled"); return 1; }
+	if (len >= 3 * sizeof(unsigned)) {
+		unsigned hdr[3];
+		memcpy(hdr, buf, sizeof hdr);
+		if (len >= sizeof hdr + hdr[1] + hdr[2]) {
+			nm__co = malloc(hdr[1] + 1); memcpy(nm__co, buf + sizeof hdr, hdr[1]); nm__co[hdr[1]] = 0;
+			nm__ce = malloc(hdr[2] + 1); memcpy(nm__ce, buf + sizeof hdr + hdr[1], hdr[2]); nm__ce[hdr[2]] = 0;
+			rc = (int)hdr[0];
+			free(buf);
+			return rc;
+		}
+	}
+	free(buf);
+	nm__ce = strdup("the worker died");
+	return rc;
+}
+
+/* run a library call in a worker; evaluates to its return code; nm__co / nm__ce then hold what it printed (nm__cap_free releases them) */
+#define NM_CALL(u, label, expr) (nm__fork((u), (label)) ? nm__wait() : nm__child_exit((expr)))
 
 /* report the outcome of a library call that has just been captured */
 static void nm__report(nm_ui *u, const char *what, int rc)
@@ -532,9 +880,7 @@ static void nm__report(nm_ui *u, const char *what, int rc)
 
 static void nm__refresh_status(nm_ui *u)
 {
-	nm__cap_begin();
-	nmb_status();
-	nm__cap_end();
+	(void)NM_CALL(u, "status", nmb_status());
 	u->nifs = nm_parse_status(nm__co ? nm__co : "", u->ifs, NM_MAXIF, u->swifi, u->sbt, sizeof u->swifi < sizeof u->sbt ? sizeof u->swifi : sizeof u->sbt);
 	nm__cap_free();
 }
@@ -558,20 +904,20 @@ static void nm__refresh(nm_ui *u)
 	if (u->tab == NM_WIFI) {
 		nm_net known[NM_MAXNET];
 		int nk, rc;
-		nm__busy(u, "scanning");
-		nm__cap_begin(); rc = nmb_wifi_list(); nm__cap_end();
+		rc = NM_CALL(u, "scanning networks", nmb_wifi_list());
 		if (rc) nm__report(u, "wifi list", rc);
 		else { u->nnets = nm_parse_wifi(nm__co ? nm__co : "", u->nets, NM_MAXNET); u->msg[0] = 0; }
 		nm__cap_free();
-		nm__cap_begin(); nmb_wifi_known(); nm__cap_end();
+		NM_CALL(u, "saved networks", nmb_wifi_known());
 		nk = nm_parse_known(nm__co ? nm__co : "", known, NM_MAXNET);
 		nm__cap_free();
+		nm_hist_push(u);
 		for (int i = 0; i < u->nnets; i++)
 			for (int j = 0; j < nk; j++)
 				if (!strcmp(u->nets[i].name, known[j].name)) { u->nets[i].known = 1; u->nets[i].autoc = known[j].autoc; }
 	} else if (u->tab == NM_BT) {
 		int rc;
-		nm__cap_begin(); rc = nmb_bt_list(); nm__cap_end();
+		rc = NM_CALL(u, "bluetooth", nmb_bt_list());
 		if (rc) nm__report(u, "bluetooth", rc);
 		else { u->ndevs = nm_parse_bt(nm__co ? nm__co : "", u->devs, NM_MAXDEV); u->msg[0] = 0; }
 		nm__cap_free();
@@ -603,8 +949,7 @@ static void nm__prompt(nm_ui *u, int kind, const char *label, int masked)
 static void nm__do_connect(nm_ui *u, const char *ssid, const char *pass)
 {
 	int rc;
-	nm__busy(u, "connecting");
-	nm__cap_begin(); rc = nmb_wifi_connect(ssid, pass); nm__cap_end();
+	rc = NM_CALL(u, "connecting", nmb_wifi_connect(ssid, pass));
 	nm__report(u, "connect", rc);
 	if (!rc && !u->msg[0]) nm__say(u, 0, "connected to", ssid);
 	nm__cap_free();
@@ -623,21 +968,19 @@ static void nm__prompt_done(nm_ui *u)
 	if (kind == PK_PASS) nm__do_connect(u, u->pa, val[0] ? val : NULL);
 	else if (kind == PK_WPSPIN) {
 		int rc;
-		nm__busy(u, "WPS pin");
-		nm__cap_begin(); rc = nmb_wifi_wps_pin(val[0] ? val : NULL); nm__cap_end();
+		rc = NM_CALL(u, "WPS pin", nmb_wifi_wps_pin(val[0] ? val : NULL));
 		nm__report(u, "wps pin", rc);
 		nm__cap_free();
 	} else if (kind == PK_HSSID) {
 		int rc;
 		if (!val[0]) {
-			nm__cap_begin(); rc = nmb_wifi_hotspot_stop(); nm__cap_end();
+			rc = NM_CALL(u, "stopping hotspot", nmb_wifi_hotspot_stop());
 			nm__report(u, "hotspot stop", rc);
 			nm__cap_free();
 		} else { nm__copy(u->pa, sizeof u->pa, val); nm__prompt(u, PK_HSPASS, "hotspot passphrase (8-63, empty = open): ", 1); }
 	} else if (kind == PK_HSPASS) {
 		int rc;
-		nm__busy(u, "starting hotspot");
-		nm__cap_begin(); rc = nmb_wifi_hotspot_start(u->pa, val[0] ? val : NULL); nm__cap_end();
+		rc = NM_CALL(u, "starting hotspot", nmb_wifi_hotspot_start(u->pa, val[0] ? val : NULL));
 		nm__report(u, "hotspot", rc);
 		nm__cap_free();
 	} else if (kind == PK_BTPIN) {
@@ -647,8 +990,7 @@ static void nm__prompt_done(nm_ui *u)
 		if (!d) return;
 		nm__copy(addr, sizeof addr, d->addr);
 		nmb_bt_set_pin(val[0] ? val : "0000");
-		nm__busy(u, "pairing");
-		nm__cap_begin(); rc = nmb_bt_action("pair", addr); nm__cap_end();
+		rc = NM_CALL(u, "bt pair", nmb_bt_action("pair", addr));
 		nm__report(u, "pair", rc);
 		nm__cap_free();
 		nmb_bt_set_pin(NULL);
@@ -662,7 +1004,7 @@ static void nm__confirmed(nm_ui *u)
 	int rc;
 	u->mode = NM_NORMAL;
 	if (u->ckind == 1) {
-		nm__cap_begin(); rc = nmb_wifi_forget(u->cwhat); nm__cap_end();
+		rc = NM_CALL(u, "forgetting", nmb_wifi_forget(u->cwhat));
 		nm__report(u, "forget", rc);
 		nm__cap_free();
 	} else {
@@ -670,7 +1012,7 @@ static void nm__confirmed(nm_ui *u)
 		char addr[18];
 		if (!d) return;
 		nm__copy(addr, sizeof addr, d->addr);
-		nm__cap_begin(); rc = nmb_bt_action("remove", addr); nm__cap_end();
+		rc = NM_CALL(u, "bt remove", nmb_bt_action("remove", addr));
 		nm__report(u, "remove", rc);
 		nm__cap_free();
 	}
@@ -682,15 +1024,19 @@ static void nm__wps(nm_ui *u, int key)
 	int rc;
 	u->mode = NM_NORMAL;
 	if (key == 'p') {
-		if (!getenv("NMB_WPS_SECS")) setenv("NMB_WPS_SECS", "30", 1);   /* the TUI cannot be interrupted while this waits */
-		nm__busy(u, "WPS: press the button on the router");
-		nm__cap_begin(); rc = nmb_wifi_wps_pbc(); nm__cap_end();
+		if (!getenv("NMB_WPS_SECS")) setenv("NMB_WPS_SECS", "30", 1);
+		rc = NM_CALL(u, "WPS: press the button on the router", nmb_wifi_wps_pbc());
 		nm__report(u, "wps", rc);
 		nm__cap_free();
+		if (nm__cancelled) {   /* esc killed the worker mid-handshake: tell wpa_supplicant / iwd to stop too */
+			(void)NM_CALL(u, "cancelling WPS", nmb_wifi_wps_cancel());
+			nm__cap_free();
+			nm__say(u, 1, "wps", "cancelled");
+		}
 		nm__refresh(u);
 	} else if (key == 'i') nm__prompt(u, PK_WPSPIN, "WPS pin (empty = generate): ", 0);
 	else if (key == 'c') {
-		nm__cap_begin(); rc = nmb_wifi_wps_cancel(); nm__cap_end();
+		rc = NM_CALL(u, "cancelling WPS", nmb_wifi_wps_cancel());
 		nm__report(u, "wps cancel", rc);
 		nm__cap_free();
 	}
@@ -710,8 +1056,7 @@ static void nm__enter(nm_ui *u)
 		char addr[18];
 		if (!d) return;
 		nm__copy(addr, sizeof addr, d->addr);
-		nm__busy(u, d->c ? "disconnecting" : "connecting");
-		nm__cap_begin(); rc = nmb_bt_action(d->c ? "disconnect" : "connect", addr); nm__cap_end();
+		rc = NM_CALL(u, d->c ? "disconnecting" : "connecting", nmb_bt_action(d->c ? "disconnect" : "connect", addr));
 		nm__report(u, d->c ? "disconnect" : "connect", rc);
 		nm__cap_free();
 		nm__refresh(u);
@@ -725,7 +1070,7 @@ static void nm__simple_bt(nm_ui *u, const char *action)
 	char addr[18];
 	if (!d) return;
 	nm__copy(addr, sizeof addr, d->addr);
-	nm__cap_begin(); rc = nmb_bt_action(action, addr); nm__cap_end();
+	rc = NM_CALL(u, action, nmb_bt_action(action, addr));
 	nm__report(u, action, rc);
 	nm__cap_free();
 	nm__refresh(u);
@@ -760,14 +1105,26 @@ static void nm__text_key(nm_ui *u, int key, int is_filter)
 
 void nm_ui_key(nm_ui *u, int key)
 {
-	if (u->mode == NM_HELP) { u->mode = NM_NORMAL; return; }
+	if (u->mode == NM_HELP) {
+		int inner = nm__help_inner(u), max = NM_NHELP - inner > 0 ? NM_NHELP - inner : 0;
+		if (key == NM_K_ESC || key == 'q' || key == '?' || key == 3) { u->mode = NM_NORMAL; return; }
+		if (key == 'j' || key == NM_K_DOWN) u->hoff++;
+		else if (key == 'k' || key == NM_K_UP) u->hoff--;
+		else if (key == NM_K_PGDN || key == ' ') u->hoff += inner - 1;
+		else if (key == NM_K_PGUP) u->hoff -= inner - 1;
+		else if (key == 'g' || key == NM_K_HOME) u->hoff = 0;
+		else if (key == 'G' || key == NM_K_END) u->hoff = max;
+		if (u->hoff > max) u->hoff = max;
+		if (u->hoff < 0) u->hoff = 0;
+		return;
+	}
 	if (u->mode == NM_FILTER) { nm__text_key(u, key, 1); return; }
 	if (u->mode == NM_PROMPT) { nm__text_key(u, key, 0); return; }
 	if (u->mode == NM_CONFIRM) { if (key == 'y' || key == 'Y') nm__confirmed(u); else u->mode = NM_NORMAL; return; }
 	if (u->mode == NM_WPS) { nm__wps(u, key); return; }
 	switch (key) {
 	case 'q': case 3: u->quit = 1; break;
-	case '?': u->mode = NM_HELP; break;
+	case '?': u->mode = NM_HELP; u->hoff = 0; break;
 	case 9: case 'l': case NM_K_RIGHT: nm__switch(u, u->tab + 1); break;
 	case NM_K_BTAB: case 'h': case NM_K_LEFT: nm__switch(u, u->tab - 1); break;
 	case '1': case '2': case '3': case '4': nm__switch(u, key - '1'); break;
@@ -784,7 +1141,7 @@ void nm_ui_key(nm_ui *u, int key)
 		if (u->tab == NM_WIFI) {
 			const nm_net *e = nm__cur_net(u);
 			int rc;
-			if (key == 'd') { nm__cap_begin(); rc = nmb_wifi_disconnect(); nm__cap_end(); nm__report(u, "disconnect", rc); nm__cap_free(); nm__refresh(u); }
+			if (key == 'd') { rc = NM_CALL(u, "disconnecting", nmb_wifi_disconnect()); nm__report(u, "disconnect", rc); nm__cap_free(); nm__refresh(u); }
 			else if (key == 'x' && e) { nm__copy(u->cwhat, sizeof u->cwhat, e->name); u->ckind = 1; u->mode = NM_CONFIRM; }
 			else if (key == 'a') {
 				if (!e || !e->known) nm__say(u, 1, "autoconnect", "not a saved network");
@@ -792,7 +1149,7 @@ void nm_ui_key(nm_ui *u, int key)
 					char ssid[64];
 					int on = e->autoc != 1;
 					nm__copy(ssid, sizeof ssid, e->name);
-					nm__cap_begin(); rc = nmb_wifi_autoconnect(ssid, on); nm__cap_end();
+					rc = NM_CALL(u, "autoconnect", nmb_wifi_autoconnect(ssid, on));
 					nm__report(u, on ? "autoconnect on" : "autoconnect off", rc);
 					nm__cap_free();
 					nm__refresh(u);
@@ -807,8 +1164,7 @@ void nm_ui_key(nm_ui *u, int key)
 			else if (key == 'x' && d) { nm__copy(u->cwhat, sizeof u->cwhat, d->alias[0] ? d->alias : d->addr); u->ckind = 2; u->mode = NM_CONFIRM; }
 			else if (key == 's') {
 				int rc;
-				nm__busy(u, "scanning");
-				nm__cap_begin(); rc = nmb_bt_scan(5); nm__cap_end();
+				rc = NM_CALL(u, "scanning bluetooth", nmb_bt_scan(5));
 				if (rc) nm__report(u, "scan", rc);
 				else { u->ndevs = nm_parse_bt(nm__co ? nm__co : "", u->devs, NM_MAXDEV); u->msg[0] = 0; }
 				nm__cap_free();
@@ -816,7 +1172,7 @@ void nm_ui_key(nm_ui *u, int key)
 				nm__clamp(u);
 			} else if (key == 'o') {
 				int rc, on = strstr(u->sbt, "adapter off") != NULL;
-				nm__cap_begin(); rc = nmb_bt_power(on); nm__cap_end();
+				rc = NM_CALL(u, "adapter power", nmb_bt_power(on));
 				nm__report(u, on ? "power on" : "power off", rc);
 				nm__cap_free();
 				nm__refresh(u);
@@ -828,7 +1184,6 @@ void nm_ui_key(nm_ui *u, int key)
 /* ---- terminal ----------------------------------------------------------------------------------------------------- */
 
 static struct termios nm__saved;
-static int nm__raw_on;
 static volatile sig_atomic_t nm__winch;
 
 static void nm__restore(void)
@@ -906,7 +1261,7 @@ int nm_tui(void)
 	struct sigaction sa;
 	const char *loc;
 	int utf;
-	if (!isatty(0) || !isatty(1)) { fputs("netmanager: the TUI needs a terminal\n", stderr); return 1; }
+	if (!isatty(0) || !isatty(1)) { fputs("netman: the TUI needs a terminal\n", stderr); return 1; }
 	loc = getenv("LC_ALL"); if (!loc || !*loc) loc = getenv("LC_CTYPE"); if (!loc || !*loc) loc = getenv("LANG");
 	utf = loc && (strcasestr(loc, "utf-8") || strcasestr(loc, "utf8"));
 	nm_theme_default(&nm__theme, utf);

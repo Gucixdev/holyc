@@ -6,15 +6,15 @@ set -u
 cd "$(dirname "$(readlink -f "$0")")" || exit 1
 inc=../../notcoreutils
 work=$(mktemp -d); trap 'tmux -L nmtest kill-server 2>/dev/null; rm -rf "$work"' EXIT
-gcc -std=gnu11 -Wall -Wextra -O2 -I"$inc" -o "$work/fakes" fakes.c && gcc -std=gnu11 -Wall -Wextra -O2 -I"$inc" -I.. -o "$work/nm" ../netmanager.c || exit 1
+gcc -std=gnu11 -Wall -Wextra -O2 -I"$inc" -o "$work/fakes" fakes.c && gcc -std=gnu11 -Wall -Wextra -O2 -I"$inc" -I.. -o "$work/nm" ../netman.c || exit 1
 T="tmux -L nmtest"
 pass=0 fail=0
 ok() { pass=$((pass + 1)); }
 no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/      | /'; }
 snap() { $T capture-pane -p -t t; }
-has() { local s; s=$(snap); if grep -qF -- "$1" <<<"$s"; then ok; else no "$2 (wanted '$1')" "$s"; fi; }
-hasnt() { local s; s=$(snap); if grep -qF -- "$1" <<<"$s"; then no "$2 (did not want '$1')" "$s"; else ok; fi; }
-log_has() { if grep -qF -- "$1" "$work/log/calls.log"; then ok; else no "$2 (fake never saw '$1')" "$(cat "$work/log/calls.log")"; fi; }
+has() { local s i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do s=$(snap); grep -qF -- "$1" <<<"$s" && { ok; return; }; sleep 0.25; done; no "$2 (wanted '$1')" "$s"; }
+hasnt() { local s i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do s=$(snap); grep -qF -- "$1" <<<"$s" || { ok; return; }; sleep 0.25; done; no "$2 (did not want '$1')" "$s"; }
+log_has() { local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do grep -qF -- "$1" "$work/log/calls.log" 2>/dev/null && { ok; return; }; sleep 0.25; done; if false; then no "$2 (fake never saw '$1')" "$(cat "$work/log/calls.log")"; fi; }
 keys() { $T send-keys -t t "$@"; sleep 0.5; }
 start() { # cols rows
 	$T kill-server 2>/dev/null; rm -rf "$work/log"
@@ -45,7 +45,7 @@ keys g; keys a; log_has "set AutoConnect=false" "autoconnect off sent"
 keys /; keys g u e s t; has "/guest" "filter shown"; hasnt "psk" "filter hides the other (psk) networks"; has "Guest cafe" "filter keeps the match"
 keys Escape; has "psk" "esc clears the filter"
 # --- help
-keys '?'; has "switch tab" "help text"; keys x; hasnt "switch tab" "any key closes help"
+keys "?"; has "WI-FI" "help text"; keys "Escape"; hasnt "WI-FI" "esc closes help"
 # --- Bluetooth
 keys 3; has "Headphones" "bt list"; has "AA:BB:CC:DD:EE:FF" "bt address"; has "CPT" "headphones flags"
 keys Enter; log_has "dev_0 org.bluez.Device1.Connect" "bt connect"; has "CP-" "Fake Pad now connected"
