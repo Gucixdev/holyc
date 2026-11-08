@@ -1,0 +1,20 @@
+# stage 2: netman's own C test binaries as real root in the VM. Their live parts refuse to run outside `unshare -Urn`, so each runs pure and in a fresh user+net namespace.
+. /qt/lib.sh
+loadmod dummy veth wireguard nf_tables nft_all nf_nat >/dev/null
+cd /repo/netman/tests || { fail tests.cd; exit 0; }
+lo() { ip link set lo up 2>/dev/null; }
+lo
+if [ -x /t/net_test ]; then need net_test ip unshare && run_logged net_test /t/net_test selftest; else skip net_test "not built"; fi
+if [ -x /t/priv_test ]; then run_logged priv_test /t/priv_test; else skip priv_test "not built"; fi
+if [ -x /t/vpn_test ]; then
+	run_logged vpn_test.pure /t/vpn_test
+	if need vpn_test.live ip unshare; then
+		if loadmod wireguard; then run_logged vpn_test.live /t/vpn_test ns; else skip vpn_test.live "wireguard module not available"; fi
+	fi
+else skip vpn_test "not built"; fi
+if [ -x /t/fw_test ]; then
+	run_logged fw_test.pure /t/fw_test
+	if need fw_test.live nft ip unshare; then
+		if loadmod nf_tables; then run_logged fw_test.live /t/fw_test ns; else skip fw_test.live "nf_tables module not available"; fi
+	fi
+else skip fw_test "not built"; fi

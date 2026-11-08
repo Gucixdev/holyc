@@ -1,0 +1,14 @@
+# stage 1: boot + kernel module sanity
+. /qt/lib.sh
+[ "$(id -u)" = 0 ] && pass boot.root || fail boot.root "not uid 0"
+[ -e /proc/self/ns/net ] && pass boot.proc || fail boot.proc
+mountpoint_ok() { grep -q " $1 " /proc/mounts; }
+mountpoint_ok /repo && pass boot.repo-9p || fail boot.repo-9p
+if touch /repo/.qt_write_probe 2>/dev/null; then fail boot.repo-readonly "repo share is WRITABLE"; rm -f /repo/.qt_write_probe; else pass boot.repo-readonly; fi
+touch /out/probe 2>/dev/null && pass boot.out-writable || fail boot.out-writable
+for m in dummy veth wireguard nf_tables mac80211_hwsim cfg80211 virtio_net; do
+	if [ ! -f /qt/mods/$m.list ]; then skip mod.$m "not in host kernel's module tree"; continue; fi
+	loadmod $m && pass mod.$m || fail mod.$m "$(tail -1 /out/modload.log)"
+done
+ip link add qd0 type dummy 2>/dev/null && ip link del qd0 && pass net.dummy-link || skip net.dummy-link "dummy not loadable"
+ip link add qv0 type veth peer name qv1 2>/dev/null && ip link del qv0 && pass net.veth-link || skip net.veth-link "veth not loadable"

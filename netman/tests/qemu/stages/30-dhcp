@@ -1,0 +1,24 @@
+# stage 3: netman's built-in DHCP client against QEMU's slirp DHCP/DNS (virtio NIC, restrict=on).
+. /qt/lib.sh
+[ -x /t/netman ] || { skip dhcp "netman not built"; exit 0; }
+need dhcp ip || exit 0
+loadmod virtio_net || { skip dhcp "virtio_net not available"; exit 0; }
+IF=$(ls /sys/class/net | grep -v '^lo$' | grep -E '^(eth|en)' | head -1)
+[ -n "$IF" ] || { fail dhcp "no ethernet device appeared"; exit 0; }
+ip link set "$IF" up
+timeout 30 /t/netman net dhcp "$IF" > /out/dhcp.log 2>&1; rc=$?
+cat /out/dhcp.log | head -5 | sed 's/^/  netman: /'
+[ $rc = 0 ] && pass dhcp.client-exit || fail dhcp.client-exit "rc=$rc"
+ip -4 addr show "$IF" | grep -q 'inet 10\.0\.2\.' && pass dhcp.address "$(ip -4 -o addr show "$IF" | awk '{print $4}')" || fail dhcp.address "$(ip -4 -o addr show "$IF")"
+# NOTE: with -nic restrict=on slirp answers DHCP WITHOUT router (3) and DNS (6) options (verified in the filter-dump pcap), so those two cannot be asserted
+# in this restricted VM; they are asserted only if the server sent them, otherwise SKIP with the reason.
+if grep -q '^router 10\.0\.2\.2' /out/dhcp.log; then ip route | grep -q '^default via 10\.0\.2\.2' && pass dhcp.gateway || fail dhcp.gateway "$(ip route | head -2 | tr '\n' ' ')"; else skip dhcp.gateway "slirp restrict=on sends no router option"; fi
+if grep -q '^dns 10\.0\.2\.3' /out/dhcp.log; then grep -qs '10\.0\.2\.3' /etc/resolv.conf && pass dhcp.dns || fail dhcp.dns "resolv.conf: $(cat /etc/resolv.conf 2>&1 | head -2)"; else skip dhcp.dns "slirp restrict=on sends no DNS option"; fi
+grep -q '^server 10\.0\.2\.2' /out/dhcp.log && grep -q '^lease 86400' /out/dhcp.log && pass dhcp.server-and-lease "server 10.0.2.2, 86400s" || fail dhcp.server-and-lease "$(head -4 /out/dhcp.log | tr '\n' '|')"
+# renew: second run must succeed and keep a 10.0.2.x lease
+timeout 30 /t/netman net dhcp "$IF" > /out/dhcp-renew.log 2>&1; rc=$?
+if [ $rc = 0 ] && ip -4 addr show "$IF" | grep -q 'inet 10\.0\.2\.'; then pass dhcp.renew; else fail dhcp.renew "rc=$rc $(tail -2 /out/dhcp-renew.log | tr '\n' '|')"; fi
+# restrict=on proof: outbound TCP to the host side and to the internet must fail (ICMP/ARP to 10.0.2.2 is answered by slirp itself, so ping proves nothing)
+leak=
+for hp in 10.0.2.2/22 10.0.2.2/80 1.1.1.1/443 1.1.1.1/53; do timeout 4 bash -c "exec 3<>/dev/tcp/${hp%/*}/${hp#*/}" 2>/dev/null && leak="$leak $hp"; done
+[ -z "$leak" ] && pass net.isolated "no TCP reached host or internet" || fail net.isolated "reachable:$leak"

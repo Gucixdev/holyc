@@ -1,0 +1,32 @@
+# stage 4: two mac80211_hwsim radios. AP side = hostapd when installed, else netman's own `wifi hotspot` (wpa_supplicant AP mode).
+# Station side = wpa_supplicant driven by netman wifi scan/connect. (iwd: see readme, not run here.)
+. /qt/lib.sh
+need wifi ip iw wpa_supplicant || exit 0
+[ -x /t/netman ] || { skip wifi "netman not built"; exit 0; }
+loadmod ccm gcm cmac seqiv aesni_intel >/dev/null 2>&1  # CCMP/GCMP/BIP ciphers for WPA2 (mac80211 needs them as modules on this kernel)
+loadmod mac80211_hwsim || { skip wifi "mac80211_hwsim not available"; exit 0; }
+sleep 1
+set -- $(ls /sys/class/net | grep -E '^wlan')
+[ -n "${2:-}" ] || { fail wifi.radios "need 2 hwsim interfaces, have: $*"; exit 0; }
+AP=$1 ST=$2; pass wifi.radios "$AP (AP) $ST (station)"
+mkdir -p /tmp/w /run/wpa_supplicant
+ip link set "$AP" up; ip link set "$ST" up
+if have hostapd; then
+	printf 'interface=%s\ndriver=nl80211\nssid=qtest-ap\nhw_mode=g\nchannel=6\nwpa=2\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nwpa_passphrase=qtest-passphrase\n' "$AP" > /tmp/w/hostapd.conf
+	hostapd -B /tmp/w/hostapd.conf > /out/hostapd.log 2>&1 && pass wifi.ap-hostapd || { fail wifi.ap-hostapd "$(tail -2 /out/hostapd.log | tr '\n' '|')"; exit 0; }
+else
+	printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=1\n' > /tmp/w/ap.conf
+	wpa_supplicant -B -i "$AP" -c /tmp/w/ap.conf -D nl80211 > /out/wpa-ap.log 2>&1 || { fail wifi.ap-supplicant "$(tail -2 /out/wpa-ap.log | tr '\n' '|')"; exit 0; }
+	sleep 1
+	NETMAN_IFACE=$AP NETMAN_AP_FREQ=2437 timeout 20 /t/netman wifi hotspot start qtest-ap qtest-passphrase > /out/wifi-hotspot.log 2>&1 \
+		&& pass wifi.ap-netman-hotspot "(no hostapd on host: AP made by netman via wpa_supplicant AP mode)" || { fail wifi.ap-netman-hotspot "$(tail -2 /out/wifi-hotspot.log | tr '\n' '|')"; exit 0; }
+fi
+printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=1\n' > /tmp/w/sta.conf
+wpa_supplicant -B -i "$ST" -c /tmp/w/sta.conf -D nl80211 > /out/wpa-sta.log 2>&1 && pass wifi.station-supplicant || { fail wifi.station-supplicant "$(tail -2 /out/wpa-sta.log | tr '\n' '|')"; exit 0; }
+sleep 2
+export NETMAN_IFACE=$ST
+timeout 30 /t/netman wifi scan > /out/wifi-scan.log 2>&1
+grep -q qtest-ap /out/wifi-scan.log && pass wifi.scan "$(grep qtest-ap /out/wifi-scan.log | head -1 | tr '\t' ' ' | cut -c1-80)" || fail wifi.scan "$(head -3 /out/wifi-scan.log | tr '\n' '|')"
+timeout 40 /t/netman wifi connect qtest-ap qtest-passphrase > /out/wifi-connect.log 2>&1; rc=$?
+for i in 1 2 3 4 5 6; do iw dev "$ST" link 2>&1 | grep -q 'SSID: qtest-ap' && break; sleep 1; done
+iw dev "$ST" link 2>&1 | grep -q 'SSID: qtest-ap' && pass wifi.connect-wpa2 "rc=$rc, iw link shows qtest-ap" || fail wifi.connect-wpa2 "rc=$rc $(tail -2 /out/wifi-connect.log | tr '\n' '|')"

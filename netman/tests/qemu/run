@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# run - boot a throw-away VM (host kernel, tiny initramfs) and run netman's risky system-level tests in it as real root.
+# No arguments. The host is never changed: no sysctl/modprobe/network config, nothing installed. Exit 0 = every non-SKIP stage passed.
+# Reusable by other projects (e.g. qlogin) through env: QT_STAGES_DIR (extra stage scripts), QT_PREP (host script, sourced, may call
+# qt_add_bin / qt_add_mod / qt_add_file), QT_TITLE, QT_TIMEOUT (seconds, default 120), QT_KEEP=1 (keep the temp dir).
+set -u
+here=$(dirname "$(readlink -f "$0")")
+repo=$(readlink -f "$here/../../..")          # git root (holyc): shared read-only into the VM at /repo
+src=$repo/netman
+TIMEOUT=${QT_TIMEOUT:-120}
+T=$(mktemp -d /tmp/netman-qemu.XXXXXX)
+ROOT=$T/root OUT=$T/out; mkdir -p "$ROOT" "$OUT"
+cleanup() { [ "${QT_KEEP:-0}" = 1 ] && echo "qemu-test: kept $T" >&2 || rm -rf "$T"; }
+trap cleanup EXIT
+die() { echo "qemu-test: $*" >&2; exit 2; }
+KVER=$(uname -r)
+for b in qemu-system-x86_64 cpio zstd gcc modprobe; do command -v "$b" >/dev/null || die "missing host tool '$b' (install it, e.g. ! sudo pacman -S qemu-system-x86 cpio zstd gcc kmod)"; done
+[ -r /dev/kvm ] && [ -w /dev/kvm ] || die "/dev/kvm not usable"
+KERNEL=${QT_KERNEL:-}
+for k in "$KERNEL" "/usr/lib/modules/$KVER/vmlinuz" "/boot/vmlinuz-linux" "/boot/vmlinuz-$KVER"; do [ -n "$k" ] && [ -r "$k" ] && { KERNEL=$k; break; }; done
+[ -r "$KERNEL" ] || die "no readable kernel image (tried /usr/lib/modules/$KVER/vmlinuz, /boot)"
+. "$here/mkroot.sh"
+qt_root_init
+
+# ---- netman tests, built on the host, static where possible (the VM has no libc besides what we copy) ----
+mkdir -p "$ROOT/t"
+build() { # name source [extra cc args]
+	local n=$1 s=$2; shift 2
+	if nice -n 19 gcc -std=gnu11 -O1 -static "$@" -o "$ROOT/t/$n" "$s" 2>"$T/cc-$n.log" || nice -n 19 gcc -std=gnu11 -O1 "$@" -o "$ROOT/t/$n" "$s" 2>>"$T/cc-$n.log"; then
+		qt_add_libs "$ROOT/t/$n"
+	else echo "qemu-test: build of $n failed (stage will FAIL/SKIP):"; tail -3 "$T/cc-$n.log"; rm -f "$ROOT/t/$n"; fi
+}
+cd "$src/tests" || die "no $src/tests"
+build net_test net_test.c
+build vpn_test vpn_test.c
+build fw_test fw_test.c -Wall -Wextra
+build priv_test priv_test.c -I../src
+cd "$src"
+build netman src/netman.c -Wall -Isrc -Isrc/mods src/config.c
+if [ -f "$repo/qlogin/src/qlogind.c" ] && [ -f "$repo/qlogin/tests/login1_test.c" ]; then
+	cd "$repo/qlogin"; build qlogind src/qlogind.c -Isrc/mods; build login1_test tests/login1_test.c
+fi
+
+# ---- the VM userland: host binaries + ldd-copied libs ----
+for b in bash sh ls cat mkdir mount umount insmod sleep grep sed timeout unshare nsenter ip nft wpa_supplicant iw dbus-daemon busctl hostapd iwd \
+	tr head tail wc date cp mv rm ln chmod kill env sort awk gawk mktemp id uname seq dmesg ping hostname true false tee uniq cut touch sync basename dirname; do
+	p=$(type -P "$b" 2>/dev/null) && qt_add_bin "$p"
+done
+[ -x /usr/lib/iwd/iwd ] && qt_add_bin /usr/lib/iwd/iwd
+[ -x /usr/lib/iwd/ead ] || true
+qt_add_file /etc/protocols; qt_add_file /etc/services
+printf 'root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/:/bin/false\n' > "$ROOT/etc/passwd"
+printf 'root:x:0:\nnobody:x:65534:\nnetdev:x:90:\n' > "$ROOT/etc/group"
+# kernel modules (dependency order resolved on the host with `modprobe --show-depends`; .zst decompressed)
+for m in virtio_net 9pnet_virtio 9p dummy veth cfg80211 mac80211 mac80211_hwsim wireguard nf_tables nft_ct nft_chain_nat nft_masq nft_reject_inet nft_limit nft_counter \
+	nf_conntrack nf_nat nf_log_syslog nft_compat rfkill af_packet tun ccm gcm cmac seqiv aesni_intel; do qt_add_mod "$m"; done
+# every nft_* expression module the host kernel ships, as one list "nft_all" (firewall.h rules use fib, log, ct, nat, reject, limit ...)
+: > "$ROOT/qt/mods/nft_all.list"
+for f in /usr/lib/modules/$KVER/kernel/net/{netfilter,ipv4/netfilter,ipv6/netfilter,bridge/netfilter}/nft_*.ko* /usr/lib/modules/$KVER/kernel/net/netfilter/nf_log_syslog.ko*; do
+	[ -e "$f" ] || continue; m=$(basename "$f"); m=${m%%.ko*}; qt_add_mod "$m"; cat "$ROOT/qt/mods/$m.list" >> "$ROOT/qt/mods/nft_all.list"
+done
+cp "$here/init" "$ROOT/init"; chmod +x "$ROOT/init"
+mkdir -p "$ROOT/qt/stages"; cp "$here/stages/"* "$ROOT/qt/stages/"; cp "$here/guestlib.sh" "$ROOT/qt/lib.sh"
+echo "${QT_ONLY:-.}" > "$ROOT/qt/only"
+[ -n "${QT_STAGES_DIR:-}" ] && cp "$QT_STAGES_DIR"/* "$ROOT/qt/stages/"
+[ -n "${QT_PREP:-}" ] && . "$QT_PREP"
+(cd "$ROOT" && find . | cpio -o -H newc --quiet 2>/dev/null | zstd -q -3 -o "$T/initramfs.zst") || die "initramfs build failed"
+echo "qemu-test: kernel $KERNEL, initramfs $(du -h "$T/initramfs.zst" | cut -f1), timeout ${TIMEOUT}s, log dir $T" >&2
+
+# ---- boot: user-mode NIC restricted (no host / internet reachability, no hostfwd), repo read-only, scratch dir for results ----
+nice -n 19 timeout -k 5 "$TIMEOUT" qemu-system-x86_64 -enable-kvm -cpu host -m 1G -smp 2 -nographic -no-reboot \
+	-kernel "$KERNEL" -initrd "$T/initramfs.zst" -append "console=ttyS0 rdinit=/init panic=-1 quiet loglevel=3" \
+	-nic user,id=n0,model=virtio-net-pci,restrict=on,net=10.0.2.0/24,dhcpstart=10.0.2.15 -object filter-dump,id=fd0,netdev=n0,file="$T/net.pcap" \
+	-fsdev local,id=repo,path="$repo",security_model=none,readonly=on -device virtio-9p-pci,fsdev=repo,mount_tag=repo \
+	-fsdev local,id=out,path="$OUT",security_model=none -device virtio-9p-pci,fsdev=out,mount_tag=out \
+	< /dev/null > "$T/serial.log" 2>&1
+qrc=$?
+[ $qrc = 124 ] || [ $qrc = 137 ] && echo "QTEST vm TIMEOUT (qemu killed after ${TIMEOUT}s)" >> "$T/serial.log"
+# ---- parse ----
+grep -a '^QTEST ' "$T/serial.log" | tr -d '\r' | tee "$T/results.txt"
+pass=$(grep -cE ' PASS( |$)' "$T/results.txt"); fail=$(grep -cE ' (FAIL|TIMEOUT)' "$T/results.txt"); skip=$(grep -c ' SKIP' "$T/results.txt")
+if ! grep -q '^QTEST summary' "$T/results.txt"; then echo "QTEST summary INCOMPLETE (VM did not reach the end; qemu rc=$qrc)"; fail=$((fail+1)); fi
+echo "qemu-test: $pass passed, $fail failed, $skip skipped"
+if [ "$fail" -gt 0 ]; then
+	QT_KEEP=1; echo "qemu-test: logs kept in $T (serial.log, out/<stage>.log)"
+	grep -a -B2 -A15 'FAIL' "$OUT"/*.log 2>/dev/null | head -60
+	exit 1
+fi
+exit 0

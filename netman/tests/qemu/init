@@ -1,0 +1,23 @@
+#!/usr/bin/bash
+# /init of the test VM: mount, load base modules, mount the repo (read-only) and the result dir, run every stage, print the summary, power off.
+export PATH=/usr/bin:/usr/lib/iwd
+mount -t proc proc /proc; mount -t sysfs sys /sys; mount -t devtmpfs dev /dev 2>/dev/null; mkdir -p /dev/pts /tmp; mount -t tmpfs tmp /tmp
+exec > /dev/console 2>&1 < /dev/console
+. /qt/lib.sh
+: > /qt/loaded
+echo "QTEST vm BOOT kernel $(uname -r)"
+loadmod 9pnet_virtio 9p virtio_net
+mkdir -p /repo /out
+mount -t 9p -o trans=virtio,version=9p2000.L,ro repo /repo 2>/out.err || echo "QTEST mount-repo FAIL $(cat /out.err)"
+mount -t 9p -o trans=virtio,version=9p2000.L out /out 2>>/out.err || echo "QTEST mount-out FAIL $(cat /out.err)"
+QT_FAILED=0
+for s in /qt/stages/*; do
+	[ -f "$s" ] || continue
+	basename "$s" | grep -qE "$(cat /qt/only)" || continue
+	timeout 100 bash "$s"; rc=$?
+	[ $rc = 124 ] && echo "QTEST $(basename "$s") FAIL stage timeout"
+done
+echo "QTEST summary done"
+sync
+echo 1 > /proc/sys/kernel/sysrq; echo o > /proc/sysrq-trigger
+sleep 5; echo b > /proc/sysrq-trigger
