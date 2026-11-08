@@ -1,5 +1,5 @@
 #!/bin/sh
-# wlroots-static - build the vendored wlroots (src/wlroots, 0.20.2) as a static library into build/wlroots, so the desktop
+# wlroots-static - build the vendored wlroots (src/resources/wlroots, 0.20.2) as a static library into build/wlroots, so the desktop
 # links it in and the system needs no wlroots package. `make` runs this by itself when the library is missing.
 # Needs meson, ninja and the dev packages wlroots itself needs (wayland, libdrm, pixman, libseat, libinput, xkbcommon,
 # mesa/egl, libdisplay-info, lcms2, ...); only wlroots is static, those stay shared. XWayland is built in; libliftoff is left out.
@@ -7,7 +7,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 P="$here/build/wlroots"
 [ -f "$P/lib/libwlroots-0.20.a" ] && exit 0
-cd "$here/src/wlroots"
+cd "$here/src/resources/wlroots"
 meson setup "$here/build/wlroots-obj" --wipe --prefix "$P" --libdir lib -Ddefault_library=static -Dbuildtype=release \
 	-Dexamples=false -Dxwayland=enabled -Dxcb-errors=disabled -Dlibliftoff=disabled > /dev/null 2>&1 ||
 	meson setup "$here/build/wlroots-obj" --prefix "$P" --libdir lib -Ddefault_library=static -Dbuildtype=release \

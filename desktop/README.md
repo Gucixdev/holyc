@@ -5,9 +5,28 @@ the status bar (`bar`, C, no forks in the hot path: /proc + NVML via dlopen) and
 symlink named `dwl`/`dmenu`/`lemonbar`/`bar`/`menu`/`stest` (`make` puts them in `bin/`). `make` builds (needs `holyc/dwl/.wlroots`, see
 `holyc/dwl/wlroots-static`), `make install` installs the binary and the applet links.
 
-How one binary holds programs that were separate: each is compiled with `-Dmain=<name>_main`, its objects are joined with `ld -r`, and
-`objcopy --keep-global-symbol=<name>_main` makes every other symbol local, so the copies of drw.c, util.c and the generated protocol code
-never clash and no program had to change. Config is compiled in, dwm style: `src/dwl/config.h`, `src/dmenu/config.h`.
+How one binary holds programs that were separate: each program is a group of objects joined with `ld -r`, and
+`objcopy --keep-global-symbol=<name>_main` makes every other symbol of the group local, so programs never clash over globals. Shared
+code exists once: `src/util.c`, and `src/drw.c` plus the client protocol glue (`src/protocols/client/`) inside the dmenu/menu/lemonbar group.
+Config is compiled in, dwm style: `src/config.c`, `src/theme.c`, `src/keys.c` (bindings) for the compositor, the top of `src/menu.c` for dmenu.
+
+Layout of `src/` (everything is our own code, forked from dwl, dmenu and lemonbar; licences in `src/LICENSES/`):
+
+| file | what |
+|---|---|
+| `dwl.h`, `client.h` | shared types, prototypes, globals of the compositor |
+| `compositor.c` | display, outputs, layer shell, lock, popups, setup/run/cleanup, `dwl_main` |
+| `client.c` | windows: map/unmap, focus, tags/views, layouts tile/float/monocle/deck/grid, XWayland |
+| `keys.c` | keyboards, key and mouse binding tables, pointer, cursor, tablets, drag, spawn/quit/chvt |
+| `config.c`, `theme.c` | rules, layouts, monitor/keyboard/trackpad settings; colours, borders, focus behaviour |
+| `settings.c`, `fx.c`, `ime.c` | control fifo/socket and session restore; border colour (effects hook); input-method relay |
+| `menu.c`, `stest.c` | dmenu picker + `menu` launcher; stest |
+| `lemonbar.c`, `bar.c` | the panel, and the status lines for it |
+| `drw.c/h`, `util.c/h`, `arg.h` | shared drawing, helpers |
+| `protocols/{server,client}/` | wayland-scanner output (server headers for dwl, client glue for dmenu/lemonbar) |
+| `resources/{wlroots,wtype,wvkbd}` | vendored third-party: wlroots is built in, wtype and wvkbd stay separate programs |
+
+`make BUILD=build-new OUT=build-new/desktop LINKDIR=build-new/bin` builds off to the side without touching `./desktop` or `bin/`.
 
 Not in the binary yet: wvkbd (on-screen keyboard) and wtype (cloned third-party C, built by `./run` into `bin/`), the `shot` and `clip`
 scripts (grim/slurp/cliphist wrappers), foot (the terminal) and Emacs.

@@ -1,85 +1,96 @@
-# desktop - build ONE executable from src/: dwl + dmenu + stest + menu + lemonbar (+ bar, tools as they are ported to C).
-# make            -> ./desktop
-# make install    -> $(PREFIX)/bin/desktop and one symlink per applet (dwl, dmenu, ...)
-# wlroots is vendored in src/wlroots and linked statically (built once into build/wlroots by ./wlroots-static); everything else comes from pkg-config.
-# How the programs share one binary: each is compiled with -Dmain=<name>_main, its objects are joined with `ld -r`, and objcopy
-# keeps only <name>_main global - every other symbol becomes local, so drw.c, util.c and the generated protocol code can exist
-# once per program without clashing, and no program is changed to fit.
+# desktop - build ONE executable from src/: the dwl compositor, the bar, the menu/dmenu picker, lemonbar, stest and small tools.
+# make                       -> ./desktop plus bin/<applet> symlinks
+# make install               -> $(PREFIX)/bin/desktop and one symlink per applet
+# make BUILD=build-new OUT=build-new/desktop LINKDIR=build-new/bin     (build somewhere else; the default paths stay untouched)
+# wlroots (src/resources/wlroots) is linked statically (built once into build/wlroots by ./wlroots-static); wtype and wvkbd in
+# src/resources are separate programs. Everything else comes from pkg-config.
+#
+# How the programs share one binary: every program is a group of objects joined with `ld -r`, and objcopy keeps only the group's
+# <name>_main entry points global - every other symbol becomes local, so two programs may both have a `drw` or a `main loop`
+# static-ish global without clashing. Shared code (src/util.c) stays global; src/drw.c and the client protocol glue are joined
+# into the dmenu/menu/lemonbar group ONCE and used by all three.
 CC       ?= cc
 WLROOTS  ?= $(CURDIR)/build/wlroots
+BUILD    ?= build
+OUT      ?= desktop
+LINKDIR  ?= bin
 OPT      ?= -O2
 PREFIX   ?= /usr/local
 APPLETS   = dwl dmenu stest menu lemonbar bar autostart wsw
 
 WLPC  = PKG_CONFIG_PATH=$(WLROOTS)/lib/pkgconfig pkg-config
 DWLCF = `pkg-config --cflags wayland-server xkbcommon libinput xcb xcb-icccm` `$(WLPC) --cflags wlroots-0.20` \
-        -Isrc/dwl -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -DVERSION=\"desktop\" -DXWAYLAND -Wno-unused-parameter
-CLICF = `pkg-config --cflags wayland-client xkbcommon fontconfig freetype2` -D_DEFAULT_SOURCE -D_GNU_SOURCE -D_XOPEN_SOURCE=700 -DVERSION=\"desktop\"
+        -Isrc -Isrc/protocols/server -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -DVERSION=\"desktop\" -DXWAYLAND -Wno-unused-parameter
+CLICF = `pkg-config --cflags wayland-client xkbcommon fontconfig freetype2` -Isrc -Isrc/protocols/client \
+        -D_DEFAULT_SOURCE -D_GNU_SOURCE -D_XOPEN_SOURCE=700 -DVERSION=\"desktop\"
 LIBS  = `pkg-config --libs wayland-server xkbcommon libinput xcb xcb-icccm wayland-client fontconfig freetype2` \
         `$(WLPC) --static --libs wlroots-0.20` -lm
 
-DMENU_SRC    = dmenu.c drw.c util.c wlr-layer-shell-unstable-v1-protocol.c xdg-shell-protocol.c
-LEMONBAR_SRC = lemonbar.c utils.c util.c drw.c wlr-layer-shell-unstable-v1-protocol.c xdg-shell-protocol.c
+DWL_SRC    = compositor client keys settings fx ime config theme
+CLIENT_SRC = menu lemonbar drw
+CLIENT_PROTO = xdg-shell-protocol wlr-layer-shell-unstable-v1-protocol
 
-all: desktop links
+all: $(OUT) links
 
 $(WLROOTS)/lib/libwlroots-0.20.a:
 	./wlroots-static
 
+# bin/<applet> -> the executable, so programs that run "dmenu" or "menu" through PATH find the applets
+links: $(OUT)
+	mkdir -p $(LINKDIR)
+	for a in $(APPLETS); do ln -sf `realpath -m --relative-to=$(LINKDIR) $(OUT)` $(LINKDIR)/$$a; done
 
-# bin/<applet> -> ../desktop, so programs that run "dmenu" or "menu" through PATH find the applets
-links: desktop
-	mkdir -p bin
-	for a in $(APPLETS); do ln -sf ../desktop bin/$$a; done
+$(BUILD):
+	mkdir -p $(BUILD)
 
-build:
-	mkdir -p build
+# --- compositor: src/{compositor,client,keys,settings,fx,ime,config,theme}.c share src/dwl.h
+$(BUILD)/dwl.%.o: src/%.c src/dwl.h src/client.h src/util.h $(WLROOTS)/lib/libwlroots-0.20.a | $(BUILD)
+	$(CC) -c $(OPT) $(DWLCF) $< -o $@
 
-# program object: compile (renaming main), join, hide everything but <name>_main
-build/dwl.o: src/dwl/dwl.c src/dwl/config.h $(WLROOTS)/lib/libwlroots-0.20.a | build
-	$(CC) -c $(OPT) $(DWLCF) -Dmain=dwl_main src/dwl/dwl.c -o build/dwl.raw.o
-	objcopy --keep-global-symbol=dwl_main build/dwl.raw.o $@
+$(BUILD)/dwl.o: $(addprefix $(BUILD)/dwl.,$(addsuffix .o,$(DWL_SRC)))
+	ld -r -o $(BUILD)/dwl.raw.o $^
+	objcopy --keep-global-symbol=dwl_main $(BUILD)/dwl.raw.o $@
 
-build/dmenu.o: $(addprefix src/dmenu/,$(DMENU_SRC)) | build
-	for f in $(DMENU_SRC); do $(CC) -c $(OPT) -std=gnu11 $(CLICF) -Isrc/dmenu -Dmain=dmenu_main src/dmenu/$$f -o build/dmenu.$$f.o || exit 1; done
-	ld -r -o build/dmenu.raw.o $(addprefix build/dmenu.,$(addsuffix .o,$(DMENU_SRC)))
-	objcopy --keep-global-symbol=dmenu_main build/dmenu.raw.o $@
+# --- dmenu + menu + lemonbar: one copy of drw.c and of the protocol glue
+$(BUILD)/cli.%.o: src/%.c src/drw.h src/util.h | $(BUILD)
+	$(CC) -c $(OPT) -std=gnu11 $(CLICF) $< -o $@
 
-build/stest.o: src/dmenu/stest.c | build
-	$(CC) -c $(OPT) -std=gnu11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -Isrc/dmenu -Dmain=stest_main src/dmenu/stest.c -o build/stest.raw.o
-	objcopy --keep-global-symbol=stest_main build/stest.raw.o $@
+$(BUILD)/cli.%.o: src/protocols/client/%.c | $(BUILD)
+	$(CC) -c $(OPT) -std=gnu11 $(CLICF) $< -o $@
 
-build/menu.o: src/dmenu/dmenu_menu.c | build
-	$(CC) -c $(OPT) -std=gnu11 -D_DEFAULT_SOURCE -Dmain=menu_main src/dmenu/dmenu_menu.c -o build/menu.raw.o
-	objcopy --keep-global-symbol=menu_main build/menu.raw.o $@
+$(BUILD)/clients.o: $(addprefix $(BUILD)/cli.,$(addsuffix .o,$(CLIENT_SRC) $(CLIENT_PROTO)))
+	ld -r -o $(BUILD)/clients.raw.o $^
+	objcopy --keep-global-symbol=dmenu_main --keep-global-symbol=menu_main --keep-global-symbol=lemonbar_main $(BUILD)/clients.raw.o $@
 
-build/lemonbar.o: $(addprefix src/lemonbar/,$(LEMONBAR_SRC)) | build
-	for f in $(LEMONBAR_SRC); do $(CC) -c $(OPT) -std=gnu11 $(CLICF) -Isrc/lemonbar -Dmain=lemonbar_main src/lemonbar/$$f -o build/lemonbar.$$f.o || exit 1; done
-	ld -r -o build/lemonbar.raw.o $(addprefix build/lemonbar.,$(addsuffix .o,$(LEMONBAR_SRC)))
-	objcopy --keep-global-symbol=lemonbar_main build/lemonbar.raw.o $@
+$(BUILD)/stest.o: src/stest.c src/arg.h | $(BUILD)
+	$(CC) -c $(OPT) -std=gnu11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -Isrc $< -o $(BUILD)/stest.raw.o
+	objcopy --keep-global-symbol=stest_main $(BUILD)/stest.raw.o $@
 
-build/bar.o: src/bar.c | build
-	$(CC) -c $(OPT) -std=gnu11 -Wall -Wextra -Dmain=bar_main_unused src/bar.c -o build/bar.raw.o
-	objcopy --keep-global-symbol=bar_main build/bar.raw.o $@
+$(BUILD)/util.o: src/util.c src/util.h | $(BUILD)
+	$(CC) -c $(OPT) -std=gnu11 -Wall -Wextra -Isrc $< -o $@
 
-build/autostart.o: src/autostart.c | build
-	$(CC) -c $(OPT) -std=gnu11 -Wall -Wextra -Dmain=autostart_main src/autostart.c -o build/autostart.raw.o
-	objcopy --keep-global-symbol=autostart_main build/autostart.raw.o $@
+$(BUILD)/bar.o: src/bar.c | $(BUILD)
+	$(CC) -c $(OPT) -std=gnu11 -Wall -Wextra -Dmain=bar_main_unused src/bar.c -o $(BUILD)/bar.raw.o
+	objcopy --keep-global-symbol=bar_main $(BUILD)/bar.raw.o $@
 
-build/wsw.o: src/wsw.c | build
-	$(CC) -c $(OPT) -std=gnu11 -D_DEFAULT_SOURCE -Wall -Wextra -Dmain=wsw_main src/wsw.c -o build/wsw.raw.o
-	objcopy --keep-global-symbol=wsw_main build/wsw.raw.o $@
+$(BUILD)/autostart.o: src/autostart.c | $(BUILD)
+	$(CC) -c $(OPT) -std=gnu11 -Wall -Wextra -Dmain=autostart_main src/autostart.c -o $(BUILD)/autostart.raw.o
+	objcopy --keep-global-symbol=autostart_main $(BUILD)/autostart.raw.o $@
 
-build/main.o: src/main.c | build
+$(BUILD)/wsw.o: src/wsw.c | $(BUILD)
+	$(CC) -c $(OPT) -std=gnu11 -D_DEFAULT_SOURCE -Wall -Wextra -Dmain=wsw_main src/wsw.c -o $(BUILD)/wsw.raw.o
+	objcopy --keep-global-symbol=wsw_main $(BUILD)/wsw.raw.o $@
+
+$(BUILD)/main.o: src/main.c | $(BUILD)
 	$(CC) -c $(OPT) -Wall -Wextra src/main.c -o $@
 
-desktop: build/main.o $(addprefix build/,$(addsuffix .o,$(APPLETS)))
+$(OUT): $(BUILD)/main.o $(BUILD)/util.o $(BUILD)/dwl.o $(BUILD)/clients.o $(BUILD)/stest.o $(BUILD)/bar.o $(BUILD)/autostart.o $(BUILD)/wsw.o
 	$(CC) -o $@ $^ $(LIBS)
 
-install: desktop
-	install -Dm755 desktop $(DESTDIR)$(PREFIX)/bin/desktop
+install: $(OUT)
+	install -Dm755 $(OUT) $(DESTDIR)$(PREFIX)/bin/desktop
 	for a in $(APPLETS); do ln -sf desktop $(DESTDIR)$(PREFIX)/bin/$$a; done
 
 clean:
-	rm -rf build desktop
+	rm -rf $(BUILD) $(OUT)
 .PHONY: all links install clean
