@@ -1,0 +1,22 @@
+.TH QLOGIND 8 "2026-11-08" "qlogin" "System Administration"
+.SH NAME
+qlogind \- small org.freedesktop.login1 service without cgroups or polkit
+.SH SYNOPSIS
+.B qlogind
+.SH DESCRIPTION
+Implements the subset of org.freedesktop.login1 listed in docs/login1-surface.md (Manager, Session, Seat, User objects; Inhibit; TakeControl/TakeDevice;
+power actions) and writes the sd_login state files under $QLOGIND_RUN/systemd. Sessions are tracked by a pipe returned from CreateSession,
+not by cgroups. Authorization is by uid only: root, or a user with a local session.
+.PP
+This build refuses to run unless
+.B DBUS_SYSTEM_BUS_ADDRESS
+is set, so it can never replace the login service that is running on a machine. Power actions only log "DRY RUN: would ..." unless
+.B real_power=1
+and a cmd_* line are present in the configuration.
+.SH ENVIRONMENT
+QLOGIND_RUN (default /run), QLOGIND_CONF (KEY=VALUE file: real_power, inhibit_delay_max, cmd_poweroff, cmd_reboot, cmd_halt, cmd_suspend, cmd_hibernate, cmd_hybrid, cmd_suspendhibernate),
+QLOGIND_VTFILE, QLOGIND_DEVDIR, QLOGIND_NAME.
+.SH BUGS
+No cgroups, no DRM master revoke or EVIOCREVOKE, no real VT switching (logged only), no polkit, no ScheduleShutdown. Never attached to a real system bus.
+.SH SEE ALSO
+.BR qlogin (1)

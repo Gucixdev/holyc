@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# qlogin in a private tmux with a FAKE PAM stack (PAM_CONFIG), a private dbus + qlogind, fake utmp/wtmp/lastlog files. Touches nothing real:
+# no /etc, no real logind, no setuid (test mode), nothing outside a mktemp dir.
+set -eu
+cd "$(dirname "$(readlink -f "$0")")"
+mkdir -p ../bin
+nice -n 19 gcc -std=gnu11 -Wall -Wextra -O1 -g -I../src/mods ../src/qlogin.c -lpam -o ../bin/qlogin
+nice -n 19 gcc -std=gnu11 -Wall -Wextra -O1 -g -I../src/mods ../src/qlogind.c -o ../bin/qlogind
+T=$(mktemp -d /tmp/qlogin-tui.XXXXXX); ME=$(id -un); UID_=$(id -u)
+mkdir -p "$T/run" "$T/dev" "$T/pam" "$T/sess" "$T/var/run" "$T/var/log" "$T/home"
+: > "$T/var/run/utmp"; : > "$T/var/log/wtmp"; : > "$T/var/log/lastlog"
+cat > "$T/chk" <<EOS
+#!/bin/sh
+p=\$(tr -d '\0\n')
+[ "\$PAM_USER" = "$ME" ] && [ "\$p" = "secret" ]
+EOS
+chmod +x "$T/chk"
+printf 'auth required pam_exec.so expose_authtok quiet %s/chk\nauth optional pam_permit.so\naccount required pam_permit.so\nsession required pam_permit.so\npassword required pam_permit.so\n' "$T" > "$T/pam/qlogin"
+printf '[Desktop Entry]\nName=Test session\nExec=sh -c "env > %s/env.out"\n' "$T" > "$T/sess/test.desktop"
+echo tty1 > "$T/vt"
+out=$(mktemp); dbus-daemon --session --print-address --fork --print-pid > "$out"
+addr=$(sed -n 1p "$out"); bpid=$(sed -n 2p "$out"); rm -f "$out"
+SOCK=qlt-$$; qpid=
+cleanup() { tmux -L $SOCK kill-server 2>/dev/null || true; [ -n "$qpid" ] && kill "$qpid" 2>/dev/null || true; kill "$bpid" 2>/dev/null || true; rm -rf "$T"; }
+trap cleanup EXIT
+DBUS_SYSTEM_BUS_ADDRESS="$addr" QLOGIND_RUN="$T/run" QLOGIND_VTFILE="$T/vt" QLOGIND_DEVDIR="$T/dev" ../bin/qlogind 2> "$T/qlogind.log" & qpid=$!
+for _ in $(seq 50); do busctl --address="$addr" status org.freedesktop.login1 >/dev/null 2>&1 && break; sleep 0.1; done
+fails=0
+ok() { echo "  ok: $1"; }
+bad() { echo "  FAIL: $1"; fails=$((fails+1)); }
+tm() { tmux -L $SOCK "$@"; }
+screen() { tm capture-pane -p -t q; }
+waitgone() { for _ in $(seq 100); do screen | grep -qF -- "$1" || return 0; sleep 0.1; done; return 1; }
+waitfor() { for _ in $(seq 60); do screen | grep -qF -- "$1" && return 0; sleep 0.1; done; return 1; }
+start() {
+  tm kill-server 2>/dev/null || true
+  tm new-session -d -x 80 -y 24 -s q "env QLOGIN_HOME=$T/home TERM=linux PAM_CONFIG=$T/pam QLOGIN_VAR=$T/var QLOGIN_SESSDIRS=$T/sess QLOGIN_DELAY_UNIT_MS=300 DBUS_SYSTEM_BUS_ADDRESS=$addr sh -c '../bin/qlogin $1; echo EXIT=\$?; sleep 60'"
+}
+# --- 1 timing line, prompt
+start "-t"
+waitfor "login:" && ok "prompt appears" || bad "no prompt"
+screen | grep -Eq 'first prompt after [0-9]+ us' && ok "-t prints microseconds ($(screen | grep -Eo 'after [0-9]+ us'))" || bad "-t line missing"
+# --- 2 three wrong passwords: lockout grows (300+600+1200 ms), password is never echoed
+t0=$(date +%s%N)
+for i in 1 2 3; do
+  tm send-keys -t q -l "$ME"; tm send-keys -t q Enter; waitfor "password:" || bad "no password prompt $i"
+  tm send-keys -t q -l "wrongpw$i"
+  screen | grep -q wrongpw && bad "password echoed"
+  tm send-keys -t q Enter; waitfor "Login incorrect" || bad "no failure message $i"
+  waitgone "Login incorrect" || bad "lockout never ended $i"
+  waitfor "login:" || bad "no prompt after failure $i"
+done
+ms=$(( ($(date +%s%N) - t0) / 1000000 ))
+[ "$ms" -ge 2100 ] && ok "lockout delays add up (${ms} ms >= 2100)" || bad "lockout too short (${ms} ms)"
+# --- 3 Ctrl-C at the password prompt returns to login, nothing leaks
+tm send-keys -t q -l "$ME"; tm send-keys -t q Enter; waitfor "password:"; tm send-keys -t q -l "secre"; tm send-keys -t q C-c
+sleep 0.3; screen | grep -q 'password:' && bad "Ctrl-C did not leave the password prompt" || ok "Ctrl-C returns to the login prompt"
+# --- 4 correct login, session picker, session runs with a logind session id
+tm send-keys -t q -l "$ME"; tm send-keys -t q Enter; waitfor "password:"; tm send-keys -t q -l "secret"; tm send-keys -t q Enter
+waitfor "choose a session" && ok "session picker lists sessions" || bad "no picker"
+screen | grep -q 'Test session' && screen | grep -q 'Shell (' && ok "picker shows desktop entry and shell" || bad "picker content"
+tm send-keys -t q Enter
+waitfor "EXIT=0" && ok "greeter exits 0 after the session ended" || bad "no clean exit"
+screen | grep -q secret && bad "password visible on screen" || ok "password never on screen"
+[ -s "$T/env.out" ] || bad "session did not run"
+grep -q '^XDG_SESSION_ID=c1$' "$T/env.out" && ok "XDG_SESSION_ID=c1 from qlogind" || bad "XDG_SESSION_ID missing: $(grep -c XDG "$T/env.out" || true)"
+grep -q "^XDG_RUNTIME_DIR=$T/run/user/$UID_\$" "$T/env.out" && ok "XDG_RUNTIME_DIR from qlogind" || bad "XDG_RUNTIME_DIR wrong: $(grep RUNTIME "$T/env.out" || true)"
+grep -q "^USER=$ME\$" "$T/env.out" && grep -q '^XDG_SESSION_TYPE=wayland$' "$T/env.out" && ok "USER and XDG_SESSION_TYPE set" || bad "env incomplete"
+[ -s "$T/var/log/wtmp" ] && ok "wtmp written ($(stat -c %s "$T/var/log/wtmp") bytes)" || bad "wtmp empty"
+[ -s "$T/var/log/lastlog" ] && ok "lastlog written" || bad "lastlog empty"
+[ "$(cat "$T/home/.config/qlogin/last" 2>/dev/null)" = "Test session" ] && ok "last choice remembered" || bad "last choice not saved"
+# the session ended, so qlogind must have dropped it
+sleep 0.5
+[ -z "$(ls "$T/run/systemd/sessions" 2>/dev/null | grep -v '\.ref$')" ] && ok "qlogind released the session after the greeter closed the fifo" || bad "session still registered: $(ls "$T/run/systemd/sessions")"
+# --- 5 Ctrl-D at an empty login prompt exits
+start ""
+waitfor "login:"; tm send-keys -t q C-d
+waitfor "EXIT=0" && ok "Ctrl-D at an empty login exits 0" || bad "Ctrl-D did not exit"
+# --- 6 refuses arguments and non-test mode without root
+../bin/qlogin --bogus 2>/dev/null && bad "accepted a bogus argument" || ok "bogus argument refused"
+[ "$UID_" = 0 ] || { env -u PAM_CONFIG ../bin/qlogin 2>&1 </dev/null | grep -q 'must run as root' && ok "refuses to run as non-root outside test mode" || bad "ran without root"; }
+if [ "$fails" -ne 0 ]; then echo "--- qlogind.log"; cat "$T/qlogind.log"; echo "run_qlogin: $fails FAILED"; exit 1; fi
+echo "run_qlogin: all ok"
