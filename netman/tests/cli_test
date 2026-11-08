@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# cli_test - the command table, help, man page, config gating and exit codes of the real binary. Nothing real is touched (privileges.sudo = never,
+# disabled modules are refused before any backend is contacted).
+set -u
+cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods src/netman.c src/config.c -o "$work/netman" || exit 1
+N="$work/netman"; pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; }
+export NETMAN_CONFIG="$work/c.conf"
+printf '[privileges]\nsudo = never\n' >"$work/c.conf"
+chk() { local want=$1 desc=$2; shift 2; local out rc; out=$("$@" 2>&1); rc=$?; [ "$rc" = "$want" ] && ok || no "$desc: rc $rc, wanted $want ($out)"; LAST=$out; }
+contains() { grep -qF -- "$1" <<<"$LAST" && ok || no "$2: wanted '$1' in: $LAST"; }
+
+chk 0 "help" "$N" help; contains "netman wifi connect" "help lists wifi connect"; contains "netman config toggle" "help lists config toggle"
+chk 0 "help one command" "$N" help wifi connect; contains "needs root" "help command shows the root flag"
+chk 0 "help group" "$N" help vpn; contains "vpn up" "help group"
+chk 0 "help tui" "$N" help tui; contains "GENERAL" "help tui = popup text"
+chk 0 "help config" "$N" help config; contains "wifi.backend" "help config lists keys"
+chk 2 "help unknown" "$N" help nosuchthing
+chk 2 "unknown command" "$N" frobnicate; contains "unknown command" "unknown command message"
+# every table row has help text and is reachable from `netman help`
+"$N" help >"$work/all"; "$N" help --man >"$work/man"
+cmp -s "$work/man" src/netman.1 && ok || no "src/netman.1 is out of date (regenerate: netman help --man > src/netman.1)"
+rows=$(grep -c '^  netman ' "$work/all"); [ "$rows" -ge 50 ] && ok || no "help lists $rows rows"
+# config
+chk 0 "config check" "$N" config check
+chk 0 "config show" "$N" config show; contains "rssi_good" "show lists keys"
+chk 0 "config set" "$N" config set wifi.rssi_good -50; chk 0 "config show after set" "$N" config show; contains "-50" "set value shown"
+chk 1 "config set bad value" "$N" config set wifi.rssi_good banana
+chk 1 "config typo" "$N" config set wifi.rssi_god -50; contains "wifi.rssi_good" "did-you-mean"
+chk 0 "config example" "$N" config example; contains "[wifi]" "example has sections"
+# module gating
+chk 0 "toggle wifi off" "$N" config toggle wifi.enabled
+chk 3 "disabled wifi" "$N" wifi list; contains "wifi disabled in config" "disabled message"
+chk 3 "disabled wifi connect" "$N" wifi connect X
+chk 0 "toggle wifi back" "$N" config toggle wifi.enabled
+chk 0 "toggle vpn off" "$N" config toggle vpn.enabled; chk 3 "disabled vpn" "$N" vpn list; contains "vpn disabled in config" "vpn message"
+chk 0 "fw plan still works when firewall is off" "$N" config set firewall.enabled no; chk 3 "fw apply gated" "$N" fw apply x; contains "firewall disabled" "fw message"
+# broken config: only help/config keep working
+printf 'this is not = [valid\n' >"$work/c.conf"
+chk 1 "broken config stops commands" "$N" status; chk 0 "help works with a broken config" "$N" help; chk 1 "config check reports it" "$N" config check
+echo "cli: $pass ok, $fail failed"
+[ "$fail" -eq 0 ]

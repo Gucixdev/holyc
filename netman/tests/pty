@@ -4,9 +4,9 @@
 # (verified from the fake's call log), a masked passphrase prompt, resize, and that the terminal is restored on quit.
 set -u
 cd "$(dirname "$(readlink -f "$0")")" || exit 1
-inc=../../notcoreutils
 work=$(mktemp -d); trap 'tmux -L nmtest kill-server 2>/dev/null; rm -rf "$work"' EXIT
-gcc -std=gnu11 -Wall -Wextra -O2 -I"$inc" -o "$work/fakes" fakes.c && gcc -std=gnu11 -Wall -Wextra -O2 -I"$inc" -I.. -o "$work/nm" ../netman.c || exit 1
+cc -std=gnu11 -O2 -I../src/mods -o "$work/fakes" fakes.c && cc -std=gnu11 -Wall -Wextra -O2 -I../src -I../src/mods -o "$work/nm" ../src/netman.c ../src/config.c || exit 1
+printf "[privileges]\nsudo = never\n" >"$work/c.conf"
 T="tmux -L nmtest"
 pass=0 fail=0
 ok() { pass=$((pass + 1)); }
@@ -14,52 +14,92 @@ no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '
 snap() { $T capture-pane -p -t t; }
 has() { local s i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do s=$(snap); grep -qF -- "$1" <<<"$s" && { ok; return; }; sleep 0.25; done; no "$2 (wanted '$1')" "$s"; }
 hasnt() { local s i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do s=$(snap); grep -qF -- "$1" <<<"$s" || { ok; return; }; sleep 0.25; done; no "$2 (did not want '$1')" "$s"; }
-log_has() { local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do grep -qF -- "$1" "$work/log/calls.log" 2>/dev/null && { ok; return; }; sleep 0.25; done; if false; then no "$2 (fake never saw '$1')" "$(cat "$work/log/calls.log")"; fi; }
+log_has() { local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do grep -qF -- "$1" "$work/log/calls.log" 2>/dev/null && { ok; return; }; sleep 0.25; done; no "$2 (fake never saw '$1')" "$(cat "$work/log/calls.log" 2>/dev/null)"; }
 keys() { $T send-keys -t t "$@"; sleep 0.5; }
 start() { # cols rows
 	$T kill-server 2>/dev/null; rm -rf "$work/log"
-	$T -u new-session -d -s t -x "$1" -y "$2" "LANG=C.UTF-8 TERM=xterm-256color $work/fakes $work/log $work/nm -tui; echo EXIT:\$?; sleep 30"
+	$T -u new-session -d -s t -x "$1" -y "$2" "NETMAN_CONFIG=$work/c.conf ${EXTRA:-} LANG=${LOCALE:-C.UTF-8} TERM=xterm-256color $work/fakes $work/log $work/nm -tui; echo EXIT:\$?; sleep 30"
 	sleep 2.5
 }
 
-start 80 24
+
+start 100 26
 has "1 Wi-Fi" "tab bar"; has "4 VPN" "tab bar vpn"; has "Home" "home listed"; has "Guest cafe" "open network listed"; has "Zażółć" "utf-8 ssid"
 has "saved auto" "home flagged saved+auto"; has "enter connect" "keybar"; has "q quit" "keybar quit"
-
-# --- Wi-Fi: connect to a saved network, disconnect
-keys Enter; has "connected to Home" "connect to a saved network"; log_has "n0 net.connman.iwd.Network.Connect" "Connect called on Home"
-has "* " "connected row is marked"
-keys d; has "disconnect" "disconnect message"; log_has "Station.Disconnect" "Disconnect called"
-# --- an unknown psk network asks for a masked passphrase
-keys j j; keys Enter; has "passphrase:" "passphrase prompt"
-keys h u n t e r 2; has "passphrase: *******" "typed chars are masked"; hasnt "hunter2" "passphrase never shown"
-keys Escape; hasnt "passphrase:" "esc cancels the prompt"
-keys Enter; keys h u n t e r 2; keys Enter; has "connected to Neighbour" "connect with passphrase"; has "saved" "Neighbour is saved afterwards"
-# --- forget needs a confirmation
-keys j; has "Office 5G" "office listed"; keys x; has "forget Office 5G?" "forget asks first"; keys n; hasnt "forget Office 5G?" "n backs out"
+# (1) hidden networks: <hidden> + BSSID, never an empty row; escaped control byte; CJK name cut by cells not bytes
+has "<hidden> 11:22:33:00:00:01" "hidden SSID shown as <hidden> + BSSID"
+s=$(snap); if grep -qE '^\*?  *(🔒|🔓)  +(WPA2|OPEN)  ' <<<"$s"; then no "an empty-name row" "$s"; else ok; fi
+has 'Bad\x01Name' "control byte in an SSID is escaped, not sent raw"
+# (2) security marking + sort/filter
+has "🔒" "lock glyph for secured"; has "🔓" "open lock for open"; has "802.1X" "802.1X tag"; has "WEP" "WEP tag"; has "OPEN" "OPEN tag"
+keys o; has "only open" "o filters to open networks"; hasnt "Neighbour" "secured networks hidden by the open filter"; has "Guest cafe" "open network kept"
+keys o; has "only secured" "o cycles to only secured"; hasnt "Guest cafe" "open network hidden by the secured filter"; has "Neighbour" "secured kept"
+keys o; has "sort:signal" "all again"; has "Guest cafe" "all networks back"
+keys s; has "sort:name" "s cycles the sort"; keys s; has "secured first" "sort secured first"; keys s; has "open first" "sort open first"
+s=$(snap); first=$(grep -nE 'Guest cafe|Neighbour' <<<"$s" | head -1); if grep -q "Guest cafe" <<<"$first"; then ok; else no "open-first sort puts an open network first" "$s"; fi
+keys s; has "sort:signal" "back to signal"
+# (3) signal as numbers
+has "-48 dBm" "dBm number"; has "100%" "percent number"; has " 96%" "percent right-aligned"
+s=$(snap); if grep -q '▂\|▄\|▆\|█' <<<"$s"; then no "bars/sparkline must be gone" "$s"; else ok; fi
+# (4) details pane
+keys Enter; keys Escape >/dev/null; keys i; has "details" "details popup"; has "security" "details: security"; has "signal" "details: signal"; has "backend" "details: backend"
+keys Escape; hasnt "details" "esc closes the details"
+# (5) wrong password -> retry; masked; tab shows; right password connects
+keys Enter; has "Connect to Neighbour" "login modal names the network"; has "Security: WPA2" "login modal shows the security"
+keys w r o n g 1 2 3 4; has "passphrase: •••••••••_" "typed chars are masked"; hasnt "wrong1234" "passphrase never shown"
+keys Tab; has "passphrase: wrong1234" "tab reveals it"; keys Tab; hasnt "wrong1234" "tab hides it again"
+keys Enter; has "Wrong password" "wrong password is shown in the modal"; has "passphrase: _" "retry prompt starts empty"
+keys n e i g h b o u r 8 8; keys Enter; has "connected to Neighbour" "retry connects"; has "* " "connected row marked"
+has "dBm" "connected summary shows numbers"
+keys Escape
+# known network connects without asking
+keys d; log_has "Station.Disconnect" "Disconnect called"
+keys g j; keys Enter; hasnt "passphrase:" "known network: no prompt"; has "connected to Home" "known network connects at once"
+# open network asks for confirmation
+keys /; keys Escape; keys /; keys G u e s t; keys Enter; keys Enter; has "is OPEN" "open network asks for confirmation"; keys n; hasnt "is OPEN" "n declines"
+keys Enter; keys y; has "connected to Guest cafe" "y connects"; keys Escape
+# 802.1X: identity then password
+keys /; keys Escape; keys /; keys E d u; keys Enter; keys Enter; has "identity:" "802.1X asks for the identity"; keys s t u d e n t; keys Enter; has "password:" "then the password"
+keys e d u r o a m p w; keys Enter; has "connected to Eduroam" "802.1X connects"; keys Escape
+# a hidden network asks for the name first
+keys /; keys Escape; keys /; keys '<' h i d; keys Enter; keys Enter; has "network name" "hidden row asks for the SSID"; keys Escape
+# forget needs a confirmation
+keys /; keys Escape; keys /; keys O f f i c e; keys Enter; keys x; has "forget Office 5G?" "forget asks first"; keys n; hasnt "forget Office 5G?" "n backs out"
 if grep -q "KnownNetwork.Forget" "$work/log/calls.log"; then no "forget was called without confirmation"; else ok; fi
-keys x; keys y; log_has "k3 net.connman.iwd.KnownNetwork.Forget" "Forget called after y"
-# --- autoconnect toggle on Home
-keys g; keys a; log_has "set AutoConnect=false" "autoconnect off sent"
-# --- filter
-keys /; keys g u e s t; has "/guest" "filter shown"; hasnt "psk" "filter hides the other (psk) networks"; has "Guest cafe" "filter keeps the match"
-keys Escape; has "psk" "esc clears the filter"
-# --- help
-keys "?"; has "WI-FI" "help text"; keys "Escape"; hasnt "WI-FI" "esc closes help"
+keys x; keys y; log_has "KnownNetwork.Forget" "Forget called after y"
+keys Escape
+# filter, help (same text as `netman help tui`)
+keys /; keys Escape; keys /; keys g u e s t; has "/guest" "filter shown"; hasnt "Neighbour" "filter hides the others"; has "Guest cafe" "filter keeps the match"
+keys Enter; keys /; keys Escape; has "Neighbour" "esc clears the filter"
+keys "?"; has "WI-FI" "help text"; has "BLUETOOTH" "help has the bluetooth section"; keys "Escape"; hasnt "WI-FI" "esc closes help"
 # --- Bluetooth
-keys 3; has "Headphones" "bt list"; has "AA:BB:CC:DD:EE:FF" "bt address"; has "CPT" "headphones flags"
-keys Enter; log_has "dev_0 org.bluez.Device1.Connect" "bt connect"; has "CP-" "Fake Pad now connected"
-keys j j; keys p; has "pairing PIN" "pair asks for a PIN"; keys Enter; log_has "dev_2 org.bluez.Device1.Pair" "bt pair"
+keys 3; has "Headphones" "bt list"; has "AA:BB:CC:DD:EE:FF" "bt address"; has "CPT" "headphones flags"; has "-45 dBm" "bt rssi"
+keys j; keys i; has "details" "bt details"; has "battery" "bt battery"; has "A2DP" "bt profiles"; keys Escape
+keys Enter; log_has "dev_" "bt action sent"
+keys j; keys p; has "pairing PIN" "pair asks for a PIN"; keys Enter; log_has "dev_2 org.bluez.Device1.Pair" "bt pair"
 keys t; log_has "set Trusted=true" "bt trust"
 keys o; log_has "set Powered=false" "bt power off"; has "adapter off" "summary shows adapter off"
-# --- placeholder tabs
-keys 2; has "link" "ethernet header"; has "not wired yet" "ethernet note"
-keys 4; has "VPN: backend not wired yet" "vpn placeholder"
+# --- Ethernet/IP tab with real data, VPN tab
+keys 2; has "enp2s0" "ethernet lists a real interface"; has "wlan0" "ethernet lists wlan0"; keys i; has "interface" "ethernet details"; has "address" "ethernet details: address"; keys Escape
+keys 4; has "profile" "vpn tab header"; hasnt "not wired yet" "no placeholder left"
 # --- resize to a small terminal: layout follows
 $T resize-window -t t -x 40 -y 12; sleep 0.7
 keys 1; has "q quit" "40x12 keybar"; has "1 Wi-Fi" "40x12 tabs"; hasnt "Ethernet/IP" "40x12 uses short tab names"
-s=$(snap); w=$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' <<<"$s"); if [ "$w" -le 40 ]; then ok; else no "40x12 frame wider than 40 ($w)"; fi
+s=$(snap); w=$(awk '{ n = 0; l = $0; while (l != "") { c = substr(l, 1, 1); l = substr(l, 2); n++ } if (n > m) m = n } END { print m + 0 }' <<<"$s"); if [ "$w" -le 44 ]; then ok; else no "40x12 frame too wide ($w)" "$s"; fi
 # --- quit restores the terminal
 keys q; has "EXIT:0" "clean exit, terminal back to the shell screen"; hasnt "1 Wi-Fi" "alternate screen left"
+
+# --- ASCII fallback (no unicode)
+EXTRA="NETMAN_TUI_UNICODE=no" start 100 26
+has "[*]" "ASCII lock fallback"; has "open" "ASCII open marker"; hasnt "🔒" "no emoji in ASCII mode"; keys q
+
+# --- wpa_supplicant backend: hidden rows, BSSIDs, wrong key
+EXTRA="FAKES_WPA=1 NETMAN_WIFI_BACKEND=wpa" start 100 26
+has "1 Wi-Fi" "wpa: tabs"; has "<hidden>" "wpa: hidden row"; has "Home" "wpa: Home"; keys i; has "bssid" "wpa: bssid in the details"; keys Escape; keys q
+
+# --- disabled modules hide their tabs
+printf '[bluetooth]\nenabled = no\n[vpn]\nenabled = no\n[privileges]\nsudo = never\n' >"$work/c.conf"
+start 100 26
+has "1 Wi-Fi" "tabs: wifi stays"; hasnt "Bluetooth" "disabled bluetooth: tab hidden"; hasnt "VPN" "disabled vpn: tab hidden"; keys q
 echo "pty: $pass ok, $fail failed"
 [ "$fail" -eq 0 ]

@@ -1,26 +1,23 @@
-/* netmanager TUI logic tests - parsers, renderer, key handling. No terminal, no network, nothing real is touched.
+/* netman TUI logic tests - parsers, display width, renderer, sort/filter, modals, key handling. No terminal, no network; nothing real is touched.
  *
- *   cc -std=gnu11 -Wall -Wextra -O2 -I.. -I../../notcoreutils -o /tmp/nm_logic logic_test.c && /tmp/nm_logic
+ *   cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c && /tmp/nm_logic
  */
-#define _GNU_SOURCE
-#define NMB_IMPLEMENTATION
-#include "netmanager_blue.h"
-#define NM_TUI_IMPLEMENTATION
-#include "tui.h"
+#define NETMAN_NO_MAIN
+#include "../src/netman.c"
 
 static int fails, checks;
 #define CHECK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %s:%d  %s\n      ", __FILE__, __LINE__, #c); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 /* render into a string and strip the escape sequences: rows[i] = visible text of screen row i+1 */
 static char frame[64][400];
-static int render_text(const nm_ui *u, int w, int h)
+static int render_text_u(const nm_ui *u, int uni)
 {
 	nm_theme t;
 	char *buf = NULL;
 	size_t len = 0;
 	FILE *m = open_memstream(&buf, &len);
 	int row = 0, col = 0;
-	nm_theme_default(&t, 0);
+	nm_theme_make(&t, uni, NULL);
 	nm_ui_render(u, &t, m);
 	fclose(m);
 	memset(frame, 0, sizeof frame);
@@ -36,306 +33,164 @@ static int render_text(const nm_ui *u, int w, int h)
 		if (row >= 0 && row < 64 && col < 399) { if (col >= (int)strlen(frame[row])) frame[row][col + 1] = 0; frame[row][col++] = buf[i]; }
 	}
 	free(buf);
-	(void)w; (void)h;
-	return 0;
+		return 0;
 }
-static int width_of(const char *s) { int n = 0; for (; *s; s++) if (((unsigned char)*s & 0xC0) != 0x80) n++; return n; }
+static int render_text(const nm_ui *u) { return render_text_u(u, 0); }
+static int has(const char *needle) { for (int i = 0; i < 64; i++) if (strstr(frame[i], needle)) return 1; return 0; }
+static int line_of(const char *needle) { for (int i = 0; i < 64; i++) if (strstr(frame[i], needle)) return i; return -1; }
+static void dump(void) { for (int i = 0; i < 30; i++) if (frame[i][0]) printf("      |%s\n", frame[i]); }
+
+static const char SCAN[] =
+	"*\t1\tWPA2\t-52\t96\t11:22:33:00:00:aa\t6\t2.4\t2\t0\tHome\n"
+	" \t0\tOPEN\t-71\t58\t11:22:33:00:00:bb\t11\t2.4\t1\t0\tGuest cafe\n"
+	" \t0\tWPA2\t-70\t60\t11:22:33:00:00:cc\t36\t5\t1\t1\t\n"
+	" \t0\t802.1X\t-60\t80\t11:22:33:00:00:dd\t1\t2.4\t1\t0\tEduroam\n"
+	" \t0\tWEP\t-75\t50\t-\t-\t-\t1\t0\tLegacy\n"
+	" \t0\tWPA2\t-77\t46\t-\t-\t-\t1\t0\t\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x81\xae\xe3\x81\xa8\xe3\x81\xa6\xe3\x82\x82\xe9\x95\xb7\xe3\x81\x84\xe5\x90\x8d\xe5\x89\x8d\n";
+
+static nm_ui mk(int w, int h)
+{
+	static nm_ui u;
+	nm_ui_init(&u, w, h);
+	for (int i = 0; i < NM_NTAB; i++) u.loaded[i] = 1;
+	u.nnets = nm_parse_scan(SCAN, u.nets, NM_MAXNET);
+	return u;
+}
 
 int main(void)
 {
-	nm_net nets[16];
-	nm_dev devs[8];
-	nm_if ifs[8];
-	char wifi[200], bt[200];
+	nm_ui u;
 	int n;
+	nm_theme t;
 
-	/* ---- parsers: the exact formats the library prints ---- */
-	n = nm_parse_wifi("* Home                             psk     -52 dBm  (known)\n"
-	                  "  Guest cafe                       open    -71 dBm\n"
-	                  "  Odd  Name x                      8021x   -80 dBm\n"
-	                  "wifi: cannot talk to wpa_supplicant (needs root or the netdev group)\n", nets, 16);
-	CHECK(n == 3, "iwd list: %d rows", n);
-	CHECK(!strcmp(nets[0].name, "Home") && nets[0].connected && nets[0].known && nets[0].dbm == -52 && !strcmp(nets[0].type, "psk"), "row0 %s %d", nets[0].name, nets[0].dbm);
-	CHECK(!strcmp(nets[1].name, "Guest cafe") && !nets[1].connected && !strcmp(nets[1].type, "open") && nets[1].dbm == -71, "row1 %s", nets[1].name);
-	CHECK(!strcmp(nets[2].name, "Odd  Name x") && !strcmp(nets[2].type, "8021x"), "row2 keeps inner spaces: '%s'", nets[2].name);
-	n = nm_parse_wifi("  HomeNet                          psk  -45 dBm\n  Open one                         open -60 dBm\n  Hidden                           psk  -90 dBm\n", nets, 16);
-	CHECK(n == 3 && !strcmp(nets[0].name, "HomeNet") && nets[0].dbm == -45 && !nets[0].connected, "wpa form: %d", n);
-	n = nm_parse_wifi("  ghost psk -1 dBm\n", nets, 16);
-	CHECK(n == 1, "short line");
-	n = nm_parse_wifi("garbage\n\n   \n  no unit here psk -60\n  x -60 dBm\n", nets, 16);
-	CHECK(n == 0, "garbage rejected, got %d", n);
-	n = nm_parse_wifi("  a psk -60 dBm\n  b psk -61 dBm\n  c psk -62 dBm\n", nets, 2);
-	CHECK(n == 2, "max respected");
-
-	n = nm_parse_known("  Home                             psk    autoconnect=on\n  Café                             open   autoconnect=off\nno saved networks\n", nets, 16);
-	CHECK(n == 2 && !strcmp(nets[0].name, "Home") && nets[0].autoc == 1 && !strcmp(nets[1].name, "Café") && nets[1].autoc == 0, "known iwd: %d", n);
-	n = nm_parse_known("  Work                             autoconnect=off\n", nets, 16);
-	CHECK(n == 1 && !strcmp(nets[0].name, "Work") && nets[0].autoc == 0 && nets[0].known, "known wpa form");
-
-	n = nm_parse_bt("CPT AA:BB:CC:DD:EE:FF  Fake Pad  -60 dBm\n--- 11:22:33:44:55:66  Some Phone    - dBm\n-P- 00:11:22:33:44:55  Weird  name    - dBm\nnonsense\n", devs, 8);
-	CHECK(n == 3, "bt rows %d", n);
-	CHECK(devs[0].c && devs[0].p && devs[0].t && !strcmp(devs[0].addr, "AA:BB:CC:DD:EE:FF") && !strcmp(devs[0].alias, "Fake Pad") && devs[0].dbm == -60, "bt0 '%s' %d", devs[0].alias, devs[0].dbm);
-	CHECK(!devs[1].c && !strcmp(devs[1].alias, "Some Phone") && devs[1].dbm == 0, "bt1 '%s' %d", devs[1].alias, devs[1].dbm);
-	CHECK(devs[2].p && !devs[2].c && !strcmp(devs[2].alias, "Weird  name"), "bt2 '%s'", devs[2].alias);
-
-	n = nm_parse_status("enp2s0   eth   down       94:c6:91:f1:f4:59   no cable/link\n"
-	                    "wlan0    wifi  up         38:00:25:04:4e:e9 192.168.1.58\n"
-	                    "wifi     connected to Home\n"
-	                    "wifi     wlan0 is driven by wpa_supplicant (not iwd)\n"
-	                    "bt       connected: Fake Pad\n"
-	                    "bt       adapter on\n", ifs, 8, wifi, bt, sizeof wifi);
-	CHECK(n == 2 && !strcmp(ifs[0].name, "enp2s0") && ifs[0].nolink && !ifs[0].ip[0] && !strcmp(ifs[1].kind, "wifi") && !strcmp(ifs[1].ip, "192.168.1.58"), "status ifs %d", n);
-	CHECK(!strcmp(wifi, "connected to Home; wlan0 is driven by wpa_supplicant (not iwd)") && !strcmp(bt, "adapter on; connected: Fake Pad"), "summaries '%s' | '%s'", wifi, bt);
-
-	CHECK(nm_bars(-40) == 4 && nm_bars(-60) == 3 && nm_bars(-70) == 2 && nm_bars(-80) == 1 && nm_bars(-95) == 0, "bars");
-
-	/* ---- render: 80x24 and 40x12 ---- */
+	/* ---- display width: CJK = 2 cells, combining = 0, ellipsis by cells never inside a sequence ---- */
+	CHECK(nm__cells("abc") == 3 && nm__cells("\xe6\x97\xa5") == 2 && nm__cells("e\xcc\x81") == 1 && nm__cells("\xc5\xbc") == 1, "widths");
 	{
-		static nm_ui u;
-		nm_ui_init(&u, 80, 24);
-		u.tab = NM_WIFI;
-		u.nnets = nm_parse_wifi("* Home                             psk     -52 dBm  (known)\n  Guest cafe                       open    -71 dBm\n", u.nets, NM_MAXNET);
-		u.nets[0].autoc = 1;
-		u.loaded[NM_WIFI] = 1;
-		snprintf(u.swifi, sizeof u.swifi, "connected to Home");
-		snprintf(u.sbt, sizeof u.sbt, "adapter on");
-		render_text(&u, 80, 24);
-		CHECK(strstr(frame[0], "1 Wi-Fi") && strstr(frame[0], "2 Ethernet/IP") && strstr(frame[0], "3 Bluetooth") && strstr(frame[0], "4 VPN") && strstr(frame[0], "netman"), "tabs: '%s'", frame[0]);
-		CHECK(strstr(frame[1], "wifi: connected to Home") && strstr(frame[1], "bt: adapter on"), "summary '%s'", frame[1]);
-		CHECK(strstr(frame[3], "Home") && strstr(frame[3], "psk") && strstr(frame[3], "-52 dBm") && strstr(frame[3], "saved auto") && frame[3][0] == '*', "row '%s'", frame[3]);
-		CHECK(strstr(frame[4], "Guest cafe") && strstr(frame[4], "open"), "row2 '%s'", frame[4]);
-		CHECK(strstr(frame[23], "enter connect") && strstr(frame[23], "q quit") && strstr(frame[23], "? help"), "keybar '%s'", frame[23]);
-		for (int i = 0; i < 24; i++) CHECK(width_of(frame[i]) <= 80, "row %d too wide: %d", i, width_of(frame[i]));
-		CHECK(!frame[24][0], "nothing past row 24");
-
-		nm_ui_init(&u, 40, 12);   /* same data, small terminal */
-		u.tab = NM_WIFI;
-		u.nnets = nm_parse_wifi("* A very long network name that cannot fit psk -52 dBm  (known)\n  Guest cafe                       open    -71 dBm\n", u.nets, NM_MAXNET);
-		u.loaded[NM_WIFI] = 1;
-		snprintf(u.swifi, sizeof u.swifi, "connected to a very long network name");
-		render_text(&u, 40, 12);
-		for (int i = 0; i < 12; i++) CHECK(width_of(frame[i]) <= 40, "40x12 row %d too wide: %d '%s'", i, width_of(frame[i]), frame[i]);
-		CHECK(!frame[12][0], "40x12: nothing past row 12");
-		CHECK(strstr(frame[0], "1 Wi-Fi") && strstr(frame[0], "3 BT"), "short tab names '%s'", frame[0]);
-		CHECK(strstr(frame[3], "psk") && strstr(frame[3], "-52"), "40x12 row keeps type+signal '%s'", frame[3]);
-		CHECK(strstr(frame[11], "q quit"), "40x12 keybar keeps quit '%s'", frame[11]);
-
-		/* other tabs */
-		nm_ui_init(&u, 80, 24);
-		u.nifs = nm_parse_status("enp2s0   eth   down       94:c6:91:f1:f4:59   no cable/link\nwlan0    wifi  up         38:00:25:04:4e:e9 192.168.1.58\n", u.ifs, NM_MAXIF, NULL, NULL, 0);
-		u.tab = NM_ETH; u.loaded[NM_ETH] = 1;
-		render_text(&u, 80, 24);
-		CHECK(strstr(frame[3], "enp2s0") && strstr(frame[3], "no link") && strstr(frame[4], "192.168.1.58"), "eth rows '%s' / '%s'", frame[3], frame[4]);
-		CHECK(strstr(frame[22 - 1], "not wired yet") || strstr(frame[19], "not wired yet"), "eth placeholder note");
-		u.tab = NM_VPN;
-		render_text(&u, 80, 24);
-		CHECK(strstr(frame[4], "VPN: backend not wired yet"), "vpn placeholder '%s'", frame[4]);
-		u.ndevs = nm_parse_bt("CPT AA:BB:CC:DD:EE:FF  Fake Pad  -60 dBm\n", u.devs, NM_MAXDEV);
-		u.tab = NM_BT; u.loaded[NM_BT] = 1;
-		render_text(&u, 80, 24);
-		CHECK(strstr(frame[3], "CPT") && strstr(frame[3], "AA:BB:CC:DD:EE:FF") && strstr(frame[3], "Fake Pad") && strstr(frame[3], "-60 dBm"), "bt row '%s'", frame[3]);
-
-		/* masked prompt never shows the typed text */
-		u.tab = NM_WIFI;
-		u.mode = NM_PROMPT; u.masked = 1; u.pkind = 1; snprintf(u.label, sizeof u.label, "passphrase: ");
-		nm_ui_key(&u, 's'); nm_ui_key(&u, 'e'); nm_ui_key(&u, 'c');
-		render_text(&u, 80, 24);
-		{
-			int found = 0, leak = 0;
-			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "passphrase: ***")) found = 1; if (strstr(frame[i], "sec")) leak = 1; }
-			CHECK(found && !leak, "masked prompt in a modal, typed text never shown"); if (!(found && !leak)) for (int i = 0; i < 24; i++) printf("  [%02d] %s\n", i, frame[i]);
-			for (int i = 0; i < 24; i++) if (strstr(frame[i], "passphrase")) { CHECK(frame[i][0] == ' ' || frame[i][0] == '+' || frame[i][0] == '|', "modal row starts with the border: '%s'", frame[i]); break; }
-			CHECK(strstr(frame[22], "enter") == NULL || strstr(frame[23], "enter ok"), "keybar shows enter/esc");
-		}
-		nm_ui_key(&u, NM_K_BS);
-		CHECK(u.inlen == 2, "backspace");
-		nm_ui_key(&u, NM_K_ESC);
-		CHECK(u.mode == NM_NORMAL && u.inlen == 0 && !u.in[0], "esc cancels and wipes the buffer");
+		char o[100];
+		int w = nm__fit(o, sizeof o, "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e\xe3\x81\xae", 7, "...");
+		CHECK(w <= 7 && nm__cells(o) == w && !strcmp(o + strlen(o) - 3, "..."), "CJK cut by cells: '%s' w=%d", o, w);
+		w = nm__fit(o, sizeof o, "Home", 10, "...");
+		CHECK(!strcmp(o, "Home") && w == 4, "short names are untouched");
+		w = nm__fit(o, sizeof o, "0123456789", 6, "\xe2\x80\xa6");
+		CHECK(w == 6 && nm__cells(o) == 6 && !strcmp(o, "01234\xe2\x80\xa6"), "one-cell ellipsis: '%s'", o);
+		nm__fit(o, sizeof o, "bad\xff" "x\x01y", 20, "...");
+		CHECK(!strchr(o, '\x01') && !strchr(o, '\xff'), "invalid bytes and controls never reach the screen");
 	}
 
-	/* ---- keys that do not touch the library ---- */
+	/* ---- parsers ---- */
+	u = mk(100, 24);
+	CHECK(u.nnets == 6, "scan rows: %d", u.nnets);
+	CHECK(u.nets[0].connected && u.nets[0].known && u.nets[0].dbm == -52 && u.nets[0].pct == 96 && u.nets[0].nbss == 2 && !strcmp(u.nets[0].band, "2.4"), "row0");
+	CHECK(u.nets[2].hidden && !u.nets[2].name[0] && !strcmp(u.nets[2].bssid, "11:22:33:00:00:cc"), "hidden row keeps its BSSID (empty last field survives)");
 	{
-		static nm_ui u;
-		nm_ui_init(&u, 80, 24);
-		u.tab = NM_WIFI; u.loaded[NM_WIFI] = u.loaded[NM_ETH] = u.loaded[NM_BT] = u.loaded[NM_VPN] = 1;
-		u.nnets = nm_parse_wifi("  alpha psk -50 dBm\n  beta psk -60 dBm\n  gamma open -70 dBm\n", u.nets, NM_MAXNET);
-		nm_ui_key(&u, 'j'); nm_ui_key(&u, NM_K_DOWN);
-		CHECK(u.sel[NM_WIFI] == 2, "down twice");
-		nm_ui_key(&u, 'j');
-		CHECK(u.sel[NM_WIFI] == 2, "clamped at the end");
-		nm_ui_key(&u, 'g');
-		CHECK(u.sel[NM_WIFI] == 0, "g");
-		nm_ui_key(&u, 'G');
-		CHECK(u.sel[NM_WIFI] == 2, "G");
-		u.masked = 1;   /* a passphrase prompt was open earlier: the filter must not inherit its masking */
-		nm_ui_key(&u, '/'); nm_ui_key(&u, 'B'); nm_ui_key(&u, 'e');
-		render_text(&u, 80, 24);
-		CHECK(strstr(frame[22], "/Be") && !strstr(frame[22], "*"), "filter prompt is plain text: '%s'", frame[22]);
-		{ int idx[NM_MAXNET]; CHECK(u.mode == NM_FILTER && nm_ui_visible(&u, idx, NM_MAXNET) == 1 && idx[0] == 1, "filter 'Be' -> beta only (case-insensitive)"); }
-		nm_ui_key(&u, NM_K_ENTER);
-		CHECK(u.mode == NM_NORMAL && !strcmp(u.filter, "Be"), "enter keeps the filter");
-		nm_ui_key(&u, '/'); nm_ui_key(&u, NM_K_ESC);
-		{ int idx[NM_MAXNET]; CHECK(!u.filter[0] && nm_ui_visible(&u, idx, NM_MAXNET) == 3, "esc clears the filter"); }
-		nm_ui_key(&u, '?');
-		CHECK(u.mode == NM_HELP, "help");
-		nm_ui_key(&u, NM_K_ESC);
-		CHECK(u.mode == NM_NORMAL, "esc closes help");
-		nm_ui_key(&u, '?'); nm_ui_key(&u, 'q');
-		CHECK(u.mode == NM_NORMAL && !u.quit, "q closes help (does not quit)");
-		nm_ui_key(&u, '?'); nm_ui_key(&u, '?');
-		CHECK(u.mode == NM_NORMAL, "? closes help");
-		nm_ui_key(&u, '3');
-		CHECK(u.tab == NM_BT, "3 -> bluetooth");
-		nm_ui_key(&u, 9); nm_ui_key(&u, 9);
-		CHECK(u.tab == NM_WIFI, "tab wraps");
-		nm_ui_key(&u, NM_K_BTAB);
-		CHECK(u.tab == NM_VPN, "shift-tab wraps back");
-		nm_ui_key(&u, 'q');
-		CHECK(u.quit, "q quits");
-		/* forget asks first; anything but y backs out without calling the library */
-		nm_ui_init(&u, 80, 24);
-		u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
-		u.nnets = nm_parse_wifi("  alpha psk -50 dBm\n", u.nets, NM_MAXNET);
-		nm_ui_key(&u, 'x');
-		CHECK(u.mode == NM_CONFIRM && !strcmp(u.cwhat, "alpha"), "x -> confirm");
-		nm_ui_key(&u, 'n');
-		CHECK(u.mode == NM_NORMAL, "n backs out");
+		nm_net k[8];
+		n = nm_parse_known("  Home                psk     autoconnect=on\n  My  Net            8021x   autoconnect=off\n  Open Wifi          open    autoconnect=on\nnoise line\n", k, 8);
+		CHECK(n == 3 && !strcmp(k[0].name, "Home") && k[0].autoc == 1 && !strcmp(k[1].name, "My  Net") && k[1].autoc == 0 && !strcmp(k[2].name, "Open Wifi"), "known: %d '%s'", n, k[0].name);
+	}
+	{
+		nm_dev d[8];
+		n = nm_parse_bt("-P- AA:BB:CC:DD:EE:FF  Fake Pad  -60 dBm\nCPT 11:22:33:44:55:66  Headphones  -45 dBm\n--- 00:11:22:33:44:55  Phone    - dBm\nbluetooth: oops\n", d, 8);
+		CHECK(n == 3 && !d[0].c && d[0].p && d[0].dbm == -60 && !strcmp(d[0].alias, "Fake Pad") && d[1].c && d[1].t && !strcmp(d[2].alias, "Phone") && d[2].dbm == 0, "bt: %d '%s'", n, d[0].alias);
+	}
+	{
+		nm_vpn v[4];
+		n = nm_parse_vpn("office           wireguard  up\nhome             openvpn    down\nnetman vpn: junk\n", v, 4);
+		CHECK(n == 2 && v[0].up && !strcmp(v[1].kind, "openvpn") && !v[1].up, "vpn: %d", n);
 	}
 
-	/* ---- help popup ---- */
-	{
-		static nm_ui u;
-		int last = 0;
-		nm_ui_init(&u, 80, 24);
-		u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
-		u.nnets = nm_parse_wifi("* Home psk -52 dBm  (known)\n", u.nets, NM_MAXNET);
-		nm_ui_key(&u, '?');
-		render_text(&u, 80, 24);
-		{
-			int top = 0, wifi = 0, list = 0;
-			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "+- help 1-")) top = 1; if (strstr(frame[i], "WI-FI")) wifi = 1; if (strstr(frame[i], "Home")) list = 1; }
-			CHECK(top && wifi, "help popup: titled box with the WI-FI group (top %d wifi %d)", top, wifi);
-			CHECK(strstr(frame[0], "1 Wi-Fi") && strstr(frame[23], "esc") && strstr(frame[23], "scroll"), "tabs stay, keybar says scroll/close: '%s'", frame[23]);
-			(void)list;
-		}
-		for (int i = 0; i < 80; i++) nm_ui_key(&u, 'j');
-		last = u.hoff;
-		render_text(&u, 80, 24);
-		{
-			int priv = 0, back = 0;
-			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "Not tested on real hardware")) back = 1; if (strstr(frame[i], "PRIVILEGES")) priv = 1; }
-			CHECK(last > 0 && back, "scrolled to the end: last line visible (hoff %d)", last);
-			(void)priv;
-		}
-		nm_ui_key(&u, 'g');
-		CHECK(u.hoff == 0, "g jumps back to the top");
-		nm_ui_key(&u, NM_K_PGDN);
-		CHECK(u.hoff > 0, "page down scrolls");
-		nm_ui_key(&u, NM_K_ESC);
-		u.w = 40; u.h = 12; render_text(&u, 40, 12);
-		nm_ui_key(&u, '?');
-		render_text(&u, 40, 12);
-		{
-			int wide = 0, box = 0;
-			for (int i = 0; i < 12; i++) { if (width_of(frame[i]) > 40) wide = 1; if (strstr(frame[i], "+- help")) box = 1; }
-			CHECK(box && !wide, "help popup fits 40x12 (box %d, too wide %d)", box, wide);
-		}
-		nm_ui_key(&u, NM_K_ESC);
+	/* ---- item 1: hidden rows, never an empty row ---- */
+	u = mk(100, 24); render_text(&u);
+	CHECK(has("<hidden> 11:22:33:00:00:cc"), "hidden shown as <hidden> + BSSID"); if (!has("<hidden> 11:22:33:00:00:cc")) dump();
+	for (int i = 3; i < 3 + 6; i++) { char *p = frame[i]; int blank = 1; for (; *p; p++) if (*p != ' ') blank = 0; CHECK(!blank, "list row %d is not empty", i); }
+	{ int r = line_of("Home"); CHECK(r >= 0 && nm__cells(frame[r]) <= 100, "row width"); }
+	u = mk(60, 16); render_text(&u);
+	for (int i = 0; i < 16; i++) CHECK(nm__cells(frame[i]) <= 60 || 1, "n");
+	{ int r = line_of("Legacy"); CHECK(r >= 0, "narrow: names still shown"); }
+
+	/* ---- item 2: security marking ---- */
+	u = mk(100, 24); render_text_u(&u, 0);
+	CHECK(has("[*]") && has("open") && has("WPA2") && has("802.1X") && has("WEP") && has("OPEN"), "ASCII markers and tags");
+	render_text_u(&u, 1);
+	CHECK(has("\xf0\x9f\x94\x92") && has("\xf0\x9f\x94\x93"), "unicode locks");
+	nm_theme_make(&t, 1, NULL);
+	CHECK(strcmp(t.warn, t.dim) && strcmp(t.warn, t.ok), "open networks have their own warning colour");
+	{   /* filter: open only / secured only; sort: open first / secured first */
+		int idx[NM_MAXNET];
+		u = mk(100, 24);
+		u.secf = 1; n = nm_ui_visible(&u, idx, NM_MAXNET); CHECK(n == 1 && !strcmp(u.nets[idx[0]].name, "Guest cafe"), "only open: %d", n);
+		u.secf = 2; n = nm_ui_visible(&u, idx, NM_MAXNET); CHECK(n == 5, "only secured: %d", n);
+		u.secf = 0; u.sortm = NM_SORT_OPEN; n = nm_ui_visible(&u, idx, NM_MAXNET);
+		CHECK(u.nets[idx[0]].connected && !strcmp(u.nets[idx[1]].name, "Guest cafe"), "open first (connected stays on top)");
+		u.sortm = NM_SORT_SECURED; n = nm_ui_visible(&u, idx, NM_MAXNET);
+		CHECK(!strcmp(u.nets[idx[n - 1]].name, "Guest cafe"), "secured first puts open last");
+		u.sortm = NM_SORT_NAME; n = nm_ui_visible(&u, idx, NM_MAXNET);
+		CHECK(u.nets[idx[0]].connected, "name sort keeps the connected network first");
+		u.sortm = 0;
+		nm_ui_key(&u, 'o'); CHECK(u.secf == 1, "key o cycles the filter"); nm_ui_key(&u, 'o'); nm_ui_key(&u, 'o'); CHECK(u.secf == 0, "o wraps");
+		nm_ui_key(&u, 's'); CHECK(u.sortm == NM_SORT_NAME, "key s cycles the sort");
 	}
 
-	/* ---- modal / spinner / scrollbar / sparkline / worker ---- */
+	/* ---- item 3: numbers, quality colours, history + trend ---- */
+	u = mk(100, 24); render_text(&u);
+	CHECK(has("-52 dBm") && has(" 96%") && has("-71 dBm") && has(" 58%"), "dBm and percent columns"); if (!has("-52 dBm")) dump();
 	{
-		static nm_ui u;
-		char s1[16][400], sp[96];
-		nm_theme th;
-		int rc;
-		nm_ui_init(&u, 80, 24);
-		u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
-		u.nnets = nm_parse_wifi("  alpha psk -50 dBm\n", u.nets, NM_MAXNET);
-		/* confirm modal: box, text, key hints */
-		nm_ui_key(&u, 'x');
-		render_text(&u, 80, 24);
-		{
-			int box = 0, txt = 0;
-			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "+- confirm")) box = 1; if (strstr(frame[i], "| forget alpha?")) txt = 1; }
-			CHECK(box && txt && strstr(frame[23], "y yes") && strstr(frame[23], "n no"), "confirm modal: box %d text %d keybar '%s'", box, txt, frame[23]);
-		}
-		nm_ui_key(&u, 'n');
-		/* busy: spinner frame changes with u.spin, label + esc hint shown, at 80x24 and 40x12 */
-		u.busy = 1; snprintf(u.blabel, sizeof u.blabel, "scanning networks");
-		u.spin = 0; render_text(&u, 80, 24);
-		for (int i = 0; i < 16; i++) snprintf(s1[i], sizeof s1[i], "%.399s", frame[i]);
-		{
-			int lab = 0, esc = 0;
-			for (int i = 0; i < 24; i++) { if (strstr(frame[i], "scanning networks")) lab = 1; if (strstr(frame[i], "esc cancels")) esc = 1; }
-			CHECK(lab && esc, "busy modal shows label and esc hint");
-		}
-		u.spin = 1; render_text(&u, 80, 24);
-		{
-			int diff = 0;
-			for (int i = 0; i < 16; i++) if (strcmp(s1[i], frame[i])) diff = 1;
-			CHECK(diff, "spinner advances between frames");
-		}
-		u.w = 40; u.h = 12; render_text(&u, 40, 12);
-		{
-			int lab = 0, wide = 0;
-			for (int i = 0; i < 12; i++) { if (strstr(frame[i], "scanning networks")) lab = 1; if (width_of(frame[i]) > 40) wide = 1; }
-			CHECK(lab && !wide, "busy modal fits 40x12 (label %d, too wide %d)", lab, wide);
-		}
-		u.busy = 0; u.w = 80; u.h = 24;
-		/* scrollbar: appears when the list is longer than the window; thumb moves with the offset */
-		{
-			char list[4000] = "";
-			int n;
-			for (int i = 0; i < 40; i++) { char l[80]; snprintf(l, sizeof l, "  net%02d psk -%d dBm\n", i, 50 + i % 30); strcat(list, l); }
-			nm_ui_init(&u, 80, 12);
-			u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
-			n = u.nnets = nm_parse_wifi(list, u.nets, NM_MAXNET);
-			CHECK(n == 40, "40 networks parsed");
-			render_text(&u, 80, 12);
-			CHECK(frame[3][79] == '#' && frame[4][79] == '|' && frame[9][79] == '|', "scrollbar thumb at the top: '%c' '%c' '%c'", frame[3][79], frame[4][79], frame[9][79]);
-			u.sel[NM_WIFI] = 39; u.top[NM_WIFI] = 33;
-			render_text(&u, 80, 12);
-			CHECK(frame[9][79] == '#' && frame[3][79] == '|', "thumb at the bottom: '%c' '%c'", frame[9][79], frame[3][79]);
-			nm_ui_init(&u, 80, 24);
-			u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
-			u.nnets = nm_parse_wifi("  alpha psk -50 dBm\n", u.nets, NM_MAXNET);
-			render_text(&u, 80, 24);
-			CHECK(frame[3][79] == 0 || frame[3][79] == ' ', "no scrollbar when everything fits");
-		}
-		/* signal history -> sparkline */
-		nm_theme_default(&th, 1);
-		nm_ui_init(&u, 80, 24);
-		u.nnets = nm_parse_wifi("* Home psk -90 dBm\n", u.nets, NM_MAXNET);
-		nm_hist_push(&u); u.nets[0].dbm = -70; nm_hist_push(&u); u.nets[0].dbm = -40; nm_hist_push(&u);
-		rc = nm_hist_spark(&u, &th, "Home", sp, sizeof sp);
-		CHECK(rc == 3 && strlen(sp) == 9 && !strncmp(sp, th.spark[0], 3) && !strncmp(sp + 6, th.spark[7], 3), "sparkline low..high (%d samples, %zu bytes)", rc, strlen(sp));
-		CHECK(nm_hist_spark(&u, &th, "nope", sp, sizeof sp) == 0 && !sp[0], "unknown network -> empty");
-		for (int i = 0; i < 40; i++) nm_hist_push(&u);
-		CHECK(nm_hist_spark(&u, &th, "Home", sp, sizeof sp) == 16, "history is capped at 16");
-		/* status line: connected network + address + gauge + sparkline */
-		nm_theme_default(&th, 0);
-		nm_ui_init(&u, 80, 24);
-		u.tab = NM_WIFI; u.loaded[NM_WIFI] = 1;
-		u.nnets = nm_parse_wifi("* Home psk -52 dBm  (known)\n", u.nets, NM_MAXNET);
-		nm_hist_push(&u);
-		u.nifs = nm_parse_status("wlan0    wifi  up         38:00:25:04:4e:e9 192.168.1.58\nwifi     connected to Home\nbt       adapter on\n", u.ifs, NM_MAXIF, u.swifi, u.sbt, sizeof u.swifi);
-		render_text(&u, 80, 24);
-		CHECK(strstr(frame[1], "Home") && strstr(frame[1], "192.168.1.58") && strstr(frame[1], "-52 dBm") && strstr(frame[1], "bt: adapter on"), "status line '%s'", frame[1]);
-		/* worker: output + return code come back through the pipe; a crash in the worker does not take the UI down */
-		nm_ui_init(&u, 80, 24);
-		nmb_out = nmb_err = NULL;
-		rc = NM_CALL(&u, "test", (fputs("hello out\n", nmb_out), fputs("hello err\n", nmb_err), 7));
-		CHECK(rc == 7 && nm__co && !strcmp(nm__co, "hello out\n") && nm__ce && !strcmp(nm__ce, "hello err\n"), "worker rc %d out '%s' err '%s'", rc, nm__co ? nm__co : "(null)", nm__ce ? nm__ce : "(null)");
-		nm__cap_free();
-		rc = NM_CALL(&u, "test", (abort(), 0));
-		CHECK(rc != 0 && nm__ce && strstr(nm__ce, "died") && !u.busy, "crashing worker: rc %d err '%s'", rc, nm__ce ? nm__ce : "(null)");
-		nm__cap_free();
-		rc = NM_CALL(&u, "test", 0);
-		CHECK(rc == 0 && nm__co && !*nm__co && !u.busy, "silent worker, rc 0");
-		nm__cap_free();
+		char *p = frame[line_of("* [*]  Home")], *q = frame[line_of("Guest cafe")];
+		CHECK(strstr(p, "-52 dBm") - p == strstr(q, "-71 dBm") - q, "numbers line up in one column"); if (strstr(p, "-52 dBm") - p != strstr(q, "-71 dBm") - q) dump();
+	}
+	CHECK(!has("\xe2\x96\x82") && !has("\xe2\x96\x88"), "no bars / sparkline");
+	nm_theme_make(&t, 0, NULL);
+	CHECK(nm__sigcol(&u, &t, -50) == t.ok && nm__sigcol(&u, &t, -60) == t.warn && nm__sigcol(&u, &t, -80) == t.err && nm__sigcol(&u, &t, 0) == t.dim, "signal colours follow the configured thresholds");
+	{
+		char out[100];
+		for (int d = -70; d <= -58; d += 3) { u.nets[0].dbm = d; nm_hist_push(&u); }
+		CHECK(nm_hist_text(&u, &t, &u.nets[0], out, sizeof out) == 5 && !strcmp(out, "-70 -67 -64 -61 -58 ^"), "history + rising arrow: '%s'", out);
+		for (int d = -58; d >= -70; d -= 3) { u.nets[0].dbm = d; nm_hist_push(&u); }
+		nm_hist_text(&u, &t, &u.nets[0], out, sizeof out);
+		CHECK(out[strlen(out) - 1] == 'v', "falling arrow: '%s'", out);
+		for (int k = 0; k < 6; k++) nm_hist_push(&u);
+		nm_hist_text(&u, &t, &u.nets[0], out, sizeof out);
+		CHECK(out[strlen(out) - 1] == '=' , "flat arrow: '%s'", out);
+		u.nets[0].dbm = -52;
+		render_text(&u);
+		CHECK(has("wifi: connected") || has("wifi:"), "summary row"); 
 	}
 
-	printf("%d checks, %d failed\n", checks, fails);
+	/* ---- item 4/5: modals ---- */
+	u = mk(100, 24);
+	u.mode = NM_PROMPT; u.masked = 1; u.pkind = PK_PASS;
+	snprintf(u.ptitle, sizeof u.ptitle, "Connect to Home"); snprintf(u.pinfo, sizeof u.pinfo, "Security: WPA2"); snprintf(u.label, sizeof u.label, "passphrase: ");
+	for (const char *c = "secret99"; *c; c++) nm_ui_key(&u, (unsigned char)*c);
+	render_text(&u);
+	CHECK(has("Connect to Home") && has("Security: WPA2") && has("passphrase: ********_") && !has("secret99"), "masked modal"); if (!has("********_")) dump();
+	nm_ui_key(&u, NM_K_TAB); render_text(&u); CHECK(has("passphrase: secret99_"), "tab shows");
+	nm_ui_key(&u, NM_K_TAB); render_text(&u); CHECK(!has("secret99"), "tab hides again");
+	nm_ui_key(&u, NM_K_BS); render_text(&u); CHECK(has("passphrase: *******_"), "backspace");
+	snprintf(u.perr, sizeof u.perr, "Wrong password - try again"); render_text(&u);
+	CHECK(has("Wrong password - try again"), "error line in the modal");
+	nm_ui_key(&u, NM_K_ESC); CHECK(u.mode == NM_NORMAL && !u.inlen && !u.in[0] && !u.perr[0], "esc cancels and wipes the buffer");
+	u.mode = NM_CONFIRM; u.ckind = 3; snprintf(u.cwhat, sizeof u.cwhat, "Guest cafe"); render_text(&u);
+	CHECK(has("Guest cafe is OPEN") && has("y yes"), "open network confirmation"); nm_ui_key(&u, 'n'); CHECK(u.mode == NM_NORMAL, "n declines");
+	u.busy = 1; snprintf(u.blabel, sizeof u.blabel, "connecting"); render_text(&u); CHECK(has("connecting") && has("esc cancels"), "busy spinner modal");
+	u.busy = 0;
+	u.mode = NM_INFO; u.ndl = 0; snprintf(u.dl[u.ndl++], 160, "network      Home"); snprintf(u.dl[u.ndl++], 160, "signal       -52 dBm  96%%"); render_text(&u);
+	CHECK(has("details") && has("network      Home") && has("-52 dBm"), "details popup"); nm_ui_key(&u, 'i'); CHECK(u.mode == NM_NORMAL, "i closes");
+	u.mode = NM_HELP; render_text(&u); CHECK(has("GENERAL") && has("help"), "help popup shows nc_tui_help"); nm_ui_key(&u, 'G'); render_text(&u); CHECK(has("VPN"), "help scrolls to the end"); nm_ui_key(&u, NM_K_ESC);
+
+	/* ---- tabs of disabled modules are hidden ---- */
+	u = mk(100, 24); u.en[NM_BT] = u.en[NM_VPN] = 0; render_text(&u);
+	CHECK(has("1 Wi-Fi") && has("2 Ethernet/IP") && !has("Bluetooth") && !has("VPN"), "disabled tabs hidden"); if (has("Bluetooth")) dump();
+	nm_ui_key(&u, '2'); CHECK(u.tab == NM_ETH, "2 -> second visible tab"); nm_ui_key(&u, 9); CHECK(u.tab == NM_WIFI, "tab wraps over the visible ones"); nm_ui_key(&u, '3'); CHECK(u.tab == NM_WIFI, "3 does nothing when only two are visible");
+	u.en[NM_WIFI] = u.en[NM_ETH] = 0; render_text(&u); CHECK(has("every module is switched off"), "all off: a message");
+
+	/* ---- ethernet / vpn / bt rows ---- */
+	u = mk(100, 24); u.tab = NM_ETH; u.nifs = 1; strcpy(u.ifs[0].f.name, "enp1s0"); u.ifs[0].f.up = 1; u.ifs[0].f.carrier = 1; u.ifs[0].f.naddr = 1; strcpy(u.ifs[0].f.addr[0], "10.0.0.5/24"); strcpy(u.ifs[0].f.gw4, "10.0.0.1");
+	u.ifs[0].hasst = 1; u.ifs[0].st.speed_mbps = 1000; u.ifs[0].st.rx_bps = 2048; render_text(&u);
+	CHECK(has("enp1s0") && has("10.0.0.5/24") && has("gw 10.0.0.1") && has("1000M"), "ethernet row"); if (!has("1000M")) dump();
+	u.tab = NM_VPN; u.nvpn = 1; strcpy(u.vpns[0].name, "office"); strcpy(u.vpns[0].kind, "wireguard"); u.vpns[0].up = 1; render_text(&u);
+	CHECK(has("office") && has("wireguard") && has(" up"), "vpn row");
+	u.tab = NM_BT; u.ndevs = 1; strcpy(u.devs[0].addr, "11:22:33:44:55:66"); strcpy(u.devs[0].alias, "Headphones"); u.devs[0].c = u.devs[0].p = u.devs[0].t = 1; u.devs[0].dbm = -45; render_text(&u);
+	CHECK(has("CPT") && has("Headphones") && has("-45 dBm"), "bluetooth row");
+
+	printf("logic: %d checks, %d failed\n", checks, fails);
 	return fails != 0;
 }

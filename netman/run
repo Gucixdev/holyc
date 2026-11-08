@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
-# run - build netman and open its terminal UI (no arguments; the CLI is bin/netman: `bin/netman help`, `bin/netman wifi list`, ...).
-# Root is asked for by netman itself (sudo password prompt, before the screen is drawn) and only when the backend needs it.
+# run - build netman (once, or when a source is newer) and open its terminal UI. No arguments; the CLI is bin/netman (`bin/netman help`).
+# Needs only a C compiler (cc, gcc or clang). Root is asked for by netman itself (sudo password prompt) and only when the backend needs it.
 set -eu
 cd "$(dirname "$(readlink -f "$0")")" || exit 1
-inc=../notcoreutils
-[ -f netmanager_blue.h ] && inc=.
-mkdir -p bin
-if [ ! -x bin/netman ] || [ netman.c -nt bin/netman ] || [ tui.h -nt bin/netman ] || [ priv.h -nt bin/netman ] || [ "$inc/netmanager_blue.h" -nt bin/netman ]; then
-	gcc -std=gnu11 -Wall -Wextra -O2 -I"$inc" -I. netman.c -o bin/netman
+cc=${CC:-}
+if [ -z "$cc" ]; then for c in cc gcc clang; do command -v "$c" >/dev/null 2>&1 && { cc=$c; break; }; done; fi
+if [ ! -x bin/netman ] || [ -n "$(find src -type f \( -name '*.[ch]' \) -newer bin/netman -print -quit)" ]; then
+	if [ -z "$cc" ] || ! command -v "$cc" >/dev/null 2>&1; then
+		echo "netman: no C compiler found (looked for cc, gcc, clang; \$CC=${CC:-unset}). Install one, e.g. 'pacman -S gcc' / 'apt install gcc', then run ./run again." >&2
+		exit 1
+	fi
+	mkdir -p bin
+	echo "netman: building bin/netman with $cc ..." >&2
+	"$cc" -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods src/netman.c src/config.c -o bin/netman.tmp || { rm -f bin/netman.tmp; echo "netman: the build failed (see above)" >&2; exit 1; }
+	mv bin/netman.tmp bin/netman
 fi
 exec bin/netman -tui
