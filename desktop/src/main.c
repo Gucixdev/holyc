@@ -15,10 +15,12 @@ int lemonbar_main(int, char **);
 int bar_main(int, char **);
 int autostart_main(int, char **);
 int wsw_main(int, char **);
+int settings_main(int, char **);
+void dwl_dumpapi(void);
 
 static const struct { const char *name; int (*fn)(int, char **); } applets[] = {
 	{ "dwl", dwl_main }, { "dmenu", dmenu_main }, { "stest", stest_main },
-	{ "menu", menu_main }, { "lemonbar", lemonbar_main }, { "bar", bar_main }, { "autostart", autostart_main }, { "wsw", wsw_main },
+	{ "menu", menu_main }, { "lemonbar", lemonbar_main }, { "bar", bar_main }, { "autostart", autostart_main }, { "wsw", wsw_main }, { "settings", settings_main },
 };
 #define NAPPLETS (sizeof applets / sizeof *applets)
 
@@ -36,6 +38,7 @@ static int run(const char *name, int argc, char **argv, int *found)
 int main(int argc, char **argv)
 {
 	char *self = strdup(argv[0]);
+	if (argc > 1 && !strcmp(argv[1], "--dump-api")) { dwl_dumpapi(); return 0; }
 	int found, rc = run(basename(self), argc, argv, &found);
 	if (!found && argc > 1)
 		rc = run(argv[1], argc - 1, argv + 1, &found);

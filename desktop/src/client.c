@@ -59,6 +59,7 @@ applyrules(Client *c)
 		}
 	}
 
+	api_rules(c, appid, title, &newtags, &mon); /* rules.conf, loaded at runtime, wins over the compiled ones */
 	c->isfloating |= client_is_float_type(c);
 	setmon(c, mon, newtags);
 }
@@ -649,7 +650,7 @@ resize(Client *c, struct wlr_box geo, int interact)
 	applybounds(c, bbox);
 
 	/* Update scene-graph, including borders */
-	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
+	fx_place(c, interact);
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
 	wlr_scene_rect_set_size(c->border[0], c->geom.width, c->bw);
 	wlr_scene_rect_set_size(c->border[1], c->geom.width, c->bw);
@@ -939,6 +940,7 @@ unmapnotify(struct wl_listener *listener, void *data)
 	}
 	if (c == focused_client)
 		focused_client = NULL;
+	fx_forget(c);
 
 	if (client_is_unmanaged(c)) {
 		if (c == exclusive_focus) {

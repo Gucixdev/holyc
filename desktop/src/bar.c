@@ -132,35 +132,117 @@ static void stats(time_t now)
 	}
 }
 
+/* ---- bar.conf: which segments, in which order, and your own scripts (~/.config/desktop/bar.conf, or $DESKTOP_CONFIG_DIR)
+ *   left  = tags layout windows           (default)
+ *   right = outputs cpu gpu ram vol bat clock   (default; any order, leave one out to hide it)
+ *   segment NAME INTERVAL COMMAND...      a script: its first line of output, re-run every INTERVAL seconds (killed after 2 s);
+ *                                         then put NAME in left or right.  Output is lemonbar text, so %{F#ff0000} works.
+ * No file = exactly the old bar. Read once at start. */
+#define MAXSEG 16
+static struct segdef { char name[24], cmd[400], out[160]; int interval; time_t last; } segs[MAXSEG];
+static int nsegs;
+static char leftmods[160] = "tags layout windows", rightmods[160] = "outputs cpu gpu ram vol bat clock";
+
+static void load_conf(void)
+{
+	char path[600], line[600];
+	const char *d = getenv("DESKTOP_CONFIG_DIR"), *x = getenv("XDG_CONFIG_HOME"), *h = getenv("HOME");
+	FILE *f;
+	if (d && *d) snprintf(path, sizeof path, "%s/bar.conf", d);
+	else if (x && *x) snprintf(path, sizeof path, "%s/desktop/bar.conf", x);
+	else snprintf(path, sizeof path, "%s/.config/desktop/bar.conf", h ? h : "");
+	if (!(f = fopen(path, "r"))) return;
+	while (fgets(line, sizeof line, f)) {
+		char *p = line + strspn(line, " \t");
+		p[strcspn(p, "\n")] = 0;
+		if (!*p || *p == '#') continue;
+		if (!strncmp(p, "segment ", 8) && nsegs < MAXSEG) {
+			struct segdef *s = &segs[nsegs];
+			char name[24], cmd[400];
+			int iv;
+			if (sscanf(p + 8, "%23s %d %399[^\n]", name, &iv, cmd) == 3 && iv > 0) {
+				snprintf(s->name, sizeof s->name, "%s", name); snprintf(s->cmd, sizeof s->cmd, "%s", cmd); s->interval = iv; nsegs++;
+			}
+		} else if (!strncmp(p, "left", 4) || !strncmp(p, "right", 5)) {
+			char *eq = strchr(p, '=');
+			if (eq) {
+				eq++; eq += strspn(eq, " \t");
+				snprintf(p[0] == 'l' ? leftmods : rightmods, 160, "%s", eq);
+			}
+		}
+	}
+	fclose(f);
+}
+
+static void run_segments(time_t now)
+{
+	for (int i = 0; i < nsegs; i++) {
+		struct segdef *s = &segs[i];
+		char cmd[520], *q = cmd;
+		FILE *p;
+		if (now - s->last < s->interval) continue;
+		s->last = now;
+		q += snprintf(q, sizeof cmd, "timeout 2 sh -c '");
+		for (const char *c = s->cmd; *c && q < cmd + sizeof cmd - 12; c++) { if (*c == '\'') { memcpy(q, "'\\''", 4); q += 4; } else *q++ = *c; }
+		snprintf(q, (size_t)(cmd + sizeof cmd - q), "' 2>/dev/null");
+		s->out[0] = 0;
+		if ((p = popen(cmd, "r"))) {
+			if (fgets(s->out, sizeof s->out, p)) s->out[strcspn(s->out, "\n")] = 0;
+			pclose(p);
+		}
+	}
+}
+
 /* ---- output */
 static void seg(const struct output *o, char **p, char *end)
 {
 	char *w = *p;
-	char tm[32];
+	char tm[32], mods[160], *save = NULL, *m;
 	time_t now = time(NULL);
 	struct tm t;
+	int first;
 	localtime_r(&now, &t);
 	strftime(tm, sizeof tm, "%a %d %b %H:%M", &t);
 #define PR(...) w += snprintf(w, (size_t)(end - w), __VA_ARGS__)
 	PR("%%{Sn%s}%%{l}", o->name);
-	for (int i = 1; i <= 9; i++) {
-		unsigned m = 1u << (i - 1);
-		PR("%s %d " F_NOR, (o->sel & m) ? S_FOC : (o->occ & m) ? S_ACC : S_DIM, i);
+	for (int side = 0; side < 2; side++) {
+		snprintf(mods, sizeof mods, "%s", side ? rightmods : leftmods);
+		if (side) PR("%%{r}");
+		first = 1;
+		for (m = strtok_r(mods, " \t,", &save); m; m = strtok_r(NULL, " \t,", &save)) {
+			if (!strcmp(m, "tags")) {
+				for (int i = 1; i <= 9; i++) {
+					unsigned bit = 1u << (i - 1);
+					PR("%s %d " F_NOR, (o->sel & bit) ? S_FOC : (o->occ & bit) ? S_ACC : S_DIM, i);
+				}
+			} else if (!strcmp(m, "layout")) PR(" " F_ACC "%s" F_NOR " ", lname(o->layout));
+			else if (!strcmp(m, "windows")) {
+				for (int i = 0; i < o->ncl; i++) {
+					const struct client *c = &o->cl[i];
+					if (!(c->tags & o->sel)) continue;
+					const char *a = strrchr(c->app, '.');
+					PR("%s %s%s%.*s " F_NOR, c->focused ? S_FOC : S_DIM, c->fullscreen ? "*" : "", c->floating ? "~" : "", 14, a ? a + 1 : c->app);
+				}
+			} else if (side) { /* right side modules are joined with " | " */
+				char buf[200] = "";
+				if (!strcmp(m, "outputs")) {
+					for (int i = 0; i < nouts; i++) PR("%s %s " F_NOR, &outs[i] == o ? S_FOC : S_DIM, outs[i].name);
+					PR(" "); first = 1; continue;
+				} else if (!strcmp(m, "cpu")) snprintf(buf, sizeof buf, "cpu %d%%", cpu);
+				else if (!strcmp(m, "gpu")) snprintf(buf, sizeof buf, "gpu %s", gpu);
+				else if (!strcmp(m, "ram")) snprintf(buf, sizeof buf, "ram %ldM swap %ldM", mem_mb, swap_mb);
+				else if (!strcmp(m, "vol")) { if (vol[0]) snprintf(buf, sizeof buf, "vol %s", vol); }
+				else if (!strcmp(m, "bat")) { if (bat[0]) snprintf(buf, sizeof buf, "bat %s%%", bat); }
+				else if (!strcmp(m, "clock")) snprintf(buf, sizeof buf, "%s", tm);
+				else for (int i = 0; i < nsegs; i++) if (!strcmp(segs[i].name, m)) snprintf(buf, sizeof buf, "%s", segs[i].out);
+				if (!buf[0]) continue;
+				PR("%s%s", first ? "" : " | ", buf);
+				first = 0;
+			} else for (int i = 0; i < nsegs; i++)
+				if (!strcmp(segs[i].name, m) && segs[i].out[0]) PR(" %s ", segs[i].out);
+		}
+		if (side) PR(" ");
 	}
-	PR(" " F_ACC "%s" F_NOR " ", lname(o->layout));
-	for (int i = 0; i < o->ncl; i++) {
-		const struct client *c = &o->cl[i];
-		if (!(c->tags & o->sel)) continue;
-		const char *a = strrchr(c->app, '.');
-		PR("%s %s%s%.*s " F_NOR, c->focused ? S_FOC : S_DIM, c->fullscreen ? "*" : "", c->floating ? "~" : "", 14, a ? a + 1 : c->app);
-	}
-	PR("%%{r}");
-	for (int i = 0; i < nouts; i++)
-		PR("%s %s " F_NOR, &outs[i] == o ? S_FOC : S_DIM, outs[i].name);
-	PR(" cpu %d%% | gpu %s | ram %ldM swap %ldM | ", cpu, gpu, mem_mb, swap_mb);
-	if (vol[0]) PR("vol %s | ", vol);
-	if (bat[0]) PR("bat %s%% | ", bat);
-	PR("%s ", tm);
 	*p = w;
 }
 
@@ -169,6 +251,7 @@ static void render(void)
 	static char buf[16384];
 	char *p = buf;
 	stats(time(NULL));
+	run_segments(time(NULL));
 	for (int i = 0; i < nouts; i++) seg(&outs[i], &p, buf + sizeof buf - 1);
 	if (p > buf) { *p++ = '\n'; fwrite(buf, 1, (size_t)(p - buf), stdout); fflush(stdout); }
 }
@@ -207,6 +290,7 @@ int bar_main(int argc, char **argv)
 	size_t have = 0;
 	struct pollfd pf = { 0, POLLIN, 0 };
 	(void)argc; (void)argv;
+	load_conf();
 	nvml_open();
 	for (;;) {
 		int r = poll(&pf, 1, 2000);

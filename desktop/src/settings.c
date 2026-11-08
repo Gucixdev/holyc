@@ -3,9 +3,8 @@
 #include "dwl.h"
 
 
-/* command channel: lines on $XDG_RUNTIME_DIR/dwl.cmd (fifo), one command per line.
- * focus next|prev, view N, tag N, toggletag N, layout N, kill, float, zoom, quit, spawn SHELLCMD
- * N is a tag number 1..TAGCOUNT. State goes out on stdout (printstatus). */
+/* command channel: lines on $XDG_RUNTIME_DIR/dwl.cmd (fifo), one command per line, same language as the socket (api.c, `commands`).
+ * State goes out on stdout (printstatus) and as events to subscribers (api.c). */
 static struct wl_event_source *cmd_src;
 
 static int cmd_fd = -1;
@@ -19,31 +18,9 @@ static size_t cmd_len;
 static void
 cmdrun(char *l)
 {
-	Arg a = {0};
-	char *rest = strchr(l, ' ');
-	int n;
-	if (rest)
-		*rest++ = 0;
-	n = rest ? atoi(rest) : 0;
-	if (!strcmp(l, "focus")) {
-		a.i = (rest && !strcmp(rest, "prev")) ? -1 : 1;
-		focusstack(&a);
-	} else if (!strcmp(l, "view") && n >= 1 && n <= TAGCOUNT) {
-		a.ui = 1u << (n - 1); view(&a);
-	} else if (!strcmp(l, "tag") && n >= 1 && n <= TAGCOUNT) {
-		a.ui = 1u << (n - 1); tag(&a);
-	} else if (!strcmp(l, "toggletag") && n >= 1 && n <= TAGCOUNT) {
-		a.ui = 1u << (n - 1); toggletag(&a);
-	} else if (!strcmp(l, "layout") && n >= 0 && n < (int)nlayouts) {
-		a.v = &layouts[n]; setlayout(&a);
-	} else if (!strcmp(l, "kill")) killclient(&a);
-	else if (!strcmp(l, "float")) togglefloating(&a);
-	else if (!strcmp(l, "zoom")) zoom(&a);
-	else if (!strcmp(l, "quit")) quit(&a);
-	else if (!strcmp(l, "spawn") && rest) {
-		const char *argv[] = { "/bin/sh", "-c", rest, NULL };
-		a.v = argv; spawn(&a);
-	}
+	FILE *null = fopen("/dev/null", "w");
+	api_exec(l, null ? null : stderr); /* the fifo has no reply channel; api.c defines the commands */
+	if (null) fclose(null);
 }
 
 static int
@@ -359,10 +336,15 @@ ctlread(int fd, uint32_t mask, void *data)
 		if (f) { ctlstate(f); fclose(f); fprintf(out, "ok\n"); }
 		else fprintf(out, "{\"error\":\"cannot write %s\"}\n", rest);
 	} else if (!strcmp(buf, "restore") && rest) ctlrestore(rest, out);
-	else {
+	else if (!strcmp(buf, "subscribe")) {
+		fclose(out);
+		if (api_subscribe(cfd) == 0 && write(cfd, "ok subscribed\n", 14) >= 0) { free(mem); return 0; } /* stays open: api.c owns it */
+		if (write(cfd, "error: too many subscribers\n", 28) < 0) {}
+		free(mem); close(cfd);
+		return 0;
+	} else {
 		if (rest) rest[-1] = ' ';
-		cmdrun(buf);
-		fputs("ok\n", out);
+		api_exec(buf, out);
 	}
 	fclose(out);
 	if (mem) { if (write(cfd, mem, memlen) < 0) {} free(mem); }

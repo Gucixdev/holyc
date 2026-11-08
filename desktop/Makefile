@@ -16,7 +16,7 @@ OUT      ?= desktop
 LINKDIR  ?= bin
 OPT      ?= -O2
 PREFIX   ?= /usr/local
-APPLETS   = dwl dmenu stest menu lemonbar bar autostart wsw
+APPLETS   = dwl dmenu stest menu lemonbar bar autostart wsw settings
 
 WLPC  = PKG_CONFIG_PATH=$(WLROOTS)/lib/pkgconfig pkg-config
 DWLCF = `pkg-config --cflags wayland-server xkbcommon libinput xcb xcb-icccm` `$(WLPC) --cflags wlroots-0.20` \
@@ -26,8 +26,8 @@ CLICF = `pkg-config --cflags wayland-client xkbcommon fontconfig freetype2` -Isr
 LIBS  = `pkg-config --libs wayland-server xkbcommon libinput xcb xcb-icccm wayland-client fontconfig freetype2` \
         `$(WLPC) --static --libs wlroots-0.20` -lm
 
-DWL_SRC    = compositor client keys settings fx ime config theme
-CLIENT_SRC = menu lemonbar drw
+DWL_SRC    = compositor client keys settings fx ime config theme api
+CLIENT_SRC = menu lemonbar drw panel
 CLIENT_PROTO = xdg-shell-protocol wlr-layer-shell-unstable-v1-protocol
 
 all: $(OUT) links
@@ -49,7 +49,7 @@ $(BUILD)/dwl.%.o: src/%.c src/dwl.h src/client.h src/util.h $(WLROOTS)/lib/libwl
 
 $(BUILD)/dwl.o: $(addprefix $(BUILD)/dwl.,$(addsuffix .o,$(DWL_SRC)))
 	ld -r -o $(BUILD)/dwl.raw.o $^
-	objcopy --keep-global-symbol=dwl_main $(BUILD)/dwl.raw.o $@
+	objcopy --keep-global-symbol=dwl_main --keep-global-symbol=dwl_dumpapi $(BUILD)/dwl.raw.o $@
 
 # --- dmenu + menu + lemonbar: one copy of drw.c and of the protocol glue
 $(BUILD)/cli.%.o: src/%.c src/drw.h src/util.h | $(BUILD)
@@ -60,7 +60,7 @@ $(BUILD)/cli.%.o: src/protocols/client/%.c | $(BUILD)
 
 $(BUILD)/clients.o: $(addprefix $(BUILD)/cli.,$(addsuffix .o,$(CLIENT_SRC) $(CLIENT_PROTO)))
 	ld -r -o $(BUILD)/clients.raw.o $^
-	objcopy --keep-global-symbol=dmenu_main --keep-global-symbol=menu_main --keep-global-symbol=lemonbar_main $(BUILD)/clients.raw.o $@
+	objcopy --keep-global-symbol=dmenu_main --keep-global-symbol=menu_main --keep-global-symbol=lemonbar_main --keep-global-symbol=settings_main $(BUILD)/clients.raw.o $@
 
 $(BUILD)/stest.o: src/stest.c src/arg.h | $(BUILD)
 	$(CC) -c $(OPT) -std=gnu11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -Isrc $< -o $(BUILD)/stest.raw.o

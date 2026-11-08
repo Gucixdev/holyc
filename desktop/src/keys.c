@@ -259,8 +259,11 @@ createkeyboardgroup(void)
 	return group;
 }
 
-void
-createpointer(struct wlr_pointer *pointer)
+/* every pointer device we configured, so a changed setting (tap_to_click ...) reaches devices that are already plugged in */
+static struct PtrDev { struct wlr_pointer *p; struct wl_listener destroy; struct wl_list link; } *ptrdevs[32];
+
+static void
+ptr_configure(struct wlr_pointer *pointer)
 {
 	struct libinput_device *device;
 	if (wlr_input_device_is_libinput(&pointer->base)
@@ -299,7 +302,38 @@ createpointer(struct wlr_pointer *pointer)
 			libinput_device_config_accel_set_speed(device, accel_speed);
 		}
 	}
+}
 
+static void
+ptr_gone(struct wl_listener *listener, void *data)
+{
+	for (int i = 0; i < 32; i++)
+		if (ptrdevs[i] && &ptrdevs[i]->destroy == listener) {
+			wl_list_remove(&ptrdevs[i]->destroy.link);
+			free(ptrdevs[i]);
+			ptrdevs[i] = NULL;
+		}
+}
+
+void
+pointers_reconfigure(void)
+{
+	for (int i = 0; i < 32; i++)
+		if (ptrdevs[i]) ptr_configure(ptrdevs[i]->p);
+}
+
+void
+createpointer(struct wlr_pointer *pointer)
+{
+	ptr_configure(pointer);
+	for (int i = 0; i < 32; i++)
+		if (!ptrdevs[i]) {
+			ptrdevs[i] = ecalloc(1, sizeof **ptrdevs);
+			ptrdevs[i]->p = pointer;
+			ptrdevs[i]->destroy.notify = ptr_gone;
+			wl_signal_add(&pointer->base.events.destroy, &ptrdevs[i]->destroy);
+			break;
+		}
 	wlr_cursor_attach_input_device(cursor, &pointer->base);
 }
 
@@ -428,7 +462,9 @@ keybinding(uint32_t mods, xkb_keysym_t sym)
 	 * processing keys, rather than passing them on to the client for its own
 	 * processing.
 	 */
-	const Key *k;
+	const Key *k = api_keybinding(mods, sym);
+	if (k)
+		return k;
 	for (k = keys; k < (keys + nkeys); k++) {
 		if (CLEANMASK(mods) == CLEANMASK(k->mod) && sym == k->keysym && k->func)
 			return k;

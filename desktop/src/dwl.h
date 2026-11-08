@@ -171,6 +171,8 @@ typedef struct {
 	unsigned int bw;
 	uint32_t tags;
 	int isfloating, isurgent, isfullscreen;
+	double fx_x, fx_y, fx_vx, fx_vy, fx_t; /* spring state, fx.c */
+	int fx_init, fx_moving;
 } Client;
 
 typedef struct {
@@ -359,6 +361,12 @@ void pointerfocus(Client *c, LayerSurface* l, struct wlr_surface *surface,
 		double sx, double sy, uint32_t time);
 void printstatus(void);
 void ctlmapped(Client *c);
+void api_init(void); void api_start(void); void api_sync(void); void api_exec(char *line, FILE *out); int api_subscribe(int fd);
+const Key *api_keybinding(uint32_t mods, xkb_keysym_t sym);
+void api_rules(Client *c, const char *appid, const char *title, uint32_t *newtags, Monitor **mon);
+void api_monitor_defaults(Monitor *m);
+void pointers_reconfigure(void);
+void dwl_dumpapi(void);
 void powermgrsetmode(struct wl_listener *listener, void *data);
 void quit(const Arg *arg);
 void rendermon(struct wl_listener *listener, void *data);
@@ -475,16 +483,18 @@ extern int consumed[KEY_MAX + 1];
 extern struct wlr_xwayland *xwayland;
 #endif
 /* config.c / theme.c / keys.c */
-extern const int sloppyfocus, adaptive_sync, tearing_allowed, bypass_surface_visibility;
-extern const unsigned int borderpx, snap;
-extern const float rootcolor[4], bordercolor[4], focuscolor[4], urgentcolor[4], fullscreen_bg[4];
+extern int sloppyfocus, adaptive_sync, tearing_allowed; extern const int bypass_surface_visibility;
+extern unsigned int borderpx, snap;
+extern float rootcolor[4], bordercolor[4], focuscolor[4], urgentcolor[4]; extern const float fullscreen_bg[4];
 extern int log_level;
+extern int enable_animation; extern float animation_stiffness, animation_damping;
+void fx_place(Client *c, int interact); void fx_tick(Monitor *m); void fx_snap_all(void); void fx_forget(Client *c); int fx_moving_count(void);
 extern const Rule rules[]; extern const size_t nrules;
 extern const Layout layouts[]; extern const size_t nlayouts;
 extern const MonitorRule monrules[]; extern const size_t nmonrules;
-extern const struct xkb_rule_names xkb_rules;
-extern const int repeat_rate, repeat_delay;
-extern const int tap_to_click, tap_and_drag, drag_lock, natural_scrolling, disable_while_typing, left_handed, middle_button_emulation;
+extern struct xkb_rule_names xkb_rules;
+extern int repeat_rate, repeat_delay;
+extern int tap_to_click, tap_and_drag, drag_lock, natural_scrolling, disable_while_typing, left_handed, middle_button_emulation;
 extern const enum libinput_config_scroll_method scroll_method;
 extern const enum libinput_config_click_method click_method;
 extern const uint32_t send_events_mode;

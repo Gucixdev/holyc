@@ -35,7 +35,7 @@ const MonitorRule monrules[] = {
 };
 
 /* keyboard */
-const struct xkb_rule_names xkb_rules = {
+struct xkb_rule_names xkb_rules = {
 	/* can specify fields: rules, model, layout, variant, options */
 	/* example:
 	.options = "ctrl:nocaps",
@@ -43,17 +43,17 @@ const struct xkb_rule_names xkb_rules = {
 	.options = NULL,
 };
 
-const int repeat_rate = 25;
-const int repeat_delay = 600;
+int repeat_rate = 25;
+int repeat_delay = 600;
 
 /* Trackpad */
-const int tap_to_click = 1;
-const int tap_and_drag = 1;
-const int drag_lock = 1;
-const int natural_scrolling = 0;
-const int disable_while_typing = 1;
-const int left_handed = 0;
-const int middle_button_emulation = 0;
+int tap_to_click = 1;
+int tap_and_drag = 1;
+int drag_lock = 1;
+int natural_scrolling = 0;
+int disable_while_typing = 1;
+int left_handed = 0;
+int middle_button_emulation = 0;
 /* You can choose between:
 LIBINPUT_CONFIG_SCROLL_NO_SCROLL
 LIBINPUT_CONFIG_SCROLL_2FG

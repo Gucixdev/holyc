@@ -22,8 +22,14 @@ fallback() { echo "$(date '+%F %T') dwl failed ($1), starting Hyprland" >> "$LOG
 [ -x "$D/desktop" ] || make -C "$D" >/dev/null 2>>"$LOG"
 [ -x "$D/desktop" ] || fallback "desktop binary missing"
 # (the Emacs daemon is no longer started here; start it by hand or with Super+Shift+W - emacsclient -a "" starts one on demand)
+# bar_position (top|bottom) and bar_font are settings of `desktop settings` (restart-only: read here, from settings.conf)
+CONF=${DESKTOP_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/desktop}/settings.conf
+setting() { sed -n "s/^$1[[:space:]]*=[[:space:]]*//p" "$CONF" 2>/dev/null | tail -1; }
+BARFLAGS="-p -B '#1d2021' -F '#ebdbb2'"
+[ "$(setting bar_position)" = top ] || BARFLAGS="-b $BARFLAGS"
+font=$(setting bar_font); [ -n "$font" ] && BARFLAGS="$BARFLAGS -f '$font'"
 t0=$(date +%s)
-"$D/desktop" dwl -s "$D/desktop autostart & wvkbd-mobintl --hidden & exec $D/desktop bar | $D/desktop lemonbar -p -b -B '#1d2021' -F '#ebdbb2'" 2>>"$LOG"
+"$D/desktop" dwl -s "$D/desktop autostart & wvkbd-mobintl --hidden & exec $D/desktop bar | $D/desktop lemonbar $BARFLAGS" 2>>"$LOG"
 rc=$?
 [ -n "${DWL_NESTED:-}" ] && exit $rc
 [ $rc -ne 0 ] && [ $(( $(date +%s) - t0 )) -lt 15 ] && fallback "exit $rc after $(( $(date +%s) - t0 )) s"

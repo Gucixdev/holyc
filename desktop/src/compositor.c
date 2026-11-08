@@ -495,6 +495,7 @@ createmon(struct wl_listener *listener, void *data)
 				m->tagset[0] = m->tagset[1] = 1 << (r->deftag - 1);
 			m->lt[0] = r->lt;
 			m->lt[1] = &layouts[nlayouts > 1 && r->lt != &layouts[1]];
+			api_monitor_defaults(m);
 			strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
 			wlr_output_state_set_scale(&state, r->scale);
 			wlr_output_state_set_transform(&state, r->rr);
@@ -824,6 +825,7 @@ printstatus(void)
 		printf("%s layout %s\n", m->wlr_output->name, m->ltsymbol);
 	}
 	fflush(stdout);
+	api_sync();
 }
 
 void
@@ -852,6 +854,7 @@ rendermon(struct wl_listener *listener, void *data)
 	Monitor *m = wl_container_of(listener, m, frame);
 	struct timespec now;
 
+	fx_tick(m);
 	if (!wlr_scene_output_needs_frame(m->scene_output)) {
 		return;
 	}
@@ -892,7 +895,9 @@ void
 run(char *startup_cmd)
 {
 	/* Add a Unix socket to the Wayland display. */
-	const char *socket = wl_display_add_socket_auto(dpy);
+	const char *socket;
+	api_init(); /* settings.conf, keys.conf, rules.conf before outputs and windows exist */
+	socket = wl_display_add_socket_auto(dpy);
 	if (!socket)
 		die("startup: display_add_socket_auto");
 	setenv("WAYLAND_DISPLAY", socket, 1);
@@ -948,6 +953,7 @@ run(char *startup_cmd)
 	 * frame events at the refresh rate, and so on. */
 	cmdinit();
 	ctlinit();
+	api_start();
 	wl_display_run(dpy);
 	settingscleanup();
 }

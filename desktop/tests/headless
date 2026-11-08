@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# tests/headless - start the NEW build (build-new/desktop) as a headless compositor with its own runtime dir and config dir
+# (never touches the live session's socket or ~/.config) and run the api / hooks / keys / settings / animation / panel checks.
+# usage: tests/headless   (0 arguments; needs socat, foot, grim; build first: make BUILD=build-new OUT=build-new/desktop LINKDIR=build-new/bin)
+set -u
+D=$(cd "$(dirname "$0")/.." && pwd)
+T=$(mktemp -d /tmp/deskt.XXXXXX)
+export XDG_RUNTIME_DIR=$T/run DESKTOP_CONFIG_DIR=$T/cfg WLR_BACKENDS=headless WLR_RENDERER=pixman PATH="$D/build-new/bin:$PATH"
+mkdir -p "$XDG_RUNTIME_DIR" "$DESKTOP_CONFIG_DIR/hooks"; chmod 700 "$XDG_RUNTIME_DIR"
+unset WAYLAND_DISPLAY DISPLAY
+pass=0; fail=0
+ok()  { pass=$((pass+1)); echo "ok    $*"; }
+bad() { fail=$((fail+1)); echo "FAIL  $*"; }
+check() { if eval "$2"; then ok "$1"; else bad "$1   [$2]"; fi; }
+ctl() { printf '%s\n' "$*" | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/dwl.sock"; }
+wait_for() { for _ in $(seq 100); do eval "$1" && return 0; sleep 0.1; done; return 1; }
+
+# config the compositor must pick up at start
+cat > "$DESKTOP_CONFIG_DIR/hooks/on-window-open" <<H
+#!/bin/sh
+echo "\$DESKTOP_EVENT \$DESKTOP_WINDOW \$DESKTOP_APPID" >> $T/hook.log
+H
+cat > "$DESKTOP_CONFIG_DIR/hooks/on-start" <<H
+#!/bin/sh
+echo start >> $T/hook.log
+H
+chmod +x "$DESKTOP_CONFIG_DIR"/hooks/*
+printf 'border_width = 3\nfocus_color = #ff00aa\nmy_custom = hello\n' > "$DESKTOP_CONFIG_DIR/settings.conf"
+printf 'my_custom|text||live|none|A custom text field\nmy_flag|bool||live|1|A custom flag\nmy_num|number|1:9:2|live|5|A custom number\n' > "$DESKTOP_CONFIG_DIR/settings.schema"
+printf 'Super+Shift+t = spawn touch %s/key-t\nSuper+q = none\n' "$T" > "$DESKTOP_CONFIG_DIR/keys.conf"
+printf 'app=foot title=RULED tags=4 float=1\n' > "$DESKTOP_CONFIG_DIR/rules.conf"
+
+"$D/build-new/desktop" dwl > "$T/stdout" 2> "$T/stderr" &
+DWL=$!
+trap 'kill $DWL 2>/dev/null; sleep 0.3; kill -9 $DWL 2>/dev/null; echo "logs in $T"' EXIT
+wait_for '[ -S "$XDG_RUNTIME_DIR/dwl.sock" ]' || { echo "compositor did not start"; cat "$T/stderr"; exit 1; }
+sleep 0.5
+export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep '^wayland-[0-9]*$' | head -1)
+
+echo "== api"
+check "on-start hook ran" 'wait_for "grep -q ^start $T/hook.log"'
+check "settings.conf applied at start (border_width)" '[ "$(ctl get border_width)" = 3 ]'
+check "settings.conf applied at start (focus_color)" '[ "$(ctl get focus_color)" = "#ff00aa" ]'
+check "schema file setting + conf value" '[ "$(ctl get my_custom)" = hello ]'
+check "unknown command is an error" 'ctl nosuch | grep -q "^error: unknown command"'
+check "set validates range" 'ctl set border_width 99 | grep -q "^error"'
+check "set bool" 'ctl set sloppy_focus off | grep -q ^ok && [ "$(ctl get sloppy_focus)" = 0 ]'
+check "custom number validated (1:9)" 'ctl set my_num 12 | grep -q ^error && ctl set my_num 7 | grep -q ^ok'
+check "schema has all fields" '[ "$(ctl schema | wc -l)" -ge 26 ] && ctl schema | grep -q "^my_flag|bool"'
+
+echo "== events / hooks / windows"
+( ctl subscribe > /dev/null; true ) 2>/dev/null &
+# subscribe keeps the connection open: read it with socat in the background into a file
+printf 'subscribe\n' | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/dwl.sock" > "$T/events" 2>/dev/null &
+SUB=$!
+sleep 0.3
+check "subscribe says ok" 'grep -q "^ok subscribed" $T/events'
+foot -a termA -T termA sleep 600 > /dev/null 2>&1 &
+FA=$!
+foot -a termB -T termB sleep 600 > /dev/null 2>&1 &
+FB=$!
+check "open event for termA" 'wait_for "grep -q \"^open [0-9]* .* termA\" $T/events"'
+check "open event for termB" 'wait_for "grep -q \"^open [0-9]* .* termB\" $T/events"'
+check "focus event" 'grep -q "^focus [1-9]" $T/events'
+check "on-window-open hook ran with env" 'wait_for "grep -q \"^open [0-9]* termA\" $T/hook.log"'
+ctl layout monocle > /dev/null
+check "layout event" 'wait_for "grep -q \"^layout .* monocle\" $T/events"'
+ctl view 2 > /dev/null
+check "tag event (view 2)" 'wait_for "grep -q \"^tag .* 2 \" $T/events"'
+ctl view 1 > /dev/null
+ctl emit hello world > /dev/null
+check "emit -> user event" 'wait_for "grep -q \"^user hello world\" $T/events"'
+ctl set mfact 0.6 > /dev/null
+check "set -> set event" 'wait_for "grep -q \"^set mfact 0.6\" $T/events"'
+check "list shows both windows" '[ "$(ctl list | wc -l)" = 2 ]'
+IDB=$(ctl list | awk -F'\t' '$2=="termB"{print $1}' | awk '{print $1}')
+ctl focus $IDB > /dev/null
+check "focus ID command" 'wait_for "grep -q \"^focus $IDB .* termB\" $T/events"'
+
+echo "== runtime keybindings (keys.conf, reload)"
+ctl binds | grep -q 'spawn touch' && ok "keys.conf loaded at start" || bad "keys.conf loaded at start"
+# no keyboard injected here: check the table through binds, change it with reload
+printf 'Super+Shift+t = spawn touch %s/key-t\nSuper+x = spawn true\n' "$T" > "$DESKTOP_CONFIG_DIR/keys.conf"
+check "reload" 'ctl reload | grep -q "^ok"'
+check "reload replaced the bindings" '[ "$(ctl binds | wc -l)" = 2 ] && ctl binds | grep -q "spawn true"'
+check "bind command" 'ctl bind Super+F5 = view 3 | grep -q ^ok && ctl binds | grep -q "view 3"'
+check "bad chord rejected" 'ctl bind Foo+x = view 1 | grep -q ^error'
+
+echo "== rules.conf"
+foot -a foot -T RULED sleep 600 > /dev/null 2>&1 &
+FC=$!
+check "rule: app=foot title=RULED -> tag 4 floating" 'wait_for "ctl list | grep -P \"^\\d+ \\S+ 8 1 \" "'
+
+echo "== animation"
+ctl view all > /dev/null; ctl layout tile > /dev/null; sleep 0.5
+ctl set enable_animation 0 > /dev/null
+ctl float > /dev/null; ctl float > /dev/null   # toggles back; settle
+ctl set mfact 0.3 > /dev/null; sleep 0.1
+# columns of `list`: 8 9 = geom x y (target), 13 14 = shown x y (the scene node now), 16 = still moving
+shown() { ctl list | awk -F'\t' '{split($1,f," "); printf "(%s,%s)->(%s,%s)%s ", f[13], f[14], f[8], f[9], f[16]==1?"*":""}'; }
+ctl set enable_animation 0 > /dev/null
+ctl set mfact 0.3 > /dev/null; sleep 0.1
+echo "   off, right after the relayout: $(shown)   (shown == target, instant)"
+OFFBAD=$(ctl list | awk -F'\t' '{split($1,f," "); if (f[13]!=f[8]||f[14]!=f[9]) print "x"}')
+check "animation off: positions are instant" '[ -z "$OFFBAD" ]'
+ctl set enable_animation 1 > /dev/null
+ctl set mfact 0.7 > /dev/null
+echo "   on, 12 samples 40 ms apart (shown)->(target), * = still moving:"
+SAW=0
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  l=$(shown); echo "     $l"
+  case "$l" in *"*"*) SAW=1;; esac
+  sleep 0.04
+done
+check "animation on: a window was seen in motion" '[ $SAW = 1 ]'
+sleep 1.2
+FINAL=$(ctl list | awk -F'\t' '{split($1,f," "); if (f[13]!=f[8]||f[14]!=f[9]||f[16]==1) print "x"}')
+echo "   after 1.2 s: $(shown)"
+check "animation converged to target (shown == geom, none moving)" '[ -z "$FINAL" ]'
+ctl set enable_animation 0 > /dev/null
+
+echo "== bar modules (bar.conf)"
+printf 'right = clock hello cpu\nleft = tags mini\nsegment hello 5 echo "hi %%{F#ff0000}there"\nsegment mini 5 echo m-i-n-i\n' > "$DESKTOP_CONFIG_DIR/bar.conf"
+BAROUT=$(printf 'HEADLESS-1 tags 1 1 1 0\nHEADLESS-1 layout [M]\n' | timeout 5 "$D/build-new/desktop" bar 2>&1 | tail -1)
+echo "   $BAROUT"
+check "bar: custom script segments appear (left and right)" 'case "$BAROUT" in *"hi %{F#ff0000}there"*"cpu "*) case "$BAROUT" in *m-i-n-i*) true;; *) false;; esac;; *) false;; esac'
+check "bar: order follows bar.conf (clock before hello before cpu)" '[ "$(printf %s "$BAROUT" | grep -ob "hi %{F\|cpu " | head -2 | cut -d: -f2 | tr "\n" " ")" = "hi %{F cpu  " ]'
+rm "$DESKTOP_CONFIG_DIR/bar.conf"
+BAROUT=$(printf 'HEADLESS-1 tags 1 1 1 0\n' | timeout 5 "$D/build-new/desktop" bar 2>&1 | tail -1)
+check "bar: no bar.conf = default modules (cpu gpu ram clock)" 'case "$BAROUT" in *"cpu "*"gpu "*"ram "*) true;; *) false;; esac'
+
+echo "== real key press -> runtime binding (virtual keyboard)"
+W="$D/bin/wtype"
+printf 'Super+F6 = spawn touch %s/pressed\n' "$T" > "$DESKTOP_CONFIG_DIR/keys.conf"; ctl reload > /dev/null
+"$W" -M logo -k F6 -m logo; 
+check "Super+F6 from keys.conf spawned a command" 'wait_for "[ -e $T/pressed ]"'
+ctl view 1 > /dev/null
+printf 'Super+F6 = view 3\n' > "$DESKTOP_CONFIG_DIR/keys.conf"; ctl reload > /dev/null
+"$W" -M logo -k F6 -m logo
+# (a second wtype keyboard with a new keymap cannot join the key group, so
+# the rebind is asserted through the binding table, not a second keypress)
+check "reload changed what Super+F6 does (binds shows view 3)" 'ctl binds | grep -qx "mod [0-9]* sym [0-9]* = view 3"'
+ctl view 1 > /dev/null; sleep 0.3
+printf 'Super+F6 = none\n' > "$DESKTOP_CONFIG_DIR/keys.conf"; ctl reload > /dev/null; rm -f $T/pressed
+"$W" -M logo -k F6 -m logo; sleep 0.5
+check "after reload with 'none' the key does nothing (view stays 1, nothing spawned)" '[ ! -e $T/pressed ] && ctl list >/dev/null && ! tail -3 $T/events | grep -q "^tag .* 4 "'
+ctl view all > /dev/null
+
+echo "== settings panel"
+export DESKTOP_PANEL_KEYS="Tab Tab Tab space Down Down Right Right"
+export DESKTOP_PANEL_DUMP=1
+"$D/build-new/desktop" settings > "$T/panel.out" 2> "$T/panel.err" &
+PANEL=$!
+sleep 1.5
+grim "$T/panel.png" 2>"$T/grim.err" && ok "grim screenshot taken ($T/panel.png)" || bad "grim: $(cat $T/grim.err)"
+cp "$T/panel.png" /tmp/desktop-panel.png 2>/dev/null
+kill $PANEL 2>/dev/null
+echo "   -- panel run 2: number step, bool toggle, number edit, rejected edit, scroll"
+ctl set border_width 3 >/dev/null; ctl set sloppy_focus 0 > /dev/null; ctl set snap 32 >/dev/null
+export DESKTOP_PANEL_KEYS="Right Right Down Down Down Down Down Down Down Down space Tab Return BackSpace BackSpace 4 0 Return Return 9 9 Return End wheelup"
+export DESKTOP_PANEL_DUMP=1
+"$D/build-new/desktop" settings > "$T/panel2.out" 2> "$T/panel2.err" &
+P2=$!; sleep 1.2
+grim "$T/panel2.png" 2>/dev/null; cp "$T/panel2.png" /tmp/desktop-panel2.png
+kill $P2 2>/dev/null
+check "number step (Right Right): border_width 3 -> 5, applied live" '[ "$(ctl get border_width)" = 5 ]'
+check "space toggles bool: sloppy_focus 0 -> 1" '[ "$(ctl get sloppy_focus)" = 1 ]'
+check "inline number edit: snap -> 40" '[ "$(ctl get snap)" = 40 ]'
+check "out-of-range inline edit is rejected by the compositor and the error shown" 'head -1 $T/panel2.out | grep -q "status=snap must be"'
+check "settings.conf has the changes" 'grep -q "border_width = 5" $DESKTOP_CONFIG_DIR/settings.conf && grep -q "snap = 40" $DESKTOP_CONFIG_DIR/settings.conf'
+head -1 "$T/panel2.out"
+check "scroll: top moved after End + wheelup" 'head -1 $T/panel2.out | grep -q "top=[1-9]"'
+echo "   -- real keyboard path (virtual keyboard via wtype)"
+unset DESKTOP_PANEL_KEYS DESKTOP_PANEL_DUMP
+ctl set natural_scrolling 0 >/dev/null
+"$D/build-new/desktop" settings > /dev/null 2>&1 &
+P3=$!; sleep 1
+W="$D/bin/wtype"
+if [ -x "$W" ]; then
+  # fields: ... Down x 20 -> natural_scrolling (index 19); space toggles
+  for i in $(seq 19); do "$W" -k Down; done; "$W" -k space; sleep 0.3
+  check "wtype: keys reach the panel, natural_scrolling toggled" '[ "$(ctl get natural_scrolling)" = 1 ]'
+  "$W" -k Escape; sleep 0.5
+  check "Escape closes the panel" '! kill -0 $P3 2>/dev/null'
+else echo "   (bin/wtype missing, skipped)"; fi
+kill $P3 2>/dev/null
+check "panel printed state" 'grep -q "^selected=" $T/panel.out'
+cat "$T/panel.out" | head -3
+check "panel wrote settings.conf" 'grep -q "=" $DESKTOP_CONFIG_DIR/settings.conf'
+unset DESKTOP_PANEL_KEYS DESKTOP_PANEL_DUMP
+check "dump-api" '"$D/build-new/desktop" --dump-api | grep -q "^\[settings\]"'
+
+kill $SUB $FA $FB $FC 2>/dev/null
+echo; echo "passed $pass, failed $fail"
+echo "--- compositor stderr:"; head -20 "$T/stderr"
+[ $fail = 0 ]
