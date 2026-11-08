@@ -1,0 +1,5 @@
+#!/bin/sh
+# read-only health report, appended to $XDG_STATE_HOME/afkd-health.log
+log="${XDG_STATE_HOME:-$HOME/.local/state}/afkd-health.log"; mkdir -p "$(dirname "$log")"
+{ date '+%F %T'; df -h / | tail -1; free -m | awk '/Mem/{print "mem used MB",$3}'
+  command -v systemctl >/dev/null && systemctl --failed --no-legend 2>/dev/null; } >>"$log"
