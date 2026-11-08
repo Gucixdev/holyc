@@ -177,8 +177,8 @@ ctl set natural_scrolling 0 >/dev/null
 P3=$!; sleep 1
 W="$D/bin/wtype"
 if [ -x "$W" ]; then
-  # fields: ... Down x 20 -> natural_scrolling (index 19); space toggles
-  for i in $(seq 19); do "$W" -k Down; done; "$W" -k space; sleep 0.3
+  # fields: ... Down x 20 -> natural_scrolling (index 20); space toggles
+  for i in $(seq 20); do "$W" -k Down; done; "$W" -k space; sleep 0.3
   check "wtype: keys reach the panel, natural_scrolling toggled" '[ "$(ctl get natural_scrolling)" = 1 ]'
   "$W" -k Escape; sleep 0.5
   check "Escape closes the panel" '! kill -0 $P3 2>/dev/null'

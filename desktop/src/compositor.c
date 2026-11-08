@@ -896,7 +896,6 @@ run(char *startup_cmd)
 {
 	/* Add a Unix socket to the Wayland display. */
 	const char *socket;
-	api_init(); /* settings.conf, keys.conf, rules.conf before outputs and windows exist */
 	socket = wl_display_add_socket_auto(dpy);
 	if (!socket)
 		die("startup: display_add_socket_auto");
@@ -964,6 +963,7 @@ setup(void)
 	int drm_fd, i, sig[] = {SIGCHLD, SIGINT, SIGTERM, SIGPIPE};
 	struct sigaction sa = {.sa_flags = SA_RESTART, .sa_handler = handlesig};
 	sigemptyset(&sa.sa_mask);
+	api_init(); /* settings.conf, keys.conf, rules.conf: before any global is created (legacy_protocols) and before outputs and windows exist */
 
 	for (i = 0; i < (int)LENGTH(sig); i++)
 		sigaction(sig[i], &sa, NULL);
@@ -1031,11 +1031,13 @@ setup(void)
 	compositor = wlr_compositor_create(dpy, 6, drw);
 	wlr_subcompositor_create(dpy);
 	wlr_data_device_manager_create(dpy);
-	wlr_export_dmabuf_manager_v1_create(dpy);
-	wlr_screencopy_manager_v1_create(dpy);
+	if (legacy_protocols) { /* wlr-specific, no stable twin for old clients: ext-image-copy-capture below */
+		wlr_export_dmabuf_manager_v1_create(dpy);
+		wlr_screencopy_manager_v1_create(dpy);
+	}
 	wlr_ext_image_copy_capture_manager_v1_create(dpy, 1);
 	wlr_ext_output_image_capture_source_manager_v1_create(dpy, 1);
-	wlr_data_control_manager_v1_create(dpy);
+	if (legacy_protocols) wlr_data_control_manager_v1_create(dpy); /* wlr-data-control: older wl-clipboard/cliphist; ext-data-control is its successor */
 	wlr_ext_data_control_manager_v1_create(dpy, 1);
 	wlr_primary_selection_v1_device_manager_create(dpy);
 	wlr_viewporter_create(dpy);
@@ -1100,9 +1102,10 @@ setup(void)
 			&new_foreign_toplevel_capture_request);
 
 	/* Use decoration protocols to negotiate server-side decorations */
-	wlr_server_decoration_manager_set_default_mode(
-			wlr_server_decoration_manager_create(dpy),
-			WLR_SERVER_DECORATION_MANAGER_MODE_SERVER);
+	if (legacy_protocols) /* KDE server-decoration: legacy twin of xdg-decoration */
+		wlr_server_decoration_manager_set_default_mode(
+				wlr_server_decoration_manager_create(dpy),
+				WLR_SERVER_DECORATION_MANAGER_MODE_SERVER);
 	xdg_decoration_mgr = wlr_xdg_decoration_manager_v1_create(dpy);
 	wl_signal_add(&xdg_decoration_mgr->events.new_toplevel_decoration, &new_xdg_decoration);
 

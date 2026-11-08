@@ -290,6 +290,7 @@ regsettings(void)
 	reg("sloppy_focus", K_BOOL, &sloppyfocus, NULL, "live", "Focus follows mouse", NULL);
 	reg("snap", K_UINT, &snap, "0:200", "live", "Snap distance when dragging (px)", NULL);
 	reg("tearing", K_BOOL, &tearing_allowed, NULL, "live", "Allow tearing for fullscreen games", NULL);
+	reg("legacy_protocols", K_BOOL, &legacy_protocols, NULL, "restart", "Offer older wlr-* protocols too (screencopy, data-control, ...)", NULL);
 	reg("adaptive_sync", K_BOOL, &adaptive_sync, NULL, "new", "Variable refresh rate (new outputs)", NULL);
 	/* animation */
 	reg("enable_animation", K_BOOL, &enable_animation, NULL, "live", "Spring animation of window movement", after_anim);

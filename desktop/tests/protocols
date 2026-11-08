@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# tests/protocols - start build-new/desktop headless twice (default config, then legacy_protocols = 0) and compare the
+# wayland globals it advertises: stable/staging ones must always be there, the wlr-* twins only with legacy_protocols on.
+# usage: tests/protocols   (0 arguments; needs cc + wayland-client; build first like tests/headless)
+set -u
+D=$(cd "$(dirname "$0")/.." && pwd)
+T=$(mktemp -d /tmp/deskp.XXXXXX)
+cc -o "$T/globals" "$D/tests/globals.c" $(pkg-config --cflags --libs wayland-client) || exit 1
+pass=0; fail=0
+check() { if eval "$2"; then pass=$((pass+1)); echo "ok    $1"; else fail=$((fail+1)); echo "FAIL  $1"; fi; }
+run() { # $1 = name, $2 = settings.conf text
+  export XDG_RUNTIME_DIR=$T/$1/run DESKTOP_CONFIG_DIR=$T/$1/cfg WLR_BACKENDS=headless WLR_RENDERER=pixman
+  mkdir -p "$XDG_RUNTIME_DIR" "$DESKTOP_CONFIG_DIR"; chmod 700 "$XDG_RUNTIME_DIR"; unset WAYLAND_DISPLAY DISPLAY
+  printf '%s\n' "$2" > "$DESKTOP_CONFIG_DIR/settings.conf"
+  "$D/build-new/desktop" dwl > /dev/null 2>&1 & local pid=$!
+  for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/wayland-0" ] && break; sleep 0.1; done
+  sleep 0.5; WAYLAND_DISPLAY=wayland-0 "$T/globals" | sort > "$T/$1.globals"
+  kill $pid 2>/dev/null; wait $pid 2>/dev/null
+}
+run default ""
+run nolegacy "legacy_protocols = 0"
+for p in xdg_wm_base zwlr_layer_shell_v1 ext_session_lock_manager_v1 ext_foreign_toplevel_list_v1 ext_idle_notifier_v1 \
+         ext_data_control_manager_v1 ext_image_copy_capture_manager_v1 wp_cursor_shape_manager_v1 wp_fractional_scale_manager_v1 \
+         xdg_activation_v1 wp_viewporter wp_presentation zwlr_output_manager_v1 zwp_input_method_manager_v2; do
+  check "$p advertised (default and legacy off)" "grep -q \"^$p \" $T/default.globals && grep -q \"^$p \" $T/nolegacy.globals"
+done
+for p in zwlr_screencopy_manager_v1 zwlr_export_dmabuf_manager_v1 zwlr_data_control_manager_v1 org_kde_kwin_server_decoration_manager; do
+  check "$p advertised by default" "grep -q \"^$p \" $T/default.globals"
+  check "$p gone with legacy_protocols = 0" "! grep -q \"^$p \" $T/nolegacy.globals"
+done
+echo; echo "passed $pass, failed $fail   (globals in $T/*.globals)"
+[ "$fail" = 0 ]

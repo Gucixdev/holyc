@@ -19,7 +19,10 @@ Layout of `src/` (everything is our own code, forked from dwl, dmenu and lemonba
 | `client.c` | windows: map/unmap, focus, tags/views, layouts tile/float/monocle/deck/grid, XWayland |
 | `keys.c` | keyboards, key and mouse binding tables, pointer, cursor, tablets, drag, spawn/quit/chvt |
 | `config.c`, `theme.c` | rules, layouts, monitor/keyboard/trackpad settings; colours, borders, focus behaviour |
-| `settings.c`, `fx.c`, `ime.c` | control fifo/socket and session restore; border colour (effects hook); input-method relay |
+| `settings.c`, `ime.c` | control fifo/socket and session restore; input-method relay |
+| `api.c` | command table, settings registry, event stream (`subscribe`), hooks, runtime keys/rules, `--dump-api` |
+| `panel.c` | `desktop settings`: layer-shell settings panel (a Wayland client) |
+| `fx.c` | border colour and the optional spring-damper window animation (`enable_animation`) |
 | `menu.c`, `stest.c` | dmenu picker + `menu` launcher; stest |
 | `lemonbar.c`, `bar.c` | the panel, and the status lines for it |
 | `drw.c/h`, `util.c/h`, `arg.h` | shared drawing, helpers |
@@ -47,3 +50,5 @@ No brightnessctl installed, so no brightness keys yet. XWayland still off.
 `session` starts dwl with the bar, the Emacs daemon and the hidden keyboard (Alt+b toggles). `dwl.desktop` is the display-manager entry,
 installed with `sudo cp dwl.desktop /usr/share/wayland-sessions/` (done on this machine 2026-11-07); pick "dwl" in SDDM at login.
 From a TTY: `/data/dev/desktop/session`. dwl's stderr goes to `~/.cache/dwl.log`. Not yet run on the real screen, only headless.
+
+More: `docs/hacking.md` (socket protocol, events, hooks, runtime keys/rules, bar modules, settings), `docs/protocols.md` (wayland protocol audit), `tests/headless` and `tests/protocols` (headless checks of the new build).

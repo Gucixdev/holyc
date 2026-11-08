@@ -483,7 +483,7 @@ extern int consumed[KEY_MAX + 1];
 extern struct wlr_xwayland *xwayland;
 #endif
 /* config.c / theme.c / keys.c */
-extern int sloppyfocus, adaptive_sync, tearing_allowed; extern const int bypass_surface_visibility;
+extern int legacy_protocols, sloppyfocus, adaptive_sync, tearing_allowed; extern const int bypass_surface_visibility;
 extern unsigned int borderpx, snap;
 extern float rootcolor[4], bordercolor[4], focuscolor[4], urgentcolor[4]; extern const float fullscreen_bg[4];
 extern int log_level;

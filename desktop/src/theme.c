@@ -8,6 +8,7 @@
                         ((hex >> 8) & 0xFF) / 255.0f, \
                         (hex & 0xFF) / 255.0f }
 int sloppyfocus               = 1;  /* focus follows mouse */
+int legacy_protocols         = 1;  /* also offer the older wlr-* twins (screencopy, export-dmabuf, data-control, server-decoration) next to the stable/staging ones */
 int adaptive_sync             = 1;  /* variable refresh rate where the output supports it */
 int tearing_allowed           = 1;  /* fullscreen clients may ask for tearing (tearing-control-v1): lowest latency for games */
 const int bypass_surface_visibility = 0;  /* 1 means idle inhibitors will disable idle tracking even if it's surface isn't visible  */
