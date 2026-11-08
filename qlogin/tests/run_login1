@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# qlogind vs a fake client on a PRIVATE bus (never the real system bus): build, start dbus-daemon + qlogind, run the client, cross-check with busctl.
+set -eu
+cd "$(dirname "$(readlink -f "$0")")"
+mkdir -p ../bin
+nice -n 19 gcc -std=gnu11 -Wall -Wextra -O1 -g -fsanitize=address,undefined -I../src/mods ../src/qlogind.c -o ../bin/qlogind
+nice -n 19 gcc -std=gnu11 -Wall -Wextra -O1 -g -fsanitize=address,undefined login1_test.c -o ../bin/login1_test
+T=$(mktemp -d /tmp/qlogin-test.XXXXXX)
+mkdir -p "$T/run" "$T/dev"
+printf 'inhibit_delay_max=1\n' > "$T/conf"
+out=$(mktemp); dbus-daemon --session --print-address --fork --print-pid > "$out"
+addr=$(sed -n 1p "$out"); bpid=$(sed -n 2p "$out"); rm -f "$out"
+qpid=
+cleanup() { [ -s "$T/qlogind.log" ] && { echo "--- qlogind.log"; cat "$T/qlogind.log"; } ; [ -n "$qpid" ] && kill "$qpid" 2>/dev/null || true; kill "$bpid" 2>/dev/null || true; rm -rf "$T"; }
+trap cleanup EXIT
+# the daemon must refuse the default bus
+if env -u DBUS_SYSTEM_BUS_ADDRESS ../bin/qlogind 2>/dev/null; then echo "FAIL: qlogind ran without DBUS_SYSTEM_BUS_ADDRESS"; exit 1; fi
+export DBUS_SYSTEM_BUS_ADDRESS="$addr" QLOGIND_RUN="$T/run" QLOGIND_CONF="$T/conf" QLOGIND_VTFILE="$T/vt" QLOGIND_DEVDIR="$T/dev"
+echo tty1 > "$T/vt"
+../bin/qlogind 2> "$T/qlogind.log" & qpid=$!
+for _ in $(seq 50); do busctl --address="$addr" status org.freedesktop.login1 >/dev/null 2>&1 && break; sleep 0.1; done
+# cross-check with a real sd-bus implementation: our introspection XML and property marshalling must parse
+busctl --address="$addr" introspect org.freedesktop.login1 /org/freedesktop/login1 | grep -q 'CreateSession' || { echo "FAIL busctl introspect"; exit 1; }
+busctl --address="$addr" get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager InhibitDelayMaxUSec | grep -q '1000000' || { echo "FAIL busctl property"; exit 1; }
+busctl --address="$addr" call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListSeats | grep -q 'seat0' || { echo "FAIL busctl ListSeats"; exit 1; }
+busctl --address="$addr" call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager CanSuspend | grep -q '"no"' || { echo "FAIL busctl CanSuspend (no session yet, so no authorisation)"; exit 1; }
+echo "busctl cross-check ok"
+QT_BUS="$addr" QT_RUN="$T/run" QT_DEVDIR="$T/dev" QT_VTFILE="$T/vt" ../bin/login1_test
+rc=$?
+kill "$qpid"; wait "$qpid" 2>/dev/null || true; qpid=
+grep -E 'ERROR|runtime error|Sanitizer' "$T/qlogind.log" && { echo "FAIL: sanitizer output from qlogind"; exit 1; }
+exit $rc

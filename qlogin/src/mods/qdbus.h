@@ -78,6 +78,8 @@ int qd_send_return(qd_conn *c, const qd_msg *req, const char *sig, const qd_buf 
 int qd_send_error(qd_conn *c, const qd_msg *req, const char *errname, const char *text);
 int qd_send_signal(qd_conn *c, const char *dest, const char *path, const char *iface, const char *member,
                    const char *sig, const qd_buf *body);
+int qd_send_signal_fds(qd_conn *c, const char *dest, const char *path, const char *iface, const char *member,
+                       const char *sig, const qd_buf *body, const int *fds, int nfds);
 /* synchronous call: 0 = method return in *reply, 1 = D-Bus error in *reply, -1 = transport failure/timeout */
 int qd_call(qd_conn *c, qd_msg *reply, const char *dest, const char *path, const char *iface, const char *member,
             const char *sig, const qd_buf *body, const int *fds, int nfds, int timeout_ms);
@@ -313,6 +315,10 @@ int qd_send_error(qd_conn *c, const qd_msg *req, const char *errname, const char
 }
 int qd_send_signal(qd_conn *c, const char *dest, const char *path, const char *iface, const char *member, const char *sig, const qd_buf *body)
 { return qd_send_msg(c, 4, 1, dest, path, iface, member, 0, NULL, sig, body, NULL, 0) ? 0 : -1; }
+
+int qd_send_signal_fds(qd_conn *c, const char *dest, const char *path, const char *iface, const char *member, const char *sig,
+                       const qd_buf *body, const int *fds, int nfds)
+{ return qd_send_msg(c, 4, 1, dest, path, iface, member, 0, NULL, sig, body, fds, nfds) ? 0 : -1; }
 
 /* ---- receiving ---- */
 static int qd_fill(qd_conn *c, int timeout_ms)

@@ -9,8 +9,8 @@ libseat (logind backend) or, on Xorg, the `systemd-logind` module (same Session 
 (logind-using authority) and dbus-daemon were not re-read; their needs are listed from the elogind API they use
 (ListSessions/GetSessionByPID/GetUserByPID/session properties) and are marked "unverified consumer" below.
 
-Status column: `T` = covered by an automated test in tests/ (see readme for what the tests actually prove),
-`-` = planned, not implemented yet. Updated at each commit.
+Status column: `T` = exercised by tests/login1_test.c (fake client on a private bus, 93 checks) and/or the busctl
+cross-check in tests/run_login1; `U` = implemented but NOT exercised by any test; `-` = not implemented.
 
 ## Not on D-Bus but required: the sd_login state files
 
@@ -24,43 +24,43 @@ when `XDG_SESSION_ID` is exported by the session starter (qlogin does this). Thi
 
 | Member | Sig | Consumer | Status |
 |---|---|---|---|
-| GetSession | s -> o | libseat (every start) | - |
-| GetSeat | s -> o | libseat | - |
-| GetSessionByPID | u -> o | polkit/portals (unverified consumer); pid match = leader or ancestor via /proc | - |
-| GetUser, GetUserByPID | u -> o | polkit/portals (unverified) | - |
-| ListSessions | -> a(susso) | polkit, loginctl-likes | - |
-| ListUsers | -> a(uso) | loginctl-likes | - |
-| ListSeats | -> a(so) | loginctl-likes | - |
-| ListInhibitors | -> a(ssssuu) | desktops (unverified) | - |
-| CreateSession | uusssssussbssa(sv) -> soshusub | pam_elogind-like callers, qlogin itself | - |
-| ReleaseSession | s | pam_elogind-like callers | - |
-| ActivateSession | s | desktops / loginctl | - |
-| LockSession, UnlockSession, LockSessions, UnlockSessions | s / - | desktops | - |
-| KillSession | ssi | loginctl-likes | - |
-| Inhibit | ssss -> h | every desktop/media player (fd semantics: closing the fd releases) | - |
-| PowerOff, Reboot, Halt, Suspend, Hibernate, HybridSleep, SuspendThenHibernate | b | desktops (DRY RUN by default) | - |
-| CanPowerOff, CanReboot, CanHalt, CanSuspend, CanHibernate, CanHybridSleep, CanSuspendThenHibernate | -> s | desktops | - |
-| Properties: IdleHint, IdleSinceHint(+Monotonic), BlockInhibited, DelayInhibited, InhibitDelayMaxUSec, PreparingForShutdown, PreparingForSleep, NAutoVTs, KillUserProcesses, HandlePowerKey, HandleLidSwitch* (read-only constants), NCurrentSessions, NCurrentInhibitors | | desktops | - |
-| Signals: SessionNew(so) SessionRemoved(so) UserNew(uo) UserRemoved(uo) SeatNew(so) SeatRemoved(so) PrepareForShutdown(b) PrepareForSleep(b) | | desktops, power managers | - |
+| GetSession | s -> o | libseat (every start) | T |
+| GetSeat | s -> o | libseat | U |
+| GetSessionByPID | u -> o | polkit/portals (unverified consumer); pid match = leader or ancestor via /proc | T |
+| GetUser, GetUserByPID | u -> o | polkit/portals (unverified) | T (GetUser) / U (GetUserByPID) |
+| ListSessions | -> a(susso) | polkit, loginctl-likes | T |
+| ListUsers | -> a(uso) | loginctl-likes | T |
+| ListSeats | -> a(so) | loginctl-likes | T (busctl) |
+| ListInhibitors | -> a(ssssuu) | desktops (unverified) | T |
+| CreateSession | uusssssussbssa(sv) -> soshusub | pam_elogind-like callers, qlogin itself | T |
+| ReleaseSession | s | pam_elogind-like callers | T |
+| ActivateSession | s | desktops / loginctl | T |
+| LockSession, UnlockSession, LockSessions, UnlockSessions | s / - | desktops | U |
+| KillSession | ssi | loginctl-likes | U |
+| Inhibit | ssss -> h | every desktop/media player (fd semantics: closing the fd releases) | T |
+| PowerOff, Reboot, Halt, Suspend, Hibernate, HybridSleep, SuspendThenHibernate | b | desktops (DRY RUN by default) | T (PowerOff, Suspend, Hibernate-blocked, Reboot-in-progress) / U (rest) |
+| CanPowerOff, CanReboot, CanHalt, CanSuspend, CanHibernate, CanHybridSleep, CanSuspendThenHibernate | -> s | desktops | T (CanPowerOff yes, CanSuspend no/yes by authorisation) / U (rest) |
+| Properties: IdleHint, IdleSinceHint(+Monotonic), BlockInhibited, DelayInhibited, InhibitDelayMaxUSec, PreparingForShutdown, PreparingForSleep, NAutoVTs, KillUserProcesses, HandlePowerKey, HandleLidSwitch* (read-only constants), NCurrentSessions, NCurrentInhibitors | | desktops | T (DelayInhibited, BlockInhibited, InhibitDelayMaxUSec) / U (rest) |
+| Signals: SessionNew(so) SessionRemoved(so) UserNew(uo) UserRemoved(uo) SeatNew(so) SeatRemoved(so) PrepareForShutdown(b) PrepareForSleep(b) | | desktops, power managers | T (SessionNew, SessionRemoved, PrepareForShutdown) / U (UserNew/Removed, PrepareForSleep, SeatNew/Removed never emitted: SeatNew/SeatRemoved are NOT implemented) |
 
-Everything else in elogind's Manager (ScheduleShutdown, SetRebootParameter, *WithFlags, Terminate*, AttachDevice,
+SeatNew/SeatRemoved are never emitted (seat0 is static). Everything else in elogind's Manager (ScheduleShutdown, SetRebootParameter, *WithFlags, Terminate*, AttachDevice,
 FlushDevices, SetWallMessage, ...) is NOT implemented.
 
 ## Session  /org/freedesktop/login1/session/<escaped id>  and  /session/auto, /session/self
 
 | Member | Sig | Consumer | Status |
 |---|---|---|---|
-| Activate, Lock, Unlock | - | desktops | - |
-| SetIdleHint, SetLockedHint | b | desktops | - |
-| TakeControl | b | libseat, Xorg (session controller, released if the caller drops off the bus) | - |
-| ReleaseControl | - | libseat | - |
-| SetType | s | libseat (XDG_SESSION_TYPE) | - |
-| TakeDevice | uu -> hb | libseat/wlroots/dwl, Xorg | - |
-| ReleaseDevice | uu | libseat | - |
-| PauseDeviceComplete | uu | libseat | - |
-| Signals PauseDevice(uus), ResumeDevice(uuh), Lock, Unlock | | libseat, desktops | - |
-| Properties Id Name User(uo) Seat(so) VTNr Type Class Active State Remote Leader TTY Display Service Desktop Scope IdleHint LockedHint CanIdle CanLock | | libseat (Active, via Get + PropertiesChanged), desktops | - |
-| org.freedesktop.DBus.Properties Get/GetAll + PropertiesChanged for Active, State, IdleHint, LockedHint | | libseat | - |
+| Activate, Lock, Unlock | - | desktops | T (Lock signal) / U (Activate, Unlock) |
+| SetIdleHint, SetLockedHint | b | desktops | T |
+| TakeControl | b | libseat, Xorg (session controller, released if the caller drops off the bus) | T (incl. EBUSY and release when the controller leaves the bus) |
+| ReleaseControl | - | libseat | T |
+| SetType | s | libseat (XDG_SESSION_TYPE) | T |
+| TakeDevice | uu -> hb | libseat/wlroots/dwl, Xorg | T (mock device dir, fd verified by reading it) |
+| ReleaseDevice | uu | libseat | T |
+| PauseDeviceComplete | uu | libseat | T |
+| Signals PauseDevice(uus), ResumeDevice(uuh), Lock, Unlock | | libseat, desktops | T (Pause, Resume with fd) / Lock T / Unlock U |
+| Properties Id Name User(uo) Seat(so) VTNr Type Class Active State Remote Leader TTY Display Service Desktop Scope IdleHint LockedHint CanIdle CanLock | | libseat (Active, via Get + PropertiesChanged), desktops | T (Id, Type, State, Active, IdleHint; GetAll size) / U (rest) |
+| org.freedesktop.DBus.Properties Get/GetAll + PropertiesChanged for Active, State, IdleHint, LockedHint | | libseat | T (PropertiesChanged on VT switch) |
 
 Not implemented: Terminate, Kill, SetClass/SetDisplay/SetTTY, SetBrightness, AuditSessionID values.
 
