@@ -33,6 +33,8 @@
 #include "config.h"
 #include "priv.h"
 #include "cli.h"
+#include "mods/nmapi.c"
+#include "daemon.c"
 #include "help.c"
 #include "tui.h"
 

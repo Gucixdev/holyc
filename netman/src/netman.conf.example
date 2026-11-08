@@ -98,6 +98,12 @@
 # Native WireGuard (generic netlink): the wg commands and WireGuard profiles of the vpn commands. no = only OpenVPN profiles work.
 # enabled = yes
 
+[nmapi]
+# NetworkManager D-Bus API (org.freedesktop.NetworkManager) served by `netman daemon`, so nm-applet / libnm / nmcli style clients work against netman.
+# enabled = yes
+# Seconds between the daemon's looks at the links and the Wi-Fi state (it emits the D-Bus signals for whatever changed). (1..3600)
+# refresh_s = 5
+
 [tui]
 # TUI colours. (default|mono|light)
 # theme = default

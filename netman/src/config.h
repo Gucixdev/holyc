@@ -55,6 +55,8 @@
 	X(LICENCE_ENABLED, "licence", "enabled", "bool", "yes", "Licence files, expiry check, renewal hook and WireGuard key rotation: the licence and key commands, the licence line in the Enterprise tab.") \
 	X(TETHER_ENABLED, "tether", "enabled", "bool", "no", "USB / Bluetooth tethering detection and share-out: `ent tether`, tether profile adds, the tether rows in the Enterprise tab. Off by default: sharing changes firewall and forwarding.") \
 	X(WG_ENABLED, "wireguard", "enabled", "bool", "yes", "Native WireGuard (generic netlink): the wg commands and WireGuard profiles of the vpn commands. no = only OpenVPN profiles work.") \
+	X(NMAPI_ENABLED, "nmapi", "enabled", "bool", "yes", "NetworkManager D-Bus API (org.freedesktop.NetworkManager) served by `netman daemon`, so nm-applet / libnm / nmcli style clients work against netman.") \
+	X(NMAPI_REFRESH, "nmapi", "refresh_s", "int:1:3600", "5", "Seconds between the daemon's looks at the links and the Wi-Fi state (it emits the D-Bus signals for whatever changed).") \
 	X(TUI_THEME, "tui", "theme", "enum:default|mono|light", "default", "TUI colours.") \
 	X(TUI_UNICODE, "tui", "unicode", "enum:auto|yes|no", "auto", "Box drawing and glyphs. auto = by locale; no = plain ASCII.") \
 	X(PRIV_SUDO, "privileges", "sudo", "enum:auto|never|always", "auto", "When netman re-runs itself through sudo: auto = only when the command needs root, never, always.")

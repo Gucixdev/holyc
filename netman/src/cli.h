@@ -55,7 +55,7 @@ static int nc_vpn_has_profiles(void)
 
 static int nc_enabled(const char *module)
 {
-	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED }, { "wireguard", NC_WG_ENABLED } };
+	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED }, { "wireguard", NC_WG_ENABLED }, { "nmapi", NC_NMAPI_ENABLED } };
 	if (!module) return 1;
 	for (unsigned i = 0; i < sizeof t / sizeof *t; i++) if (!strcmp(module, t[i].m)) return netman_config_bool(&nc_cfg, t[i].k);
 	return 1;
@@ -615,6 +615,7 @@ static int h_fw_preset(const nc_cmd *c, int n, char **a)
 }
 
 static int h_help(const nc_cmd *c, int n, char **a);   /* help.c */
+static int h_daemon(const nc_cmd *c, int n, char **a);   /* daemon.c */
 
 /* ---- the table ----------------------------------------------------------------------------------------------------- */
 
@@ -699,6 +700,7 @@ static const nc_cmd nc_table[] = {
 	{ "config show", "", h_cfg_show, R_NEV, NULL, "every setting with its value and where it came from", "" },
 	{ "config check", "", h_cfg_check, R_NEV, NULL, "validate the config files and environment", "Errors are FILE:LINE with a did-you-mean for unknown keys." },
 	{ "config set", "SECTION.KEY VALUE", h_cfg_set, R_NEV, NULL, "edit the user config file (atomic, comments kept)", "" },
+	{ "daemon", "[--bus ADDRESS]", h_daemon, R_YES, "nmapi", "serve the NetworkManager D-Bus API (drop-in for NM clients)", "Claims org.freedesktop.NetworkManager on the system bus (fails if a NetworkManager owns it) and answers until SIGTERM. --bus selects another bus, e.g. a private dbus-daemon. See docs/nm-api-surface.md for what is implemented." },
 	{ "config toggle", "SECTION.KEY", h_cfg_toggle, R_NEV, NULL, "flip a yes/no setting", "" },
 	{ "config example", "", h_cfg_example, R_NEV, NULL, "print the documented example config", "" },
 	{ "help", "[TOPIC]", h_help, R_NEV, NULL, "this list, or the help for one command or group", "" },

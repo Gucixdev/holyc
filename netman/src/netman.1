@@ -241,6 +241,9 @@ validate the config files and environment. Errors are FILE:LINE with a did\-you\
 .B netman config set SECTION.KEY VALUE
 edit the user config file (atomic, comments kept)
 .TP
+.B netman daemon [\-\-bus ADDRESS]
+serve the NetworkManager D\-Bus API (drop\-in for NM clients). Claims org.freedesktop.NetworkManager on the system bus (fails if a NetworkManager owns it) and answers until SIGTERM. \-\-bus selects another bus, e.g. a private dbus\-daemon. See docs/nm\-api\-surface.md for what is implemented.
+.TP
 .B netman config toggle SECTION.KEY
 flip a yes/no setting
 .TP
@@ -423,6 +426,12 @@ USB / Bluetooth tethering detection and share\-out: `ent tether`, tether profile
 .TP
 .B wireguard.enabled
 Native WireGuard (generic netlink): the wg commands and WireGuard profiles of the vpn commands. no = only OpenVPN profiles work. Default: yes.
+.TP
+.B nmapi.enabled
+NetworkManager D\-Bus API (org.freedesktop.NetworkManager) served by `netman daemon`, so nm\-applet / libnm / nmcli style clients work against netman. Default: yes.
+.TP
+.B nmapi.refresh_s
+Seconds between the daemon's looks at the links and the Wi\-Fi state (it emits the D\-Bus signals for whatever changed). Default: 5.
 .TP
 .B tui.theme
 TUI colours. Default: default.
