@@ -347,6 +347,7 @@ static void outputmgrtest(struct wl_listener *listener, void *data);
 static void pointerfocus(Client *c, LayerSurface* l, struct wlr_surface *surface,
 		double sx, double sy, uint32_t time);
 static void printstatus(void);
+static void ctlmapped(Client *c);
 static void powermgrsetmode(struct wl_listener *listener, void *data);
 static void quit(const Arg *arg);
 static void rendermon(struct wl_listener *listener, void *data);
@@ -2068,6 +2069,7 @@ mapnotify(struct wl_listener *listener, void *data)
 	} else {
 		applyrules(c);
 	}
+	ctlmapped(c);
 	printstatus();
 
 unset_fullscreen:
@@ -2769,6 +2771,35 @@ ctlpid(Client *c)
 	return pid;
 }
 
+/* the command line that started a window, shell-quoted, read from /proc/PID/cmdline ("" if unreadable) */
+static void
+ctlcmd(FILE *f, int pid)
+{
+	char path[64], buf[2048], q[4200];
+	size_t n, len = 0;
+	FILE *p;
+	snprintf(path, sizeof path, "/proc/%d/cmdline", pid);
+	q[0] = 0;
+	if (pid > 0 && (p = fopen(path, "r"))) {
+		n = fread(buf, 1, sizeof buf - 1, p);
+		buf[n] = 0;
+		fclose(p);
+		for (size_t i = 0; i < n; i += strlen(buf + i) + 1) {
+			const char *a = buf + i;
+			if (len + strlen(a) * 4 + 4 >= sizeof q) break;
+			if (len) q[len++] = ' ';
+			q[len++] = '\'';
+			for (; *a; a++) {
+				if (*a == '\'') { memcpy(q + len, "'\\''", 4); len += 4; }
+				else q[len++] = *a;
+			}
+			q[len++] = '\'';
+		}
+		q[len] = 0;
+	}
+	jstr(f, q);
+}
+
 static void
 ctlstate(FILE *f)
 {
@@ -2785,6 +2816,7 @@ ctlstate(FILE *f)
 			jstr(f, m->wlr_output->name);
 			fputs(",\"appid\":", f); jstr(f, client_get_appid(c));
 			fputs(",\"title\":", f); jstr(f, client_get_title(c));
+			fputs(",\"cmd\":", f); ctlcmd(f, ctlpid(c));
 			fprintf(f, ",\"pid\":%d,\"tags\":%"PRIu32",\"floating\":%d,\"fullscreen\":%d,\"focused\":%d,"
 				"\"x\":%d,\"y\":%d,\"w\":%d,\"h\":%d}", ctlpid(c), c->tags, c->isfloating, c->isfullscreen,
 				c == focustop(m), c->geom.x, c->geom.y, c->geom.width, c->geom.height);
@@ -2824,62 +2856,144 @@ jfind(const char *line, const char *key, char *out, size_t outlen)
 	return strtol(p, NULL, 10);
 }
 
-static void
-ctlrestore(const char *path, FILE *out)
+/* restore state: the saved windows, kept after the call so windows we spawn can be placed when they map */
+#define NSAVED 128
+static struct Saved {
+	char out[64], app[128], cmd[512];
+	uint32_t tags;
+	int floating, done;
+	struct wlr_box g;
+} saved[NSAVED];
+static int nsaved;
+static time_t saved_at; /* spawned windows are placed for 20 s after the restore, then the list is forgotten */
+
+/* the live window that stands for saved[i]: same output and appid, not claimed by an earlier saved entry */
+static Client *
+ctlmatch(int i, Client **claimed, int nclaimed)
 {
-	char line[2048], oname[64], app[256];
-	FILE *in = fopen(path, "r");
-	Client *used[256];
-	int nused = 0, moved = 0, nmiss = 0;
-	if (!in) {
-		fprintf(out, "{\"error\":\"cannot open %s\"}\n", path);
+	Client *c;
+	wl_list_for_each(c, &clients, link) {
+		const char *id = client_get_appid(c);
+		int taken = 0;
+		if (!c->mon || strcmp(c->mon->wlr_output->name, saved[i].out) || strcmp(id ? id : "", saved[i].app))
+			continue;
+		for (int k = 0; k < nclaimed; k++) taken |= claimed[k] == c;
+		if (!taken)
+			return c;
+	}
+	return NULL;
+}
+
+static void
+ctlapply(int i, Client *c)
+{
+	c->tags = saved[i].tags & TAGMASK ? saved[i].tags & TAGMASK : c->tags;
+	setfloating(c, saved[i].floating);
+	if (c->isfloating && saved[i].g.width > 0 && saved[i].g.height > 0)
+		resize(c, saved[i].g, 0);
+	saved[i].done = 1;
+}
+
+/* tiling order: the saved order is the order of the clients list, so put the placed windows at its head in that order */
+static void
+ctlreorder(void)
+{
+	Client *claimed[NSAVED], *c;
+	int n = 0;
+	for (int i = 0; i < nsaved; i++)
+		if (saved[i].done && (c = ctlmatch(i, claimed, n))) { claimed[n++] = c; }
+	for (int k = n - 1; k >= 0; k--) {
+		wl_list_remove(&claimed[k]->link);
+		wl_list_insert(&clients, &claimed[k]->link);
+	}
+	Monitor *m;
+	wl_list_for_each(m, &mons, link)
+		arrange(m);
+}
+
+/* hook in mapnotify: a window we spawned for a restore has appeared, put it where the layout says */
+static void
+ctlmapped(Client *c)
+{
+	const char *id = client_get_appid(c);
+	Monitor *m;
+	if (!nsaved || time(NULL) - saved_at > 20)
+		return;
+	for (int i = 0; i < nsaved; i++) {
+		if (saved[i].done || !saved[i].cmd[0] || strcmp(id ? id : "", saved[i].app))
+			continue;
+		ctlapply(i, c);
+		wl_list_for_each(m, &mons, link) /* move it to the saved output if that output exists */
+			if (!strcmp(m->wlr_output->name, saved[i].out)) {
+				if (c->mon != m) setmon(c, m, c->tags);
+				break;
+			}
+		ctlreorder();
 		return;
 	}
-	fputs("{\"missing\":[", out);
+}
+
+static void
+ctlrestore(char *arg, FILE *out)
+{
+	char line[4096], oname[64], app[128];
+	char *flag = strstr(arg, " nospawn");
+	int nospawn = flag != NULL, moved = 0, spawned = 0, nmiss = 0;
+	Client *claimed[NSAVED];
+	FILE *in;
+	if (flag) *flag = 0;
+	if (!(in = fopen(arg, "r"))) {
+		fprintf(out, "{\"error\":\"cannot open %s\"}\n", arg);
+		return;
+	}
+	nsaved = 0;
+	saved_at = time(NULL);
 	while (fgets(line, sizeof line, in)) {
 		Monitor *m;
-		Client *c, *hit = NULL;
-		long tags;
+		long v;
 		if (jfind(line, "output", oname, sizeof oname) < 0 && jfind(line, "name", oname, sizeof oname) < 0)
 			continue;
 		if (jfind(line, "appid", app, sizeof app) < 0) {
-			/* an output line: put the visible tags back */
-			if ((tags = jfind(line, "view", NULL, 0)) > 0)
+			if ((v = jfind(line, "view", NULL, 0)) > 0) /* an output line: the visible tags */
 				wl_list_for_each(m, &mons, link)
 					if (!strcmp(m->wlr_output->name, oname)) {
-						m->tagset[m->seltags] = tags & TAGMASK;
+						m->tagset[m->seltags] = v & TAGMASK;
 						arrange(m);
 					}
 			continue;
 		}
-		wl_list_for_each(c, &clients, link) {
-			int u = 0;
-			const char *id = client_get_appid(c);
-			if (!c->mon || strcmp(c->mon->wlr_output->name, oname) || strcmp(id ? id : "", app))
-				continue;
-			for (int i = 0; i < nused; i++) u |= used[i] == c;
-			if (!u) { hit = c; break; }
-		}
-		if (!hit) {
-			fprintf(out, "%s", nmiss++ ? "," : "");
-			jstr(out, app);
+		if (nsaved >= NSAVED)
 			continue;
-		}
-		if (nused < 256) used[nused++] = hit;
-		if ((tags = jfind(line, "tags", NULL, 0)) > 0)
-			hit->tags = tags & TAGMASK;
-		setfloating(hit, jfind(line, "floating", NULL, 0) > 0);
-		if (hit->isfloating) {
-			struct wlr_box g = { jfind(line, "x", NULL, 0), jfind(line, "y", NULL, 0),
-				jfind(line, "w", NULL, 0), jfind(line, "h", NULL, 0) };
-			if (g.width > 0 && g.height > 0)
-				resize(hit, g, 0);
-		}
-		arrange(hit->mon);
-		moved++;
+		struct Saved *s = &saved[nsaved++];
+		memset(s, 0, sizeof *s);
+		snprintf(s->out, sizeof s->out, "%s", oname);
+		snprintf(s->app, sizeof s->app, "%s", app);
+		jfind(line, "cmd", s->cmd, sizeof s->cmd);
+		s->tags = (uint32_t)jfind(line, "tags", NULL, 0);
+		s->floating = jfind(line, "floating", NULL, 0) > 0;
+		s->g = (struct wlr_box){ jfind(line, "x", NULL, 0), jfind(line, "y", NULL, 0),
+			jfind(line, "w", NULL, 0), jfind(line, "h", NULL, 0) };
 	}
 	fclose(in);
-	fprintf(out, "],\"restored\":%d}\n", moved);
+	fputs("{\"missing\":[", out);
+	for (int i = 0, nc = 0; i < nsaved; i++) {
+		Client *c = ctlmatch(i, claimed, nc);
+		if (c) {
+			claimed[nc++] = c;
+			ctlapply(i, c);
+			moved++;
+		} else if (!nospawn && saved[i].cmd[0]) {
+			const char *argv[] = { "/bin/sh", "-c", saved[i].cmd, NULL };
+			Arg a = { .v = argv };
+			spawn(&a);
+			spawned++;
+		} else {
+			fprintf(out, "%s", nmiss++ ? "," : "");
+			jstr(out, saved[i].app);
+		}
+	}
+	ctlreorder();
+	fprintf(out, "],\"restored\":%d,\"spawned\":%d}\n", moved, spawned);
 	printstatus();
 }
 
