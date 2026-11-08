@@ -1,0 +1,98 @@
+.TH GTOP 1 "2026-11-08" "holyc" "User Commands"
+.SH NAME
+gtop \- system monitor for the terminal
+.SH SYNOPSIS
+.B gtop
+[\fB\-f\fR \fISUBSTR\fR] [\fB\-\-no\-bpf\fR]
+.br
+.B gtop \-\-snapshot
+[\fIW H\fR] [\fB\-\-keys\fR \fIKEYS\fR] [\fB\-f\fR \fISUBSTR\fR]
+.SH DESCRIPTION
+A full\-screen monitor that reads
+.I /proc
+and
+.I /sys
+directly, with no libraries beyond libc. Panels: CPU (aggregate bar, trend graph, per\-core load, frequency, temperature),
+RAM (used, zram, cache, swap and free as one segmented bar, trend graph), GPU (nvidia\-smi, else amdgpu sysfs, else
+intel_gpu_top), TPU/NPU (shown only when the hardware exists), DISK (usage, activity and partition tree per device),
+NET (rates, link speed and addresses per interface) and PROC.
+.PP
+PROC has two views, clean and raw, a process tree, marking, kill and a command palette.
+.SH OPTIONS
+.TP
+.BR \-f " " \fISUBSTR\fR
+keep only processes whose name contains SUBSTR
+.TP
+.B \-\-snapshot \fR[\fIW H\fR]
+draw one frame as plain text and exit; needs no terminal. W and H set the size when both are given
+.TP
+.BI \-\-keys " KEYS"
+feed keys before the snapshot is drawn: U D L R are the arrows, E is enter, any other character is literal.
+A refresh happens after the keys, so a view change shows in the frame
+.TP
+.B \-\-no\-bpf
+do not load the eBPF syscall counter. It loads only when run as root (or with CAP_BPF and CAP_PERFMON); otherwise the syscall column stays unknown
+.TP
+.BR \-h ", " \-\-help
+print usage
+.SH KEYS
+.TP
+.B q
+quit
+.TP
+.B Left, Right
+switch the process view between clean and raw
+.TP
+.B Up, Down
+move the cursor
+.TP
+.B Space
+mark or unmark the process
+.TP
+.B k
+send SIGKILL to the marked processes, or to the current row when none is marked
+.TP
+.B /
+open the command palette
+.TP
+.B r
+start or stop recording every number to
+.I gtop\-record\-TIME.csv
+in the current directory
+.TP
+.B a
+anonymous mode
+.TP
+.B i
+toggle the info display
+.TP
+.BR + ", " \-
+refresh interval, 100 ms to 5 s in steps of 100 ms
+.SH COMMAND PALETTE
+Typing a name and its arguments after
+.B /
+runs the executable script
+.IR commands/NAME ,
+with the shell, passing the marked process ids as arguments. The name may not contain a slash or start with a dot. Its output is shown on the status line.
+The scripts are looked up in
+.IR $GTOP_COMMANDS ,
+then
+.IR ./commands ,
+then next to the binary (\fIcommands\fR and \fI../share/gtop/commands\fR).
+Shipped examples: \fBkill\fR, \fBterm\fR (SIGTERM), \fBsuspend\fR (SIGSTOP), \fBresume\fR (SIGCONT), \fBrenice\fR \fIN\fR.
+.SH ENVIRONMENT
+.TP
+.B GTOP_COMMANDS
+directory searched first for palette commands
+.SH FILES
+.TP
+.I gtop\-record\-TIME.csv
+written by the \fBr\fR key, TIME in seconds since the epoch
+.TP
+.I $PREFIX/share/gtop/commands/
+the installed example commands
+.SH EXIT STATUS
+0 on success, 2 for an unknown option.
+.SH SEE ALSO
+.BR top (1),
+.BR proc (5)

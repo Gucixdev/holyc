@@ -1,0 +1,127 @@
+.TH FZF 1 "2026-11-08" "holyc" "User Commands"
+.SH NAME
+fzf \- interactive fuzzy finder, a one\-file C implementation
+.SH SYNOPSIS
+.B fzf
+[\fIoptions\fR]
+.SH DESCRIPTION
+Reads lines from standard input (or, when standard input is a terminal, from
+.BR $FZF_DEFAULT_COMMAND ),
+lets you narrow them by typing and prints the selected lines. It follows the command line, the scoring
+(FuzzyMatchV2), the extended search syntax and the default look of fzf 0.74. It needs only libc and pthreads.
+Prefix a long option with
+.B no\-
+or use the \fB+\fR form of a short option to turn it off.
+.SH OPTIONS
+Matching:
+.TP
+.BR \-x ", " \-\-extended
+extended search syntax (on by default)
+.TP
+.BR \-e ", " \-\-exact
+exact matches instead of fuzzy
+.TP
+.BR \-i ", " \-\-ignore\-case ", " \-\-smart\-case ", " \-\-literal
+case handling and plain\-string matching
+.TP
+.BI \-\-scheme " default|path|history"
+scoring scheme
+.TP
+.BI \-\-algo " v1|v2"
+matching algorithm
+.TP
+.BR \-n ", " \-\-nth " \fIN[,..]\fR"
+limit matching to these fields
+.TP
+.BI \-\-with\-nth " N[,..]"
+transform the displayed lines
+.TP
+.BR \-d ", " \-\-delimiter " \fISTR\fR"
+field delimiter (string or regex)
+.TP
+.BR \-\-tac ", " \-\-sort ", " \-\-tiebreak " \fIlist\fR, " \-\-disabled
+result order and a mode that turns matching off
+.TP
+.BR \-\-track ", " \-\-id\-nth " \fIN\fR"
+keep the cursor on the same item when the list changes
+.PP
+Interface:
+.TP
+.BR \-q ", " \-\-query " \fISTR\fR"
+start with this query
+.TP
+.BR \-1 ", " \-\-select\-1 ", " \-0 ", " \-\-exit\-0
+accept automatically when exactly one item matches / exit when none does
+.TP
+.BR \-f ", " \-\-filter " \fISTR\fR"
+non\-interactive: print the matches for STR and exit
+.TP
+.BR \-m ", " \-\-multi [=\fIN\fR]
+select several items (Tab to mark)
+.TP
+.BR \-\-print\-query ", " \-\-expect " \fIkeys\fR, " \-\-read0 ", " \-\-print0 ", " \-\-ansi ", " \-\-sync
+input and output handling
+.TP
+.BR \-\-layout " \fIdefault|reverse|reverse\-list\fR, " \-\-reverse ", " \-\-height " \fIN[%]\fR, " \-\-min\-height " \fIN\fR"
+placement
+.TP
+.BR \-\-border [=\fISTYLE\fR] ", " \-\-margin ", " \-\-padding ", " \-\-info " \fISTYLE\fR, " \-\-prompt ", " \-\-pointer ", " \-\-marker ", " \-\-header ", " \-\-header\-lines " \fIN\fR, " \-\-footer ", " \-\-no\-input ", " \-\-wrap ", " \-\-highlight\-line"
+what is drawn
+.TP
+.BI \-\-color " THEME"
+preset (dark, light, 16, temple, bw) and/or \fISLOT:colour\fR pairs
+.TP
+.BR \-\-history " \fIFILE\fR, " \-\-history\-size " \fIN\fR"
+query history, Ctrl\-P and Ctrl\-N
+.TP
+.BR \-\-preview " \fICMD\fR, " \-\-preview\-window " \fIOPTS\fR, " \-\-preview\-label " \fISTR\fR, " \-\-no\-preview"
+preview window; the command runs with the placeholders {}, {+}, {q}, {n}
+.TP
+.BI \-\-bind " KEY:ACTION[,..]"
+key bindings; actions can be chained with \fB+\fR and include \fBreload\fR, \fBexecute\fR, \fBexecute\-silent\fR, \fBbecome\fR and \fBtransform*\fR. Events: start, load, change, focus, one, zero, result, multi, jump, resize
+.TP
+.BI \-\-hints[=N]
+a key bar at the bottom (own extension, off with \fB\-\-no\-hints\fR)
+.TP
+.BI \-\-listen[=ADDR]
+HTTP server: POST an action to run it, GET the state
+.TP
+.BI \-\-with\-shell " CMD"
+shell used for commands
+.TP
+.BR \-\-mouse ", " \-\-cycle ", " \-\-keep\-right ", " \-\-scroll\-off " \fIN\fR, " \-\-hscroll ", " \-\-tabstop " \fIN\fR"
+behaviour
+.TP
+.BR \-h ", " \-\-help ", " \-\-version
+usage and version
+.PP
+Accepted and ignored for compatibility: \-\-gap, \-\-tail, \-\-tmux, \-\-walker*, \-\-list\-border and the other per\-section borders, \-\-bash/\-\-zsh/\-\-fish (use the Go fzf for shell key bindings).
+.SH KEYS
+Defaults: Ctrl\-A/E line start/end, Ctrl\-B/F or Left/Right move, Alt\-B/F by word, Ctrl\-D delete, Ctrl\-H or Backspace erase, Ctrl\-W erase word, Ctrl\-U erase line, Ctrl\-Y yank,
+Ctrl\-J/K/N/P or Up/Down move the cursor, PageUp/PageDown page, Shift\-Up/Down scroll the preview, Enter or double click accept, Ctrl\-C/G/Q or Esc abort, Ctrl\-L redraw, wheel scrolls.
+.SH ENVIRONMENT
+.TP
+.B FZF_DEFAULT_COMMAND
+command that supplies the items when standard input is a terminal; the default walks the current directory
+.TP
+.B FZF_DEFAULT_OPTS
+options placed before those on the command line
+.TP
+.B FZF_THEME_FILE
+theme file; default
+.I $XDG_CONFIG_HOME/fzf/theme
+or
+.I ~/.config/fzf/theme
+.TP
+.B NO_COLOR
+disable colours
+.SH FILES
+.TP
+.I ~/.config/fzf/theme
+one \fB\-\-color\fR value (preset name and/or slot:colour pairs, separated by commas or newlines); lines starting with # are comments. Shared by every tool built on this library
+.SH EXIT STATUS
+0 a selection was printed, 1 no match, 2 error (unknown option), 130 aborted.
+.SH SEE ALSO
+.BR grep (1),
+.I docs/fzf.md
+in the holyc source
