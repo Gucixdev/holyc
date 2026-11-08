@@ -19,7 +19,7 @@ INC      = -Ideps/utils -Ideps/libutil -Ideps/singlefile/abstract
 TOOLS   := cb cloc colorado dv fzf gtop man netcat netmanager_blue notts scenario shot snip sudo tgates tree
 
 LIBS_cb   = -lX11
-LIBS_sudo = -lcrypt
+LIBS_sudo = -lpam
 LIBS_fzf  = -pthread -lm
 LIBS_gtop = -lm
 

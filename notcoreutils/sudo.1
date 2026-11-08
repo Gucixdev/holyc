@@ -1,29 +1,88 @@
-.TH SUDO 8 "2026-08-16" "notcoreutils" "notcoreutils Manual"
+.TH SUDO 1 "2026-11-08" "holyc" "User Commands"
 .SH NAME
-sudo \- minimal, doas-style privilege escalation
+sudo \- run a command as another user, a drop-in for sudo(8)
 .SH SYNOPSIS
 .B sudo
-\fICMD\fR [\fIARGS\fR...]
+[\fB\-u\fR \fIUSER\fR] [\fB\-g\fR \fIGROUP\fR] [\fB\-EHnSb\fR] [\fB\-\-\fR] \fICOMMAND\fR [\fIARGS\fR...]
+.br
+.B sudo \-i
+|
+.B \-s
+[\fICOMMAND\fR]
+.br
+.B sudo \-l
+[\fICOMMAND\fR]
+.br
+.B sudo \-v
+|
+.B \-k
+|
+.B \-K
+.br
+.B sudo \-\-check
+[\fIFILE\fR]
+.br
+.B sudo \-\-tui
 .SH DESCRIPTION
-.B sudo
-prompts for your own password and, if you are a member of the
-.I wheel
-group, execs CMD as root.
+Same command line, same
+.I /etc/sudoers
+language and the same PAM login as the original, without the plugin system, LDAP or I/O logging.
+The rule grammar is complete for everyday use: user, runas and host lists, the four alias kinds,
+.BR ! ,
+.BR %group ,
+.BR #uid ,
+wildcards, directories, argument patterns, the tags NOPASSWD PASSWD SETENV NOEXEC, the last matching rule wins,
+.B #include
+and
+.BR #includedir .
+Defaults understood: timestamp_timeout, passwd_tries, env_reset, env_keep, secure_path, authenticate. Others are ignored.
 .PP
-Deliberately doas\-sized, not sudo\-sized: no /etc/sudoers file or
-rule grammar, no per\-command matching, no session/timestamp caching
-(every invocation re\-prompts \- a deliberate choice, not a missing
-feature: no cached\-auth window for another process on the same tty
-to ride), no NOPASSWD, no logging pipeline. One group check, one
-password check, one exec.
+Authentication goes through PAM service "sudo". A successful login is remembered per terminal for timestamp_timeout minutes
+(files in /run/sudo/ts). The environment is reset except for a short list (TERM, DISPLAY, WAYLAND_DISPLAY, LANG, ...) and env_keep;
+\fB\-E\fR needs the SETENV tag. Every run and every refusal is logged to syslog (authpriv).
+.SH OPTIONS
+.TP
+.B \-u, \-g
+target user and group (\fB#N\fR for numbers)
+.TP
+.B \-i, \-s
+login shell, or shell of the target user (with a command: run it through the shell)
+.TP
+.B \-l
+list what you may run; with a command, print its path if allowed (exit 1 otherwise)
+.TP
+.B \-v, \-k, \-K
+refresh the timestamp, forget this terminal's, forget all of yours
+.TP
+.B \-n, \-S
+never prompt (fail instead), read the password from stdin
+.TP
+.B \-\-check [FILE]
+parse a sudoers file and report errors (like visudo \-c)
+.TP
+.B \-\-tui
+interactive rule manager (see below)
+.SH TUI
+.B sudo \-\-tui
+shows every rule that applies. Rules in the managed drop-in
+.I /etc/sudoers.d/90-sudo-tui
+can be added (\fBa\fR), deleted (\fBd\fR) and switched between asking for a password and NOPASSWD (\fBn\fR); \fBc\fR checks the whole
+configuration; \fBj/k\fR or arrows move; \fBq\fR quits. Rules from other files are shown read-only. Each change is written to a temporary
+file, verified with \fB\-\-check\fR and only then moved into place, so a typo cannot break sudo. Only users who may run everything can use it.
 .SH INSTALLATION
-Must be installed setuid\-root to work at all:
-.RS
 .nf
-chown root:root sudo
-chmod 4755 sudo
+cc -O2 -o sudo sudo.c -lpam
+chown root:root sudo && chmod 4755 sudo
 .fi
-.RE
-Refuses cleanly, with a clear error, if it is not.
+Needs /etc/pam.d/sudo (every distribution ships one) and a sudoers file owned by root and not writable by others.
+Refuses with a clear error when it is not setuid root.
+.SH FILES
+.I /etc/sudoers, /etc/sudoers.d/*, /run/sudo/ts/*
+.SH BUGS
+Not done: sudoedit (\-e), per\-command Defaults, NOEXEC enforcement, \-\-askpass, session/PAM session modules, closing the
+race of a command path changing between match and exec beyond what exec of the resolved path gives. Tested only unprivileged
+(target = yourself); the setuid path with real root and PAM has not been exercised yet.
 .SH SEE ALSO
+.BR sudoers (5),
+.BR visudo (8),
 .BR su (1)
