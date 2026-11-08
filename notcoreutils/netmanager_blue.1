@@ -8,8 +8,23 @@ netmanager_blue \- small network and bluetooth manager
 .B netmanager_blue wifi
 list | connect \fISSID\fR [\fIPASSPHRASE\fR] | disconnect | forget \fISSID\fR
 .br
+.B netmanager_blue wifi wps
+pbc | pin [\fIPIN\fR] | cancel
+.br
+.B netmanager_blue wifi hotspot
+start \fISSID\fR [\fIPASSPHRASE\fR] | stop
+.br
+.B netmanager_blue wifi known
+[autoconnect \fISSID\fR on|off]
+.br
 .B netmanager_blue bt
 list | scan [\fISEC\fR] | connect|disconnect|pair|trust|remove \fINAME_OR_MAC\fR | power on|off
+.br
+.B netmanager_blue bt agent
+[\fISEC\fR]
+.br
+.B netmanager_blue bt pair
+\fINAME_OR_MAC\fR \fB\-\-pin\fR \fIPIN\fR
 .br
 .B netmanager_blue fw
 .SH DESCRIPTION
@@ -20,10 +35,36 @@ shows ethernet, wifi and bluetooth. The wifi backend is chosen automatically: wp
 exists (this needs root), otherwise iwd. The interface can be changed with NMB_IFACE.
 .B fw
 prints the nft ruleset (root).
+.SH WIFI: WPS, HOTSPOT, SAVED NETWORKS
+.B wifi wps pbc
+starts WPS push\-button and waits (up to NMB_WPS_SECS, default 120) for the result: with wpa_supplicant it ATTACHes to the control socket, sends WPS_PBC and watches WPS\-SUCCESS / WPS\-FAIL / WPS\-TIMEOUT / WPS\-OVERLAP events; with iwd it calls SimpleConfiguration.PushButton.
+.B wifi wps pin
+[PIN] uses a 4 or 8 digit PIN; without one the router\-side PIN is generated (wpa_supplicant WPS_PIN any, iwd GeneratePin) and printed.
+.B wifi wps cancel
+aborts a running WPS.
+.PP
+.B wifi hotspot start
+SSID [PASSPHRASE] switches the device to access\-point mode: iwd's AccessPoint interface (the passphrase is required, 8\-63 characters), or a wpa_supplicant network with mode=2, WPA2\-PSK/CCMP, on NMB_AP_FREQ (default 2437 MHz) and without a passphrase an open one. The network is tagged id_str=nmb\-ap so
+.B hotspot stop
+removes exactly that one (iwd: Stop and back to station mode). It does not run DHCP or NAT; give the interface an address and share the uplink with dnsmasq/nft yourself.
+.PP
+.B wifi known
+lists saved networks with their autoconnect state;
+.B wifi known autoconnect
+SSID on|off changes it (iwd KnownNetwork.AutoConnect, or wpa_supplicant ENABLE_NETWORK/DISABLE_NETWORK).
+.PP
+SSIDs and passphrases containing quotes, backslashes or newlines are refused under wpa_supplicant because they would break out of the control\-socket command.
+.SH BLUETOOTH: PAIRING AGENT
+.B bt pair
+registers its own org.bluez.Agent1 as the default agent for the duration of the pairing and answers bluez on the terminal: PIN code, passkey (0\-999999), "does this passkey match? [y/N]", pairing and service authorisation, and it shows displayed PINs/passkeys. Input comes from stdin. With
+.B \-\-pin
+PIN nothing is asked: every PIN or passkey request is answered with PIN and every confirmation or authorisation is accepted, so use it only for devices you are pairing on purpose.
+.B bt agent
+[SEC] only registers the agent and serves requests (for pairing started from the phone) until SEC seconds have passed, or Ctrl\-C when SEC is omitted.
 .SH LIBRARY
-The logic lives in the stb-style single header netmanager_blue.h (define NMB_IMPLEMENTATION in one .c file; functions nmb_status, nmb_wifi_*, nmb_bt_*, nmb_fw; output redirectable via nmb_out/nmb_err). This program is a thin CLI over it.
+The logic lives in the stb-style single header netmanager_blue.h (define NMB_IMPLEMENTATION in one .c file; functions nmb_status, nmb_wifi_*, nmb_bt_*, nmb_fw; output redirectable via nmb_out/nmb_err, prompt answers via nmb_in). This program is a thin CLI over it.
 .SH NOT YET
-WPS, VPN, ethernet configuration, a TUI, bluetooth pairing agent (PIN entry); wifi forget works with iwd only.
+VPN, ethernet configuration, a TUI; wifi forget works with iwd only. WPS, hotspot and the pairing agent are tested against fake wpa_supplicant / iwd / bluez peers (tests/netmanager_blue_test.c), not yet against real hardware.
 .SH SEE ALSO
 .BR iwctl (1),
 .BR bluetoothctl (1),
