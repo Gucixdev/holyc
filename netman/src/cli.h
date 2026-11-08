@@ -27,6 +27,11 @@ static void nc_apply(const netman_config *c)
 	const char *b = netman_config_str(c, NC_WIFI_BACKEND), *d = netman_config_str(c, NC_NET_DNS_MODE), *u = netman_config_str(c, NC_ROAM_PROBE_URL);
 	int port = 80;
 	netman_vpn_env();
+	{ const char *e = getenv("NETMAN_CONF_DIR"); if (e && *e) netman_conf_dir = e; }   /* profile directory (NAME.conf / NAME.ent), default /etc/netman: relocation and tests */
+	netman_lic_dir = netman_config_str(c, NC_LIC_DIR);
+	netman_lic_warn_days = netman_config_int(c, NC_LIC_WARN);
+	netman_lic_renew_hook = netman_config_str(c, NC_LIC_RENEW_HOOK);
+	netman_lic_apply_hook = netman_config_str(c, NC_LIC_APPLY_HOOK);
 	netman_wifi_backend(!strcmp(b, "iwd") ? 1 : !strcmp(b, "wpa") ? 2 : 0);
 	netman_dns_mode = !strcmp(d, "resolvconf") ? 1 : !strcmp(d, "resolved") ? 2 : 0;
 	netman_state_dir = netman_config_str(c, NC_NET_STATE_DIR);
@@ -50,7 +55,7 @@ static int nc_vpn_has_profiles(void)
 
 static int nc_enabled(const char *module)
 {
-	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED } };
+	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED } };
 	if (!module) return 1;
 	for (unsigned i = 0; i < sizeof t / sizeof *t; i++) if (!strcmp(module, t[i].m)) return netman_config_bool(&nc_cfg, t[i].k);
 	return 1;
@@ -343,6 +348,100 @@ static int h_metrics_watch(const nc_cmd *c, int n, char **a)   /* [COUNT]: none 
 	return 0;
 }
 
+/* ---- enterprise ---------------------------------------------------------------------------------------------- */
+static int nc_ent_off(void) { if (netman_config_bool(&nc_cfg, NC_ENT_ENABLED)) return 0; fputs("netman: enterprise changes are disabled in config (netman config set enterprise.enabled yes)\n", stderr); return 3; }
+static int nc_ent_err(int r) { if (r >= 0) return 0; fprintf(stderr, "netman: %s\n", r == -22 && *netman_ent_error() ? netman_ent_error() : *netman_ent_error() ? netman_ent_error() : strerror(-r)); return 1; }
+static int h_ent_list(const nc_cmd *c, int n, char **a)
+{
+	char names[64][64]; int k = netman_ent_list(names, 64);
+	(void)c; (void)n; (void)a;
+	for (int i = 0; i < k; i++) { netman_ent e; if (netman_ent_load(names[i], &e) == 0) printf("%-20s %s\n", names[i], e.kind); else printf("%-20s (invalid: %s)\n", names[i], netman_ent_error()); }
+	return 0;
+}
+static int h_ent_show(const nc_cmd *c, int n, char **a)
+{
+	netman_ent e; (void)c; (void)n;
+	if (nc_ent_err(netman_ent_load(a[0], &e))) return 1;
+	return nc_ent_err(netman_ent_show(&e, stdout));
+}
+static int h_ent_add(const nc_cmd *c, int n, char **a)
+{
+	netman_ent e; (void)c; (void)n;
+	if (nc_ent_off()) return 3;
+	if (nc_ent_err(netman_ent_load(a[0], &e))) return 1;
+	if (!strcmp(e.kind, "tether") && !nc_enabled("tether")) { fputs("tether disabled in config (netman config toggle tether.enabled)\n", stderr); return 3; }
+	return nc_ent_err(netman_ent_add(&e));
+}
+static int h_ent_del(const nc_cmd *c, int n, char **a)
+{
+	netman_ent e; (void)c; (void)n;
+	if (nc_ent_off()) return 3;
+	if (nc_ent_err(netman_ent_load(a[0], &e))) return 1;
+	return nc_ent_err(netman_ent_del(&e));
+}
+static int h_ent_save(const nc_cmd *c, int n, char **a)   /* ent save NAME KIND [KEY=VALUE...] */
+{
+	char text[8192] = ""; netman_ent e; (void)c;
+	snprintf(text, sizeof text, "name=%s\nkind=%s\n", a[0], a[1]);
+	for (int i = 2; i < n; i++) { strncat(text, a[i], sizeof text - strlen(text) - 2); strcat(text, "\n"); }
+	if (nc_ent_err(netman_ent_parse(text, &e))) return 1;
+	return nc_ent_err(netman_ent_save(&e));
+}
+static int h_ent_apply(const nc_cmd *c, int n, char **a)
+{
+	(void)c; (void)n; (void)a;
+	if (nc_ent_off()) return 3;
+	return netman_ent_apply_all() ? 1 : 0;
+}
+static volatile sig_atomic_t nc_ent_stop;
+static void nc_ent_sig(int s) { (void)s; nc_ent_stop = 1; }
+static int h_ent_ecmp(const nc_cmd *c, int n, char **a)   /* foreground failover loop; the daemon can call the same */
+{
+	netman_ent e; int ms = netman_config_int(&nc_cfg, NC_ENT_PROBE_MS); (void)c; (void)n;
+	if (nc_ent_off()) return 3;
+	if (nc_ent_err(netman_ent_load(a[0], &e))) return 1;
+	if (strcmp(e.kind, "ecmp")) { fputs("netman: not an ecmp profile\n", stderr); return 1; }
+	signal(SIGINT, nc_ent_sig); signal(SIGTERM, nc_ent_sig);
+	return nc_ent_err(netman_ent_ecmp_run(&e, ms, &nc_ent_stop));
+}
+static int h_ent_tether(const nc_cmd *c, int n, char **a)
+{
+	netman_ent_tether_dev d[16]; int k = netman_ent_tether_detect(d, 16);
+	(void)c; (void)n; (void)a;
+	if (k <= 0) { puts("no USB or Bluetooth tethering device found"); return k < 0 ? 1 : 0; }
+	for (int i = 0; i < k; i++) printf("%-10s %-4s %s\n", d[i].ifn, d[i].kind, d[i].driver);
+	return 0;
+}
+static int h_wol(const nc_cmd *c, int n, char **a)
+{
+	(void)c; (void)n;
+	return nc_ent_err(netman_ent_wol_send(a[0], a[1]));
+}
+static int h_lic_status(const nc_cmd *c, int n, char **a)
+{
+	(void)c; (void)n; (void)a;
+	return netman_lic_status(stdout) > 0 ? 1 : 0;      /* exit 1 when anything is expiring/expired: usable in cron */
+}
+static int h_lic_renew(const nc_cmd *c, int n, char **a)
+{
+	(void)c; (void)n;
+	return nc_ent_err(netman_lic_renew(a[0]));
+}
+static int h_key_rotate(const nc_cmd *c, int n, char **a)
+{
+	char pub[45]; (void)c; (void)n;
+	if (nc_ent_err(netman_key_rotate(a[0], pub))) return 1;
+	printf("%s\n", pub);                              /* new public key: hand it to the peer */
+	return 0;
+}
+static int h_key_show(const nc_cmd *c, int n, char **a)
+{
+	char pub[45]; (void)c; (void)n;
+	if (nc_ent_err(netman_key_show(a[0], pub))) return 1;
+	printf("%s\n", pub);
+	return 0;
+}
+
 /* ---- config -------------------------------------------------------------------------------------------------------- */
 
 static int h_cfg_show(const nc_cmd *c, int n, char **a) { (void)c; (void)n; (void)a; netman_config_show(&nc_cfg, stdout); return 0; }
@@ -447,6 +546,19 @@ static const nc_cmd nc_table[] = {
 	{ "metrics show", "", h_metrics_show, R_NO, "metrics", "per-interface rates and totals", "" },
 	{ "metrics record", "", h_metrics_record, R_YES, "metrics", "append one sample per interface to metrics.dir", "" },
 	{ "metrics watch", "[COUNT]", h_metrics_watch, R_NO, "metrics", "print rates every metrics.interval_s seconds", "" },
+	{ "ent list", "", h_ent_list, R_NO, "enterprise", "saved enterprise profiles (bond, bridge, vlan, route, ecmp, tether ...)", "" },
+	{ "ent show", "NAME", h_ent_show, R_YES, "enterprise", "live state of a profile's device", "" },
+	{ "ent save", "NAME KIND [KEY=VALUE...]", h_ent_save, R_YES, "enterprise", "create or replace a profile", "KIND: bond team bridge vlan macvlan ipvlan veth dummy tether dot1x route rule ecmp link ipv6 wol. Keys are the profile keys, e.g. `ent save bond0 bond mode=802.3ad member=eth0 member=eth1 miimon=100`. Stored as NAME.ent in the netman config directory." },
+	{ "ent add", "NAME", h_ent_add, R_YES, "enterprise", "create the device / install the routes of a profile", "Needs enterprise.enabled = yes. Everything goes through rtnetlink, ethtool ioctls and /proc/sys; only nft, dnsmasq and wpa_supplicant are ever exec'd, and only for tether and 802.1X." },
+	{ "ent del", "NAME", h_ent_del, R_YES, "enterprise", "tear a profile's device / routes down", "" },
+	{ "ent apply", "", h_ent_apply, R_YES, "enterprise", "apply every saved profile in dependency order", "dummy/veth, bond/team, bridge, vlan/macvlan/ipvlan, link/ipv6/wol, route/rule/ecmp, tether/dot1x." },
+	{ "ent ecmp", "NAME", h_ent_ecmp, R_YES, "enterprise", "run the multi-uplink failover loop for an ecmp profile", "Probes each uplink with an ICMP echo bound to its interface; fail_after / ok_after consecutive results flip it, the default route (metric 50) follows. Ctrl-C stops." },
+	{ "ent tether", "", h_ent_tether, R_NO, "tether", "detected USB (RNDIS/NCM/ECM/ipheth) and Bluetooth PAN tethering devices", "" },
+	{ "wol", "IFACE MAC", h_wol, R_YES, "enterprise", "send a Wake-on-LAN magic packet out of IFACE", "UDP broadcast to port 9. Setting the NIC itself to wake on LAN is `ent save NAME wol wol=g`." },
+	{ "licence status", "", h_lic_status, R_NO, "licence", "licences and their expiry (exit 1 when any expires soon or has)", "Files NAME.lic in enterprise.licence_dir. Warns inside enterprise.licence_warn_days." },
+	{ "licence renew", "NAME", h_lic_renew, R_YES, "licence", "renew a licence through enterprise.renew_hook", "The hook gets NAME CURRENT_PATH NEW_PATH and writes the new licence; netman checks it names the same licence and expires later, then swaps atomically and keeps NAME.lic.prev. netman itself never contacts a network." },
+	{ "key rotate", "NAME", h_key_rotate, R_YES, "licence", "new WireGuard key for NAME; prints the new public key", "Writes NAME.key mode 0600, keeps the old one as NAME.key.prev, then runs enterprise.key_apply_hook (NAME PUBKEY); if the hook fails the old key is restored. No `wg` binary needed." },
+	{ "key show", "NAME", h_key_show, R_YES, "licence", "public key of NAME.key", "" },
 	{ "config show", "", h_cfg_show, R_NEV, NULL, "every setting with its value and where it came from", "" },
 	{ "config check", "", h_cfg_check, R_NEV, NULL, "validate the config files and environment", "Errors are FILE:LINE with a did-you-mean for unknown keys." },
 	{ "config set", "SECTION.KEY VALUE", h_cfg_set, R_NEV, NULL, "edit the user config file (atomic, comments kept)", "" },

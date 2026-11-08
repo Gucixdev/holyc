@@ -5,7 +5,7 @@
 set -u
 cd "$(dirname "$(readlink -f "$0")")" || exit 1
 work=$(mktemp -d); trap 'tmux -L nmtest kill-server 2>/dev/null; rm -rf "$work"' EXIT
-cc -std=gnu11 -O2 -I../src/mods -o "$work/fakes" fakes.c && cc -std=gnu11 -Wall -Wextra -O2 -I../src -I../src/mods -o "$work/nm" ../src/netman.c ../src/config.c || exit 1
+cc -std=gnu11 -O2 -I../src/mods -o "$work/fakes" fakes.c && cc -std=gnu11 -Wall -Wextra -O2 -I../src -I../src/mods -o "$work/nm" ../src/netman.c ../src/config.c ../src/mods/enterprise.c ../src/mods/tether.c ../src/mods/licence.c || exit 1
 printf "[privileges]\nsudo = never\n" >"$work/c.conf"
 T="tmux -L nmtest"
 pass=0 fail=0

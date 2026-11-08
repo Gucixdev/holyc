@@ -875,7 +875,7 @@ static int ent__mode(const char *m, const char *dflt, const struct ent_mode *t, 
 static int ent__vlandev(const netman_ent *e, const char *kind)
 {
 	ent_req q;
-	int li, di, r, p, mode;
+	int li, di, r, p, mode = 0;
 	if ((r = netman_ent_check(e)) < 0) return r;
 	if ((p = ent_idx(e->parent)) < 0) return ent_fail(p, "%s %s: parent '%s' does not exist", kind, e->name, e->parent);
 	if (!strcmp(kind, "macvlan") ? ent__mode(e->mode, "bridge", ent__mvmodes, 5, &mode) : ent__mode(e->mode, "l2", ent__ipmodes, 3, &mode)) return -EINVAL;

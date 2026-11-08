@@ -23,11 +23,13 @@
 #define NM_MAXDEV 64
 #define NM_MAXVPN 32
 #define NM_MAXDL 120
+#define NM_MAXENT 96
 
 typedef struct { char name[96], sec[8], bssid[18], band[4]; int dbm, pct, chan, nbss, hidden, connected, known, autoc; } nm_net;   /* autoc: -1 unknown, 0 off, 1 on; dbm 0 = unknown */
 typedef struct { char addr[18], alias[64]; int c, p, t, dbm; } nm_dev;                                                          /* dbm 0 = no reading */
 typedef struct { netman_if f; netman_ifstat st; int hasst; } nm_if;
 typedef struct { char name[48], kind[16], state[12], ep[80]; int up, active; long long hs, rx, tx; } nm_vpn;   /* up: state "up"; active: up or connecting; hs seconds since the handshake, -1 unknown; rx/tx -1 unknown */
+typedef struct { char kind[8], name[48], state[12], detail[132], prof[16]; int lvl; } nm_ent;   /* Enterprise row: lvl 0 ok, 1 attention, 2 bad; prof = saved .ent profile it came from or "" */
 typedef struct { char host[64], iface[16], gw[40], ip[64], ipkind[8], dns[96], word[64]; int score, ncheck; } nm_hdr;   /* the one-line header: score -1 = not measured yet */
 typedef struct { char key[96]; time_t first, last; } nm_seen;                                                          /* when this session first / last saw a Wi-Fi network */
 typedef struct { time_t t; char ssid[48], bssid[18]; } nm_roam;                                                       /* the access point the connected network used, newest last */
@@ -44,7 +46,7 @@ typedef struct {
 
 typedef struct { char key[96]; signed char v[8]; int n; } nm_hist;   /* last signal readings of one network */
 
-enum { NM_WIFI, NM_ETH, NM_BT, NM_VPN, NM_NTAB };
+enum { NM_WIFI, NM_ETH, NM_BT, NM_VPN, NM_ENT, NM_NTAB };
 enum { NM_NORMAL, NM_FILTER, NM_PROMPT, NM_CONFIRM, NM_HELP, NM_WPS, NM_INFO };
 enum { NM_K_UP = 0x101, NM_K_DOWN, NM_K_RIGHT, NM_K_LEFT, NM_K_BTAB, NM_K_PGUP, NM_K_PGDN, NM_K_HOME, NM_K_END, NM_K_TAB = 9, NM_K_ENTER = 13, NM_K_ESC = 27, NM_K_BS = 127 };
 enum { NM_SORT_SIGNAL, NM_SORT_NAME, NM_SORT_SECURED, NM_SORT_OPEN, NM_NSORT };
@@ -54,6 +56,7 @@ typedef struct {
 	nm_net nets[NM_MAXNET]; int nnets;
 	nm_dev devs[NM_MAXDEV]; int ndevs;
 	nm_if ifs[NETMAN_MAXIF]; int nifs; netman_metrics met;
+	nm_ent ents[NM_MAXENT]; int nent;
 	nm_vpn vpns[NM_MAXVPN]; int nvpn, ks;   /* ks: kill switch table loaded 1, absent 0, cannot tell -1 */
 	nm_hdr hdr;
 	int big, bigoff, bigdirty, bigtab; char bigkey[112];   /* I: the "all info" view replaces the list; scroll offset; what it was built for */
@@ -323,6 +326,7 @@ void nm_ui_init(nm_ui *u, int w, int h)
 	u->w = w < 20 ? 20 : w;
 	u->h = h < 6 ? 6 : h;
 	for (int i = 0; i < NM_NTAB; i++) u->en[i] = 1;
+	u->en[NM_ENT] = 0;                      /* the Enterprise tab exists only when enterprise.enabled (nc_tui) */
 	u->rssi_good = -55; u->rssi_ok = -65; u->rssi_weak = -75;
 	u->hdr.score = -1; u->ks = -1;
 }
@@ -354,7 +358,7 @@ static int nm__net_cmp(const nm_ui *u, const nm_net *a, const nm_net *b)
 
 int nm_ui_visible(const nm_ui *u, int *idx, int max)   /* rows of the current tab that pass the filter, in display order */
 {
-	int n = 0, total = u->tab == NM_WIFI ? u->nnets : u->tab == NM_BT ? u->ndevs : u->tab == NM_ETH ? u->nifs : u->tab == NM_VPN ? u->nvpn : 0;
+	int n = 0, total = u->tab == NM_WIFI ? u->nnets : u->tab == NM_BT ? u->ndevs : u->tab == NM_ETH ? u->nifs : u->tab == NM_VPN ? u->nvpn : u->tab == NM_ENT ? u->nent : 0;
 	for (int i = 0; i < total && n < max; i++) {
 		const char *a, *b = "";
 		if (u->tab == NM_WIFI) {
@@ -364,6 +368,7 @@ int nm_ui_visible(const nm_ui *u, int *idx, int max)   /* rows of the current ta
 			a = nm__net_label(e); b = e->bssid;
 		} else if (u->tab == NM_BT) { a = u->devs[i].alias; b = u->devs[i].addr; }
 		else if (u->tab == NM_ETH) { a = u->ifs[i].f.name; b = u->ifs[i].f.naddr ? u->ifs[i].f.addr[0] : ""; }
+		else if (u->tab == NM_ENT) { a = u->ents[i].name; b = u->ents[i].kind; }
 		else a = u->vpns[i].name;
 		if (nm__ci_has(a, u->filter) || nm__ci_has(b, u->filter)) idx[n++] = i;
 	}
@@ -426,7 +431,7 @@ static int nm__tabs(const nm_ui *u, int *out) { int n = 0; for (int i = 0; i < N
 
 static const char *nm__tabname(int i, int shortn)
 {
-	static const char *full[] = { "Wi-Fi", "Ethernet/IP", "Bluetooth", "VPN" }, *sh[] = { "Wi-Fi", "Eth", "BT", "VPN" };
+	static const char *full[] = { "Wi-Fi", "Ethernet/IP", "Bluetooth", "VPN", "Enterprise" }, *sh[] = { "Wi-Fi", "Eth", "BT", "VPN", "Ent" };
 	return shortn ? sh[i] : full[i];
 }
 
@@ -440,8 +445,9 @@ static void nm__keybar(const nm_ui *u, const nm_theme *t, nm__Row *r)
 	static const nm__Key bt[] = { { "enter", "conn" }, { "i", "info" }, { "I", "all" }, { "p", "pair" }, { "t", "trust" }, { "x", "remove" }, { "s", "scan" }, { "o", "power" }, { "/", "filter" } };
 	static const nm__Key eth[] = { { "i", "info" }, { "I", "all" }, { "r", "refresh" }, { "/", "filter" } };
 	static const nm__Key vpn[] = { { "enter", "up/down" }, { "K", "killsw" }, { "i", "info" }, { "I", "all" }, { "r", "refresh" }, { "/", "filter" } };
-	const nm__Key *k = u->tab == NM_WIFI ? wifi : u->tab == NM_BT ? bt : u->tab == NM_ETH ? eth : vpn;
-	int n = u->tab == NM_WIFI ? 12 : u->tab == NM_BT ? 9 : u->tab == NM_ETH ? 4 : 6, fixed = 14;
+	static const nm__Key ent[] = { { "i", "info" }, { "I", "all" }, { "r", "refresh" }, { "/", "filter" } };
+	const nm__Key *k = u->tab == NM_WIFI ? wifi : u->tab == NM_BT ? bt : u->tab == NM_ETH ? eth : u->tab == NM_ENT ? ent : vpn;
+	int n = u->tab == NM_WIFI ? 12 : u->tab == NM_BT ? 9 : u->tab == NM_ETH ? 4 : u->tab == NM_ENT ? 4 : 6, fixed = 14;
 	if (u->mode == NM_HELP || u->mode == NM_INFO) { nm__kb(r, t, "j/k", "scroll"); nm__kb(r, t, "esc", "close"); return; }
 	if (u->mode == NM_PROMPT) { nm__kb(r, t, "enter", "ok"); if (u->masked) nm__kb(r, t, "tab", "show/hide"); nm__kb(r, t, "esc", "cancel"); return; }
 	if (u->mode == NM_CONFIRM) { nm__kb(r, t, "y", "yes"); nm__kb(r, t, "n", "no"); return; }
@@ -688,7 +694,7 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 		char f[140] = "";
 		static const char *sn[] = { "signal", "name", "secured first", "open first" }, *sf[] = { "", " only open", " only secured" };
 		const char *hd = u->tab == NM_WIFI ? (w >= 56 ? "   sec  network" : "   sec  network") : u->tab == NM_BT ? " cpt  address            name"
-		               : u->tab == NM_ETH ? " iface        state  speed    rx/s     tx/s  address / gateway" : w >= 70 ? " profile              type      state     endpoint               handshake / transfer" : " profile       type      state";
+		               : u->tab == NM_ETH ? " iface        state  speed    rx/s     tx/s  address / gateway" : u->tab == NM_ENT ? " kind    name               state     detail" : w >= 70 ? " profile              type      state     endpoint               handshake / transfer" : " profile       type      state";
 		if (u->tab == NM_WIFI) snprintf(f, sizeof f, " sort:%s%s%s%s ", sn[u->sortm], sf[u->secf], u->filter[0] ? " /" : "", u->filter);
 		else if (u->filter[0] || u->mode == NM_FILTER) snprintf(f, sizeof f, " /%s ", u->filter);
 		nm__row_raw(&r, t->head);
@@ -737,6 +743,16 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 				if (e->f.gw4[0]) { size_t l = strlen(ad); snprintf(ad + l, sizeof ad - l, "  gw %s", e->f.gw4); }
 				nm__fit(nm, sizeof nm, e->f.name, 12, t->ell);
 				nm__row_fmt(&r, -1, " %-12s %-6s %5s %8s %8s  %s%s", nm, !e->f.up ? "down" : e->f.carrier ? "up" : "nolink", sp, rx, tx, ad, "");
+			} else if (u->tab == NM_ENT) {
+				const nm_ent *e = &u->ents[idx[k]];
+				char nm[60];
+				int nw = lw < 50 ? 12 : 18;
+				nm__fit(nm, sizeof nm, e->name, nw, t->ell);
+				nm__row_fmt(&r, -1, " %-7s %-*s ", e->kind, nw, nm);
+				if (!selected) nm__row_raw(&r, e->lvl == 2 ? t->err : e->lvl == 1 ? t->warn : t->ok);
+				nm__row_fmt(&r, -1, "%-9s", e->state);
+				if (!selected) nm__row_raw(&r, t->reset);
+				nm__row_fmt(&r, -1, " %s", e->detail);
 			} else {
 				const nm_vpn *e = &u->vpns[idx[k]];
 				char nm[60], hs[24] = "-", rx[24] = "-", tx[24] = "-", det[200] = "";
@@ -758,6 +774,7 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 		} else if (i == 0 && n == 0) {
 			nm__row_raw(&r, t->dim);
 			if (u->tab == NM_VPN && u->loaded[NM_VPN] && !u->filter[0]) nm__row_fmt(&r, -1, "  no VPN profiles in %s", u->vpndir);
+			else if (u->tab == NM_ENT && u->loaded[NM_ENT] && !u->filter[0]) nm__row_add(&r, "  no bonds, bridges, vlans, uplinks or licences (netman ent save ...)", -1);
 			else nm__row_add(&r, u->filter[0] || u->secf ? "  nothing matches the filter" : u->loaded[u->tab] ? "  nothing found (r to refresh)" : "  loading...", -1);
 		} else if (n == 0 && i <= 3 && u->tab == NM_VPN && u->loaded[NM_VPN] && !u->filter[0]) {
 			static const char *const hint[] = { "", "  import one:  netman vpn import FILE   (WireGuard .conf / OpenVPN .ovpn)", "  or copy it there yourself (root-owned, mode 0600)", "  other directory: env NETMAN_VPN_CONF_DIR" };
@@ -790,6 +807,12 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 		nm__row_raw(&r, bad ? t->warn : t->dim);
 		if (bad) nm__row_fmt(&r, -1, " %d profile%s unusable (locked/untrusted: i)  kill switch %s", bad, bad == 1 ? "" : "s", u->ks > 0 ? "on" : u->ks == 0 ? "off" : "?");
 		else nm__row_fmt(&r, -1, " kill switch: %s  (K toggles)", u->ks > 0 ? "ON" : u->ks == 0 ? "off" : "unknown (needs root + nft)");
+	} else if (u->tab == NM_ENT && u->mode == NM_NORMAL && u->loaded[NM_ENT]) {   /* read-only summary */
+		int bad = 0;
+		for (int i = 0; i < u->nent; i++) if (u->ents[i].lvl) bad++;
+		nm__row_raw(&r, bad ? t->warn : t->dim);
+		if (bad) nm__row_fmt(&r, -1, " %d of %d need attention (i)  read-only: change with netman ent / licence / key", bad, u->nent);
+		else nm__row_fmt(&r, -1, " %d item%s, all fine  (read-only: netman ent / licence / key)", u->nent, u->nent == 1 ? "" : "s");
 	} else if (u->tab == NM_WIFI && u->mode == NM_NORMAL && n > 0 && u->sel[NM_WIFI] < n) {   /* the selected network's numbers: history + trend */
 		const nm_net *e = &u->nets[idx[u->sel[NM_WIFI]]];
 		char hs[80];
@@ -1000,12 +1023,139 @@ static void nm__eth_refresh(nm_ui *u)
 	u->loaded[NM_ETH] = 1;
 }
 
+/* ---- Enterprise tab: read-only rows from the saved .ent profiles, the live kernel state and the licence store ---- */
+
+static const char *const nm__ent_order[] = { "bond", "bridge", "vlan", "uplink", "tether", "licence" };
+
+static void nm__ent_add(nm_ui *u, const char *kind, const char *name, const char *state, int lvl, const char *prof, const char *fmt, ...)
+{
+	nm_ent *e;
+	va_list ap;
+	if (u->nent >= NM_MAXENT) return;
+	e = &u->ents[u->nent++];
+	nm__copy(e->kind, sizeof e->kind, kind); nm__copy(e->name, sizeof e->name, name); nm__copy(e->state, sizeof e->state, state); nm__copy(e->prof, sizeof e->prof, prof);
+	e->lvl = lvl;
+	va_start(ap, fmt);
+	vsnprintf(e->detail, sizeof e->detail, fmt, ap);
+	va_end(ap);
+}
+static int nm__ent_rank(const char *kind) { for (unsigned i = 0; i < sizeof nm__ent_order / sizeof *nm__ent_order; i++) if (!strcmp(kind, nm__ent_order[i])) return (int)i; return 99; }
+static int nm__ent_has(const nm_ui *u, const char *kind, const char *name) { for (int i = 0; i < u->nent; i++) if (!strcmp(u->ents[i].kind, kind) && !strcmp(u->ents[i].name, name)) return 1; return 0; }
+
+/* link state of an interface as the uplink / tether rows show it: up, nolink, down, missing */
+static const char *nm__ent_link(const char *ifn, int *lvl)
+{
+	netman_if x;
+	*lvl = 0;
+	if (netman_find(ifn, &x) < 0) { *lvl = 2; return "missing"; }
+	if (!x.up) { *lvl = 1; return "down"; }
+	if (!x.carrier) { *lvl = 1; return "nolink"; }
+	return "up";
+}
+
+static void nm__ent_members(char *out, size_t n, const char *dev, const netman_ent *prof)
+{
+	char m[16][16];
+	int k = dev ? netman_ent_members(dev, m, 16) : 0;
+	size_t o = 0;
+	out[0] = 0;
+	if (k > 0) { for (int i = 0; i < k && o + 20 < n; i++) o += (size_t)snprintf(out + o, n - o, "%s%s", i ? " " : "", m[i]); return; }
+	if (prof) for (int i = 0; i < prof->nmember && o + 20 < n; i++) o += (size_t)snprintf(out + o, n - o, "%s%s", i ? " " : "", prof->member[i]);
+	if (!out[0]) snprintf(out, n, "none");
+}
+
+static void nm__ent_dev_row(nm_ui *u, const char *kind, const char *name, const netman_ent *prof)   /* kind: bond bridge vlan */
+{
+	netman_ent_info in;
+	char mem[120] = "";
+	int live = netman_ent_getinfo(name, &in) == 0;
+	const char *state = !live ? "absent" : in.up ? "up" : "down";
+	int lvl = !live ? 1 : in.up ? 0 : 1;
+	if (!strcmp(kind, "bond")) {
+		nm__ent_members(mem, sizeof mem, live ? name : NULL, prof);
+		nm__ent_add(u, kind, name, state, lvl, prof ? prof->name : "", "%s%s%s members %s%s", prof && prof->mode[0] ? "mode " : "", prof ? prof->mode : "", prof && prof->mode[0] ? " " : "", mem, live ? "" : "  (profile not applied)");
+	} else if (!strcmp(kind, "bridge")) {
+		nm__ent_members(mem, sizeof mem, live ? name : NULL, prof);
+		nm__ent_add(u, kind, name, state, lvl, prof ? prof->name : "", "stp %s%s  ports %s%s", live && in.stp >= 0 ? (in.stp ? "on" : "off") : prof && prof->stp ? "on" : "off", live && in.vlan_filtering > 0 ? "  vlan-filtering" : "", mem, live ? "" : "  (profile not applied)");
+	} else {
+		char vid[24] = "";
+		if (live && in.vid > 0) snprintf(vid, sizeof vid, "vid %d", in.vid); else if (prof && prof->vid > 0) snprintf(vid, sizeof vid, "vid %d", prof->vid);
+		nm__ent_add(u, kind, name, state, lvl, prof ? prof->name : "", "%s%s%s%s%s", live && in.kind[0] ? in.kind : prof ? prof->kind : "vlan", vid[0] ? "  " : "", vid, prof && prof->parent[0] ? " on " : "", prof ? prof->parent : "");
+	}
+}
+
+static void nm__ent_refresh(nm_ui *u)
+{
+	char names[64][64];
+	int k = netman_ent_list(names, 64);
+	netman_if t[NETMAN_MAXIF];
+	int nif;
+	u->nent = 0;
+	for (int i = 0; i < k; i++) {
+		netman_ent e;
+		if (netman_ent_load(names[i], &e) != 0) { nm__ent_add(u, "profile", names[i], "invalid", 2, names[i], "%s", netman_ent_error()); continue; }
+		if (!strcmp(e.kind, "bond") || !strcmp(e.kind, "team")) nm__ent_dev_row(u, "bond", e.name, &e);
+		else if (!strcmp(e.kind, "bridge")) nm__ent_dev_row(u, "bridge", e.name, &e);
+		else if (!strcmp(e.kind, "vlan") || !strcmp(e.kind, "macvlan") || !strcmp(e.kind, "ipvlan")) nm__ent_dev_row(u, "vlan", e.name, &e);
+		else if (!strcmp(e.kind, "ecmp")) {
+			for (int j = 0; j < e.nup; j++) {
+				char nm[64];
+				int lvl;
+				const char *st = nm__ent_link(e.up[j].ifn, &lvl);
+				snprintf(nm, sizeof nm, "%s:%s", e.name, e.up[j].ifn);
+				nm__ent_add(u, "uplink", nm, st, lvl, e.name, "gw %s  weight %d%s%s", e.up[j].gw[0] ? e.up[j].gw : "-", e.up[j].weight, e.up[j].probe[0] ? "  probe " : "", e.up[j].probe);
+			}
+		} else if (!strcmp(e.kind, "tether") && nc_enabled("tether")) {
+			int lvl;
+			const char *st = nm__ent_link(e.name, &lvl);
+			nm__ent_add(u, "tether", e.name, st, lvl, e.name, "%s%s%s%s", e.mode[0] ? e.mode : "share", e.upstream[0] ? "  upstream " : "", e.upstream, "  (profile)");
+		}
+	}
+	nif = netman_list(t, NETMAN_MAXIF);   /* live bonds / bridges / vlans no profile of ours made */
+	for (int i = 0; i < nif; i++) {
+		netman_ent_info in;
+		const char *kind;
+		if (netman_ent_getinfo(t[i].name, &in) != 0) continue;
+		kind = !strcmp(in.kind, "bond") ? "bond" : !strcmp(in.kind, "bridge") ? "bridge" : !strcmp(in.kind, "vlan") || !strcmp(in.kind, "macvlan") || !strcmp(in.kind, "ipvlan") ? "vlan" : NULL;
+		if (kind && !nm__ent_has(u, kind, t[i].name)) nm__ent_dev_row(u, kind, t[i].name, NULL);
+	}
+	if (nc_enabled("tether")) {
+		netman_ent_tether_dev d[16];
+		int nd = netman_ent_tether_detect(d, 16);
+		for (int i = 0; i < nd; i++) {
+			int lvl;
+			const char *st;
+			if (nm__ent_has(u, "tether", d[i].ifn)) continue;
+			st = nm__ent_link(d[i].ifn, &lvl);
+			nm__ent_add(u, "tether", d[i].ifn, st, lvl, "", "%s %s  (detected)", d[i].kind, d[i].driver);
+		}
+	}
+	if (nc_enabled("licence")) {
+		netman_lic l[32];
+		int nl = netman_lic_list(l, 32);
+		for (int i = 0; i < nl; i++) {
+			char when[40];
+			struct tm tm;
+			time_t ex = l[i].expires;
+			if (ex) { ex -= 1; gmtime_r(&ex, &tm); strftime(when, sizeof when, "%Y-%m-%d", &tm); } else snprintf(when, sizeof when, "never");
+			nm__ent_add(u, "licence", l[i].name, l[i].state == 2 ? "expired" : l[i].state == 1 ? "expiring" : "valid", l[i].state == 2 ? 2 : l[i].state == 1 ? 1 : 0, "", "%s%s%s  expires %s%s", l[i].holder, l[i].holder[0] ? "  " : "", l[i].kind, when, l[i].days == 99999 ? "" : l[i].days < 0 ? "  (expired)" : "");
+		}
+	}
+	for (int i = 1; i < u->nent; i++) {   /* stable insertion sort by kind, then name */
+		nm_ent v = u->ents[i];
+		int j = i - 1;
+		while (j >= 0 && (nm__ent_rank(u->ents[j].kind) > nm__ent_rank(v.kind) || (nm__ent_rank(u->ents[j].kind) == nm__ent_rank(v.kind) && strcmp(u->ents[j].name, v.name) > 0))) { u->ents[j + 1] = u->ents[j]; j--; }
+		u->ents[j + 1] = v;
+	}
+	u->loaded[NM_ENT] = 1;
+}
+
 static void nm__keep_sel(nm_ui *u, const char *keep)
 {
 	int idx[NM_MAXNET], n = nm_ui_visible(u, idx, NM_MAXNET);
 	if (keep && *keep)
 		for (int i = 0; i < n; i++) {
-			const char *nm = u->tab == NM_WIFI ? nm__hkey(&u->nets[idx[i]]) : u->tab == NM_BT ? u->devs[idx[i]].addr : u->tab == NM_ETH ? u->ifs[idx[i]].f.name : u->vpns[idx[i]].name;
+			const char *nm = u->tab == NM_WIFI ? nm__hkey(&u->nets[idx[i]]) : u->tab == NM_BT ? u->devs[idx[i]].addr : u->tab == NM_ETH ? u->ifs[idx[i]].f.name : u->tab == NM_ENT ? u->ents[idx[i]].name : u->vpns[idx[i]].name;
 			if (!strcmp(nm, keep)) { u->sel[u->tab] = i; break; }
 		}
 	nm__clamp(u);
@@ -1015,7 +1165,7 @@ static void nm__keyof(const nm_ui *u, char *keep, size_t n)
 {
 	int idx[NM_MAXNET], c = nm_ui_visible(u, idx, NM_MAXNET), s = u->sel[u->tab];
 	keep[0] = 0;
-	if (s < c) nm__copy(keep, n, u->tab == NM_WIFI ? nm__hkey(&u->nets[idx[s]]) : u->tab == NM_BT ? u->devs[idx[s]].addr : u->tab == NM_ETH ? u->ifs[idx[s]].f.name : u->vpns[idx[s]].name);
+	if (s < c) nm__copy(keep, n, u->tab == NM_WIFI ? nm__hkey(&u->nets[idx[s]]) : u->tab == NM_BT ? u->devs[idx[s]].addr : u->tab == NM_ETH ? u->ifs[idx[s]].f.name : u->tab == NM_ENT ? u->ents[idx[s]].name : u->vpns[idx[s]].name);
 }
 
 static int nm__scan_req;   /* set only by the `r` key: everything else reads cached scan results */
@@ -1052,6 +1202,8 @@ void nm_refresh(nm_ui *u)
 		nm__cap_free();
 	} else if (u->tab == NM_ETH) {
 		nm__eth_refresh(u);
+	} else if (u->tab == NM_ENT) {
+		nm__ent_refresh(u);
 	} else if (u->tab == NM_VPN) {
 		int rc = NM_CALL(u, "vpn profiles", netman_vpn_list());
 		if (rc) nm__report(u, "vpn", rc);
@@ -1414,6 +1566,50 @@ static void nm__info_vpn(nm_ui *u, const nm_vpn *e, int full)
 	}
 }
 
+static void nm__info_ent(nm_ui *u, const nm_ent *e, int full)
+{
+	nm__dlv(u, "kind", e->kind); nm__dlv(u, "name", e->name); nm__dlv(u, "state", e->state);
+	nm__dlv(u, "detail", e->detail);
+	if (!strcmp(e->kind, "licence")) {
+		netman_lic l;
+		if (netman_lic_load(e->name, &l) == 0) {
+			nm__dlv(u, "holder", l.holder); nm__dlv(u, "licence kind", l.kind);
+			if (l.days == 99999) nm__dlv(u, "expires", "never"); else { char v[64]; snprintf(v, sizeof v, "%d day%s %s", l.days < 0 ? -l.days : l.days, (l.days == 1 || l.days == -1) ? "" : "s", l.days < 0 ? "ago" : "left"); nm__dlv(u, "expires in", v); }
+			nm__dlv(u, "warn window", netman_config_str(&nc_cfg, NC_LIC_WARN));
+		} else nm__dlv(u, "licence file", netman_ent_error());
+		nm__dlv(u, "directory", netman_lic_dir);
+		nm__dl(u, "(keys are never shown; renew: netman licence renew NAME)");
+		return;
+	}
+	if (e->prof[0]) {
+		netman_ent p;
+		char *buf = NULL;
+		size_t sz = 0;
+		FILE *m;
+		nm__dlv(u, "profile", e->prof);
+		if (netman_ent_load(e->prof, &p) == 0 && (m = open_memstream(&buf, &sz))) {
+			nm__dl(u, "--- live state ---");
+			netman_ent_show(&p, m);
+			fclose(m);
+			if (buf) nm__dl_text(u, buf, "");
+			free(buf);
+			buf = NULL;
+			if (full) {
+				char raw[8192];
+				if (netman_ent_format(&p, raw, sizeof raw) >= 0) { nm__dl(u, "--- profile (%s.ent) ---", e->prof); nm__dl_text(u, raw, "password"); }
+			}
+		}
+	} else if (full || strcmp(e->kind, "tether")) nm__dl(u, "not created by a netman profile");
+	{
+		netman_ent_info in;
+		if (strcmp(e->kind, "uplink") && netman_ent_getinfo(e->name, &in) == 0) {
+			char v[80];
+			snprintf(v, sizeof v, "index %d, mtu %d, master %d", in.idx, in.mtu, in.master);
+			nm__dl(u, "--- kernel ---"); nm__dlv(u, "link", v);
+		}
+	}
+}
+
 /* fills u->dl for the selected row of the current tab; full = the "all info" view (adds the raw backend / sysfs dump) */
 static int nm__info_build(nm_ui *u, int full)
 {
@@ -1423,6 +1619,7 @@ static int nm__info_build(nm_ui *u, int full)
 	if (u->tab == NM_WIFI) nm__info_wifi(u, &u->nets[idx[s]], full);
 	else if (u->tab == NM_BT) nm__info_bt(u, &u->devs[idx[s]], full);
 	else if (u->tab == NM_ETH) nm__info_eth(u, &u->ifs[idx[s]], full);
+	else if (u->tab == NM_ENT) nm__info_ent(u, &u->ents[idx[s]], full);
 	else if (u->tab == NM_VPN) nm__info_vpn(u, &u->vpns[idx[s]], full);
 	if (!u->ndl) nm__dl(u, "no details");
 	return 1;
@@ -1701,7 +1898,7 @@ static void nm__ui_key0(nm_ui *u, int key)
 	case '?': u->mode = NM_HELP; u->hoff = 0; break;
 	case 9: case 'l': case NM_K_RIGHT: nm__cycle(u, 1); break;
 	case NM_K_BTAB: case 'h': case NM_K_LEFT: nm__cycle(u, -1); break;
-	case '1': case '2': case '3': case '4': {
+	case '1': case '2': case '3': case '4': case '5': {
 		int tabs[NM_NTAB], nt = nm__tabs(u, tabs);
 		if (key - '1' < nt) nm__switch(u, tabs[key - '1']);
 		break;
@@ -1996,7 +2193,7 @@ static int nc_tui(void)
 	utf = !strcmp(uni, "yes") || (!strcmp(uni, "auto") && loc && (strcasestr(loc, "utf-8") || strcasestr(loc, "utf8")));
 	nm_theme_make(&nm__theme, utf, th);
 	nm_ui_init(&nm__ui, 80, 24);
-	nm__ui.en[NM_WIFI] = nc_enabled("wifi"); nm__ui.en[NM_ETH] = nc_enabled("net"); nm__ui.en[NM_BT] = nc_enabled("bluetooth"); nm__ui.en[NM_VPN] = nc_enabled("vpn");
+	nm__ui.en[NM_WIFI] = nc_enabled("wifi"); nm__ui.en[NM_ETH] = nc_enabled("net"); nm__ui.en[NM_BT] = nc_enabled("bluetooth"); nm__ui.en[NM_VPN] = nc_enabled("vpn"); nm__ui.en[NM_ENT] = nc_enabled("enterprise");
 	nm__ui.rssi_good = netman_config_int(&nc_cfg, NC_WIFI_RSSI_GOOD); nm__ui.rssi_ok = netman_config_int(&nc_cfg, NC_WIFI_RSSI_OK); nm__ui.rssi_weak = netman_config_int(&nc_cfg, NC_WIFI_RSSI_WEAK);
 	for (int i = 0; i < NM_NTAB; i++) if (nm__ui.en[i]) { if (!ntab) nm__ui.tab = i; ntab++; }
 	tcgetattr(0, &nm__saved);
@@ -2032,9 +2229,9 @@ static int nc_tui(void)
 				if (nm__ui.mode == NM_NORMAL && !nm__ui.busy) {
 					nm__hdr_refresh(&nm__ui);
 					if (nm__sc_fd < 0 && time(NULL) - nm__sc_t >= 10) nm__score_start(&nm__ui);
-					if (nm__ui.tab == NM_ETH) {
+					if (nm__ui.tab == NM_ETH || nm__ui.tab == NM_ENT) {
 						char keep[100];
-						nm__keyof(&nm__ui, keep, sizeof keep); nm__eth_refresh(&nm__ui); nm__keep_sel(&nm__ui, keep);
+						nm__keyof(&nm__ui, keep, sizeof keep); if (nm__ui.tab == NM_ETH) nm__eth_refresh(&nm__ui); else nm__ent_refresh(&nm__ui); nm__keep_sel(&nm__ui, keep);
 						if (nm__ui.big) nm__big_build(&nm__ui);
 					}
 				}

@@ -72,6 +72,32 @@
 # Seconds between samples for `metrics watch` and `metrics record --loop`. (1..3600)
 # interval_s = 5
 
+[enterprise]
+# Enterprise networking: bonding, bridges, vlans, routes and rules, ECMP, tethering. Off by default: it changes links and routes.
+# enabled = no
+# ECMP: per-uplink ICMP probe timeout and the tick between probes (ms). (100..60000)
+# probe_ms = 1000
+# Where licence (.lic) and VPN key (.key) files live.
+# licence_dir = /etc/netman/licences
+# `licence status` flags a licence expiring within this many days. (0..365)
+# licence_warn_days = 30
+# Command (split on spaces, no shell) run by `licence renew NAME`: gets NAME CURRENT_PATH NEW_PATH and must write the renewed licence to NEW_PATH. netman never contacts a network for renewal itself.
+# renew_hook = ""
+# Command run after `key rotate NAME`: gets NAME NEW_PUBKEY; failing restores the old key.
+# key_apply_hook = ""
+
+[licence]
+# Licence files, expiry check, renewal hook and WireGuard key rotation: the licence and key commands, the licence line in the Enterprise tab.
+# enabled = yes
+
+[tether]
+# USB / Bluetooth tethering detection and share-out: `ent tether`, tether profile adds, the tether rows in the Enterprise tab. Off by default: sharing changes firewall and forwarding.
+# enabled = no
+
+[wireguard]
+# Native WireGuard (generic netlink): the wg commands and WireGuard profiles of the vpn commands. no = only OpenVPN profiles work.
+# enabled = yes
+
 [tui]
 # TUI colours. (default|mono|light)
 # theme = default

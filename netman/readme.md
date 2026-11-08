@@ -59,7 +59,7 @@ Group route instead of sudo (wpa_supplicant only; run these yourself, netman nev
 
 ## TUI
 
-Tabs Wi-Fi | Ethernet/IP | Bluetooth | VPN. Calls that can block run in a worker (spinner, esc cancels). `?` shows the same text as `netman help tui`.
+Tabs Wi-Fi | Ethernet/IP | Bluetooth | VPN | Enterprise (read-only, only with enterprise.enabled = yes). Calls that can block run in a worker (spinner, esc cancels). `?` shows the same text as `netman help tui`.
 
 - Wi-Fi rows: `lock-glyph  name  TAG  -52 dBm  96%  saved auto`. Hidden networks show `<hidden> BSSID`, control bytes are escaped, long/CJK names are
   cut by display cells with an ellipsis. Security is a lock plus a text tag (WPA2/WPA3/WEP/OPEN/802.1X); without Unicode it is `[*]` / `open`;
@@ -73,11 +73,11 @@ Tabs Wi-Fi | Ethernet/IP | Bluetooth | VPN. Calls that can block run in a worker
 
 ## tests (`tests/`)
 
-    cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c && /tmp/nm_logic   76 checks (parsers, width, render, modals)
+    cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c && /tmp/nm_logic   76 checks (parsers, width, render, modals)
     tests/pty                                    the real binary in tmux against fake iwd / wpa_supplicant / bluez (tests/fakes.c): 105 checks
     tests/cli_test                               help, man sync, config, module gating, exit codes (41)
     cc -std=gnu11 -Isrc -o /tmp/nm_priv tests/priv_test.c; cc ... tests/config_test.c src/config.c [src/netman.conf.example]   15 / 77
-    tests/pty_vpn (real WireGuard in unshare -Urn, drives the VPN tab), tests/wifi_bt_test.c (75), net_test (+ `selftest` under unshare -Urn), vpn_test, fw_test, net_score_test (unshare -Urn)
+    tests/pty_ent (Enterprise tab, 80x24 and 40x12), tests/pty_vpn (real WireGuard in unshare -Urn, drives the VPN tab), tests/wifi_bt_test.c (75), net_test (+ `selftest` under unshare -Urn), vpn_test, fw_test, net_score_test (unshare -Urn)
 
 Not tested: real iwd / wpa_supplicant / bluez and real hardware, real networks, a real sudo prompt, vpn up/down as root from the TUI, the DHCP lease-cache
 key used by the details pane (a guess: the SSID), the future daemon.

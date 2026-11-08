@@ -36,7 +36,7 @@ build vpn_test vpn_test.c
 build fw_test fw_test.c -Wall -Wextra
 build priv_test priv_test.c -I../src
 cd "$src"
-build netman src/netman.c -Wall -Isrc -Isrc/mods src/config.c
+build netman src/netman.c -Wall -Isrc -Isrc/mods src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c
 if [ -f "$repo/qlogin/src/qlogind.c" ] && [ -f "$repo/qlogin/tests/login1_test.c" ]; then
 	cd "$repo/qlogin"; build qlogind src/qlogind.c -Isrc/mods; build login1_test tests/login1_test.c
 fi
