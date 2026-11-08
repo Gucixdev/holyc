@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# image - `colorado extract`: PPM/PAM without any helper, other formats via ImageMagick when installed, hostile names, junk input, no-tool message.
+set -u
+cd "$(dirname "$(readlink -f "$0")")" || exit 1
+BIN=${BIN:-$PWD/../bin/colorado}
+w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+export HOME=$w/h XDG_CONFIG_HOME=$w/h/.config XDG_DATA_HOME=$w/h/.local/share COLORADO_THEMES=$PWD/../themes; mkdir -p "$HOME"
+pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/      | /'; }
+role() { sed -n "s/^$2 = //p" "$1"; }
+hue() { local c=${1#\#}; local r=$((16#${c:0:2})) g=$((16#${c:2:2})) b=$((16#${c:4:2})); echo "$r $g $b"; }
+
+# synthetic 60x40 image: navy field, red patch, light patch -> P6 written byte by byte
+{
+	printf 'P6\n60 40\n255\n'
+	for y in $(seq 0 39); do for x in $(seq 0 59); do
+		if [ $x -ge 36 ] && [ $y -ge 8 ] && [ $y -lt 18 ]; then printf '\xdc\x28\x28'
+		elif [ $y -ge 30 ] && [ $x -lt 28 ]; then printf '\xe6\xe6\xe6'
+		else printf '\x14\x18\x28'; fi
+	done; done
+} >"$w/pic.ppm"
+
+"$BIN" extract "$w/pic.ppm" --name fromppm >/dev/null 2>&1; rc=$?
+[ $rc = 0 ] && ok || no "extract P6 exits 0 ($rc)"
+t=$XDG_CONFIG_HOME/colorado/themes/fromppm.theme
+[ -f "$t" ] && ok || no "theme file written to the user themes dir"
+[ "$(role "$t" variant 2>/dev/null)" = "" ] || true
+grep -q '^variant = dark' "$t" && ok || no "dark image gives a dark theme"
+read -r r g b <<<"$(hue "$(role "$t" accent)")"
+[ "$r" -gt 150 ] && [ "$g" -lt 90 ] && [ "$b" -lt 90 ] && ok || no "accent is the red patch: $(role "$t" accent)"
+"$BIN" check "$t" >/dev/null; [ $? -le 1 ] && ok || no "extracted theme is a valid theme"
+"$BIN" extract "$w/pic.ppm" --name fromppm-l --light --out "$w/l.theme" >/dev/null 2>&1; grep -q '^variant = light' "$w/l.theme" && ok || no "--light forces light"
+"$BIN" extract "$w/pic.ppm" --name d1 --out - >"$w/a.theme" 2>/dev/null; "$BIN" extract "$w/pic.ppm" --name d1 --out - >"$w/b.theme" 2>/dev/null; cmp -s "$w/a.theme" "$w/b.theme" && ok || no "deterministic"
+
+# P7 (PAM)
+{ printf 'P7\nWIDTH 2\nHEIGHT 2\nDEPTH 3\nMAXVAL 255\nTUPLTYPE RGB\nENDHDR\n'; printf '\x00\x00\x00\xff\x00\x00\xff\xff\xff\x10\x10\x10'; } >"$w/pic.pam"
+"$BIN" extract "$w/pic.pam" --name frompam --out - >/dev/null 2>&1 && ok || no "extract PAM"
+
+# junk and truncation
+echo "not an image" >"$w/junk.png"; "$BIN" extract "$w/junk.png" --name junk >/dev/null 2>"$w/err"; [ $? = 1 ] && grep -q 'ImageMagick' "$w/err" && ok || no "junk gets a clear error" "$(cat "$w/err")"
+[ ! -e "$XDG_CONFIG_HOME/colorado/themes/junk.theme" ] && ok || no "no theme written for junk"
+head -c 100 "$w/pic.ppm" >"$w/trunc.ppm"; "$BIN" extract "$w/trunc.ppm" --out - >/dev/null 2>"$w/err"; [ $? = 1 ] && grep -q malformed "$w/err" && ok || no "truncated ppm rejected" "$(cat "$w/err")"
+"$BIN" extract "$w/missing.ppm" >/dev/null 2>&1; [ $? = 1 ] && ok || no "missing file"
+"$BIN" extract "$w/pic.ppm" --name 'bad/name' >/dev/null 2>&1; [ $? = 2 ] && ok || no "path-like theme names refused"
+
+# ImageMagick path (skipped when absent)
+if command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; then
+	im=magick; command -v magick >/dev/null 2>&1 || im=convert
+	$im "$w/pic.ppm" "$w/pic.png" 2>/dev/null
+	"$BIN" extract "$w/pic.png" --name frompng --out "$w/png.theme" >/dev/null 2>&1; rc=$?
+	[ $rc = 0 ] && ok || no "extract PNG via ImageMagick ($rc)"
+	read -r r g b <<<"$(hue "$(role "$w/png.theme" accent)")"
+	[ "$r" -gt 150 ] && [ "$g" -lt 90 ] && ok || no "PNG accent is red: $(role "$w/png.theme" accent)"
+	cp "$w/pic.png" "$w/-evil.png"; (cd "$w" && "$BIN" extract -evil.png --name evil --out - >/dev/null 2>&1) && ok || no "file name starting with - is not an option"
+	cp "$w/pic.png" "$w/msl:x.png"; (cd "$w" && "$BIN" extract 'msl:x.png' --name coder --out - >/dev/null 2>&1) && ok || no "file name with a coder prefix is read as a file"
+	( PATH=/nonexistent; "$BIN" extract "$w/pic.png" --out - >/dev/null 2>"$w/err" ); [ $? = 1 ] && grep -q 'ImageMagick' "$w/err" && ok || no "no tool installed: clear message" "$(cat "$w/err")"
+	( PATH=/nonexistent; "$BIN" extract "$w/pic.ppm" --out - >/dev/null 2>&1 ) && ok || no "PPM needs no tool at all"
+else echo "image: ImageMagick not installed, PNG tests skipped"; fi
+printf 'image: %d passed, %d failed\n' "$pass" "$fail"; [ "$fail" = 0 ]

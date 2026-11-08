@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# apply - dry-run writes nothing; --apply backs up and merges (user keys, user css and symlinks survive); a second apply is a no-op;
+# rollback restores byte-identical state, newest first, down to the empty directory tree. Everything happens in a temp HOME.
+set -u
+cd "$(dirname "$(readlink -f "$0")")" || exit 1
+BIN=${BIN:-$PWD/../bin/colorado}
+w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+export HOME=$w/h XDG_CONFIG_HOME=$w/h/.config XDG_DATA_HOME=$w/h/.local/share COLORADO_THEMES=$PWD/../themes
+unset XDG_CACHE_HOME
+pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/      | /'; }
+eq() { if [ "$1" = "$2" ]; then ok; else no "$3" "want: $1
+got:  $2"; fi; }
+state() { (cd "$HOME" && { find . -path ./.local -prune -o -printf '%y %p %m %l\n' | sort; find . -path ./.local -prune -o -type f -exec sha256sum {} + | sort; find "$w/dot" -type f -exec sha256sum {} + 2>/dev/null | sort; }); }
+
+mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0" "$HOME/.config/qt5ct" "$w/dot"
+printf '[Settings]\ngtk-theme-name=Breeze-Dark\ngtk-application-prefer-dark-theme=0\ngtk-enable-animations=false\n' >"$HOME/.config/gtk-3.0/settings.ini"
+chmod 600 "$HOME/.config/gtk-3.0/settings.ini"
+printf '/* mine */\nwindow { margin: 1px; }\n' >"$HOME/.config/gtk-4.0/gtk.css"
+printf '/* dotfiles css */\nbutton { color: red; }\n' >"$w/dot/gtk3.css"; ln -s "$w/dot/gtk3.css" "$HOME/.config/gtk-3.0/gtk.css"
+printf '[Appearance]\nstyle=Breeze\nicon_theme=oldicons\n\n[Fonts]\ngeneral="Sans,9"\n' >"$HOME/.config/qt5ct/qt5ct.conf"
+printf 'Xft.dpi: 96\n' >"$HOME/.Xresources"
+
+S0=$(state)
+out=$("$BIN" apply dark 2>&1); rc=$?
+eq 0 "$rc" "dry run exits 0"
+eq "$S0" "$(state)" "dry run changed nothing"
+grep -q 'dry run: [0-9]* files* would change. Nothing was written' <<<"$out" && ok || no "dry run says so" "$out"
+grep -q '^+++ .*gtk-3.0/settings.ini' <<<"$out" && grep -q '^-gtk-application-prefer-dark-theme=0' <<<"$out" && grep -q '^+gtk-application-prefer-dark-theme=1' <<<"$out" && ok || no "dry run shows a diff of the settings.ini change" "$out"
+grep -q '^# notes' <<<"$out" && ok || no "notes are printed"
+[ ! -e "$XDG_DATA_HOME/colorado" ] && ok || no "dry run created a backup dir"
+grep -q '\.Xresources' <<<"$out" && no "unverified generators are not in the default set" || ok
+
+out=$("$BIN" apply dark --apply 2>&1); rc=$?
+eq 0 "$rc" "apply exits 0"
+grep -q 'Undo with: colorado rollback' <<<"$out" && ok || no "apply offers rollback" "$out"
+S1=$(state)
+[ "$S0" != "$S1" ] && ok || no "apply changed something"
+ini=$HOME/.config/gtk-3.0/settings.ini
+grep -q '^gtk-theme-name=Breeze-Dark$' "$ini" && grep -q '^gtk-enable-animations=false$' "$ini" && ok || no "user ini keys survive" "$(cat "$ini")"
+grep -q '^gtk-application-prefer-dark-theme=1$' "$ini" && ok || no "managed key replaced in place"
+eq 1 "$(grep -c 'gtk-application-prefer-dark-theme' "$ini")" "no duplicate keys"
+eq 600 "$(stat -c %a "$ini")" "file mode kept"
+grep -q '^window { margin: 1px; }$' "$HOME/.config/gtk-4.0/gtk.css" && grep -q 'colorado:begin' "$HOME/.config/gtk-4.0/gtk.css" && ok || no "user css survives next to the block"
+[ -L "$HOME/.config/gtk-3.0/gtk.css" ] && grep -q 'dotfiles css' "$w/dot/gtk3.css" && grep -q 'colorado:begin' "$w/dot/gtk3.css" && ok || no "symlinked file: link kept, target updated"
+grep -q '^style=Breeze$' "$HOME/.config/qt5ct/qt5ct.conf" && grep -q '^general="Sans,9"$' "$HOME/.config/qt5ct/qt5ct.conf" && grep -q "^icon_theme=Adwaita$" "$HOME/.config/qt5ct/qt5ct.conf" && ok || no "qt5ct.conf merged" "$(cat "$HOME/.config/qt5ct/qt5ct.conf")"
+grep -q "^color_scheme_path=$XDG_CONFIG_HOME/qt5ct/colors/colorado.conf$" "$HOME/.config/qt5ct/qt5ct.conf" && ok || no "absolute scheme path"
+eq "Xft.dpi: 96" "$(cat "$HOME/.Xresources")" "unverified generator did not touch .Xresources"
+out=$("$BIN" apply dark 2>&1); grep -q ': 0 files would change' <<<"$out" && ok || no "second apply is a no-op" "$out"
+
+"$BIN" apply nord --apply >/dev/null 2>&1; S2=$(state)
+[ "$S1" != "$S2" ] && ok || no "second theme changes files"
+eq 2 "$(ls "$XDG_DATA_HOME/colorado/backups" | wc -l)" "two backups"
+"$BIN" rollback list | grep -c '/colorado/backups/' | grep -q 2 && ok || no "rollback list"
+out=$("$BIN" rollback 2>&1); eq 0 $? "rollback exits 0"
+eq "$S1" "$(state)" "first rollback restores the state after the first apply, byte for byte"
+"$BIN" rollback >/dev/null 2>&1
+eq "$S0" "$(state)" "second rollback restores the original state, byte for byte (files, links, modes, dirs)"
+eq 600 "$(stat -c %a "$ini")" "mode restored"
+[ -L "$HOME/.config/gtk-3.0/gtk.css" ] && ok || no "symlink restored as symlink"
+"$BIN" rollback >/dev/null 2>&1; eq 1 $? "nothing left to roll back is reported"
+ls "$XDG_DATA_HOME"/colorado/backups/*/created >/dev/null 2>&1 && ok || no "created files are moved into the backup, not deleted"
+
+# --only / --all, export, bad input
+out=$("$BIN" apply dark --only tmux,foot 2>&1); eq 3 "$(grep -c "^# \[" <<<"$out")" "--only limits generators (2 + the active record)"
+out=$("$BIN" apply dark --only nosuch 2>&1); eq 2 $? "unknown generator is an error"
+"$BIN" apply nosuchtheme >/dev/null 2>&1; eq 1 $? "unknown theme is an error"
+( unset HOME; "$BIN" list >/dev/null 2>&1 ); eq 2 $? "no HOME refuses to run"
+( cd "$w" && HOME=relative "$BIN" list >/dev/null 2>&1 ); eq 2 $? "relative HOME refused"
+eq "$S0" "$(state)" "state still original at the end"
+printf 'apply: %d passed, %d failed\n' "$pass" "$fail"; [ "$fail" = 0 ]

@@ -1,0 +1,7 @@
+# colorado:begin
+gtk-color-scheme = "bg_color:#11161d\nfg_color:#e2e5e9\nbase_color:#1a222d\ntext_color:#e2e5e9\nselected_bg_color:#4f9cff\nselected_fg_color:#000000\ntooltip_bg_color:#1a222d\ntooltip_fg_color:#e2e5e9"
+gtk-icon-theme-name = "Adwaita"
+gtk-cursor-theme-name = "Adwaita"
+gtk-cursor-theme-size = 24
+gtk-font-name = "Sans 11"
+# colorado:end

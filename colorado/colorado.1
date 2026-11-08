@@ -1,0 +1,50 @@
+.TH COLORADO 1 "2026-11-08" "colorado 0.1.0" "User Commands"
+.SH NAME
+colorado \- one colour theme, applied to every toolkit
+.SH SYNOPSIS
+.B colorado
+.I command
+[args]
+.SH DESCRIPTION
+colorado keeps a theme as a plain text file (semantic roles, 16 ANSI colours, fonts, cursor and icon theme, metrics)
+and generates the exact files GTK2/3/4, Qt5/Qt6 (qt5ct, qt6ct, Kvantum), terminals, the holyc desktop, Firefox, fontconfig and xsettingsd read.
+.SH COMMANDS
+.TP
+.BI "set " NAME " [--only a,b|--all] [--reload] [--dry-run]"
+The main command. Prints a diff of every file, backs each one up, writes it, and records NAME as the active theme.
+.TP
+.B current " [-v]"
+Show the active theme and, per toolkit, whether its file is in sync, DRIFTED or MISSING. Exit status 1 on drift, 3 if nothing was set.
+.TP
+.BI "watch " NAME " [--reload] [--interval S]"
+Re-apply (with backup) whenever the theme file changes.
+.TP
+.BR rollback " [list|DIR]"
+Restore the newest backup not yet rolled back.
+.TP
+.BI "apply " NAME " [--apply]"
+Like set, but a dry run unless --apply is given.
+.TP
+.B list, show NAME, new, edit NAME, export NAME GEN, check NAME, extract IMAGE, contrast A B, preview, generators
+See
+.B colorado help.
+.TP
+.B -tui [NAME]
+Interactive editor with live swatches, a mock window, H/S/L sliders, hex entry, WCAG warnings; ? shows help.
+.SH SAFETY
+Nothing is written without a timestamped backup. colorado never calls gsettings or dconf and never restarts applications.
+--reload only runs: tmux source-file, SIGHUP to xsettingsd, xrdb -merge.
+.SH ENVIRONMENT
+HOME, XDG_CONFIG_HOME, XDG_DATA_HOME choose where files are read and written. COLORADO_THEMES adds a theme directory.
+.SH FILES
+.TP
+~/.config/colorado/themes/*.theme
+user themes.
+.TP
+~/.config/colorado/active
+the recorded active theme.
+.TP
+~/.local/share/colorado/backups/
+backups made by set/apply.
+.SH SEE ALSO
+qt5ct(1), foot.ini(5), tmux(1), fonts-conf(5)

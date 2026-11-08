@@ -1,0 +1,24 @@
+/* colorado:begin */
+@define-color theme_bg_color #11161d;
+@define-color theme_fg_color #e2e5e9;
+@define-color theme_base_color #1a222d;
+@define-color theme_text_color #e2e5e9;
+@define-color theme_selected_bg_color #4f9cff;
+@define-color theme_selected_fg_color #000000;
+@define-color theme_unfocused_bg_color #11161d;
+@define-color theme_unfocused_fg_color #8e9297;
+@define-color theme_unfocused_base_color #1a222d;
+@define-color theme_unfocused_text_color #8e9297;
+@define-color insensitive_bg_color #11161d;
+@define-color insensitive_fg_color #8e9297;
+@define-color borders #3f444a;
+@define-color unfocused_borders #3f444a;
+@define-color warning_color #eea62b;
+@define-color error_color #e44943;
+@define-color success_color #39c668;
+@define-color link_color #4f9cff;
+@define-color visited_link_color #6f97cb;
+@define-color tooltip_bg_color #1a222d;
+@define-color tooltip_fg_color #e2e5e9;
+button, entry, .card { border-radius: 6px; }
+/* colorado:end */

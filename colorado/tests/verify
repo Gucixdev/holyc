@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# verify - the "verified" claims of the readme, executed: real foot (--check-config), real tmux (private socket), real fc-match, the real GTK3/GTK4 css parsers,
+# the desktop's own COLOR macro (compiled), and the layout of the installed qt5ct/qt6ct colour schemes. A check whose tool is missing is skipped, loudly.
+set -u
+cd "$(dirname "$(readlink -f "$0")")" || exit 1
+BIN=${BIN:-$PWD/../bin/colorado}
+w=$(mktemp -d); trap 'tmux -L colorado-verify kill-server 2>/dev/null; rm -rf "$w"' EXIT
+export HOME=$w/h XDG_CONFIG_HOME=$w/h/.config XDG_DATA_HOME=$w/h/.local/share COLORADO_THEMES=$PWD/../themes; mkdir -p "$HOME"
+pass=0 fail=0 skip=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/      | /'; }
+sk() { skip=$((skip + 1)); printf 'SKIP: %s\n' "$1"; }
+for th in dark light nord; do
+	"$BIN" export $th all --out "$w/$th" >/dev/null || no "export $th"
+done
+
+# foot -------------------------------------------------------------------------------------------
+if command -v foot >/dev/null; then
+	for th in dark light nord; do
+		printf 'include=%s/foot/colorado.ini\n' "$w/$th" >"$w/foot-main.ini"
+		out=$(foot --check-config -c "$w/foot-main.ini" 2>&1) && ok || no "foot accepts the $th include file" "$out"
+		out=$(foot --check-config -c "$w/$th/foot/colorado.ini" 2>&1) && ok || no "foot accepts $th/foot/colorado.ini directly" "$out"
+	done
+	printf '[main]\nfont=x\nbogus-key-colorado=1\n' >"$w/bad.ini"
+	foot --check-config -c "$w/bad.ini" >/dev/null 2>&1 && no "foot --check-config detects a bad key (sanity of the check itself)" || ok
+else sk "foot not installed"; fi
+
+# tmux -------------------------------------------------------------------------------------------
+if command -v tmux >/dev/null; then
+	T="tmux -L colorado-verify"
+	$T -f /dev/null new-session -d -s v 'sleep 30' 2>/dev/null
+	for th in dark light; do
+		out=$($T source-file "$w/$th/tmux/colorado.conf" 2>&1) && ok || no "tmux loads $th conf" "$out"
+	done
+	bg=$(sed -n 's/^bg = //p' ../themes/light.theme); alt=$(sed -n 's/^bg_alt = //p' ../themes/light.theme)
+	got=$($T show-options -gv status-style 2>&1); [ "$got" = "bg=$alt,fg=$(sed -n 's/^fg = //p' ../themes/light.theme)" ] && ok || no "tmux reports the style it was given" "$got"
+	got=$($T show-options -gv pane-active-border-style 2>&1); [ "$got" = "fg=$(sed -n 's/^border_focus = //p' ../themes/light.theme)" ] && ok || no "pane-active-border-style" "$got"
+	printf 'set -g status-style "bg=notacolour"\n' >"$w/bad.conf"; $T source-file "$w/bad.conf" >/dev/null 2>&1 && no "tmux rejects a bad colour (sanity)" || ok
+	$T kill-server 2>/dev/null
+else sk "tmux not installed"; fi
+
+# fontconfig -------------------------------------------------------------------------------------
+if command -v fc-match >/dev/null; then
+	fam=$(fc-list :spacing=100 family 2>/dev/null | head -1 | cut -d, -f1)
+	if [ -n "$fam" ]; then
+		sed "s/^mono_font = .*/mono_font = $fam/" ../themes/dark.theme >"$w/fc.theme"
+		"$BIN" export "$w/fc.theme" fontconfig --out "$w/fc" >/dev/null
+		printf '<?xml version="1.0"?>\n<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">\n<fontconfig><include ignore_missing="yes">/etc/fonts/fonts.conf</include><include>%s</include></fontconfig>\n' "$w/fc/fontconfig/conf.d/60-colorado.conf" >"$w/fonts.conf"
+		got=$(FONTCONFIG_FILE=$w/fonts.conf fc-match monospace family 2>"$w/fcerr")
+		[ ! -s "$w/fcerr" ] && ok || no "fontconfig reports no error for our snippet" "$(cat "$w/fcerr")"
+		[ "$got" = "$fam" ] && ok || no "fc-match monospace -> $fam (got '$got')"
+	else sk "no monospace font found for the fc-match check"; fi
+	printf '<fontconfig><alias><broken></alias></fontconfig>' >"$w/badfc.conf"
+	FONTCONFIG_FILE=$w/badfc.conf fc-match sans >/dev/null 2>"$w/fcerr"; [ -s "$w/fcerr" ] && ok || no "fc-match complains about broken xml (sanity)"
+else sk "fontconfig not installed"; fi
+
+# GTK css ----------------------------------------------------------------------------------------
+for g in gtk4:4 gtk+-3.0:3; do
+	pkg=${g%%:*}; v=${g##*:}
+	if pkg-config --exists $pkg 2>/dev/null; then
+		cc -w -o "$w/gtkcss$v" gtkcss.c $(pkg-config --cflags --libs $pkg) 2>"$w/ccerr" || { no "build the gtk$v css checker" "$(cat "$w/ccerr")"; continue; }
+		for th in dark light nord; do
+			out=$("$w/gtkcss$v" "$w/$th/gtk-$v.0/gtk.css" 2>&1) && ok || no "GTK$v parses $th gtk.css" "$out"
+		done
+		printf 'button { colour: ; \n' >"$w/bad.css"; "$w/gtkcss$v" "$w/bad.css" >/dev/null 2>&1 && no "GTK$v css checker detects errors (sanity)" || ok
+	else sk "$pkg dev files not installed"; fi
+done
+
+# desktop fragment -------------------------------------------------------------------------------
+d=/data/dev/github/holyc/desktop/src/theme.c
+{ if [ -f "$d" ]; then sed -n '/^#define COLOR/,/^$/p' "$d" | sed -n '1,4p'; else printf '#define COLOR(hex) { ((hex >> 24) & 0xFF) / 255.0f, ((hex >> 16) & 0xFF) / 255.0f, ((hex >> 8) & 0xFF) / 255.0f, (hex & 0xFF) / 255.0f }\n'; fi
+  cat "$w/dark/colorado/desktop-theme.h"; } >"$w/desk.c"
+out=$(cc -std=gnu11 -Wall -Wextra -fsyntax-only "$w/desk.c" 2>&1) && ok || no "desktop-theme.h compiles with the desktop's COLOR macro" "$out"
+for sym in rootcolor bordercolor focuscolor urgentcolor fullscreen_bg borderpx; do [ -f "$d" ] && { grep -q "\\b$sym\\b" "$d" && ok || no "desktop theme.c still defines $sym"; }; done
+
+# qt5ct / qt6ct layout vs the installed schemes ----------------------------------------------------
+ref=/usr/share/qt5ct/colors/darker.conf
+if [ -f "$ref" ]; then
+	shape() { awk -F'[=,]' '/^\[/{print; next} NF>1{n=NF-1; ok=1; for(i=2;i<=NF;i++){gsub(/ /,"",$i); if($i !~ /^#[0-9a-fA-F]{8}$/) ok=0} print $1, n, ok}' "$1"; }
+	for q in qt5ct qt6ct; do
+		[ "$(shape "$ref")" = "$(shape "$w/dark/$q/colors/colorado.conf")" ] && ok || no "$q colours have the same shape as the installed qt5ct scheme" "$(diff <(shape "$ref") <(shape "$w/dark/$q/colors/colorado.conf"))"
+	done
+	for q in qt5ct qt6ct; do
+		own="$HOME/.config/$q/colors/colorado.conf"; [ -f "$w/dark/$q/$q.conf" ] && grep -q '^custom_palette=true$' "$w/dark/$q/$q.conf" && grep -q '^color_scheme_path=' "$w/dark/$q/$q.conf" && ok || no "$q.conf has the keys real qt5ct writes"
+	done
+else sk "qt5ct not installed (no reference scheme)"; fi
+for k in color_scheme_path custom_palette icon_theme; do [ -f ~/.config/qt5ct/qt5ct.conf ] && { grep -q "^$k=" ~/.config/qt5ct/qt5ct.conf && ok || no "the user's real qt5ct.conf (read only) has no $k - format claim doubtful"; }; done
+
+# flatpak ----------------------------------------------------------------------------------------
+if command -v flatpak >/dev/null; then flatpak override --help 2>&1 | grep -q -- '--filesystem' && flatpak override --help 2>&1 | grep -q -- '--env' && ok || no "flatpak override has --filesystem and --env"; else sk "flatpak not installed"; fi
+printf 'verify: %d passed, %d failed, %d skipped\n' "$pass" "$fail" "$skip"; [ "$fail" = 0 ]

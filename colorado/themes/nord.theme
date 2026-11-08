@@ -1,0 +1,45 @@
+# colorado theme
+name = nord
+variant = dark
+
+bg = #2e3440
+bg_alt = #3b4252
+fg = #d8dee9
+fg_dim = #a3adc2
+accent = #88c0d0
+accent_fg = #2e3440
+border = #4c566a
+border_focus = #88c0d0
+urgent = #bf616a
+warn = #ebcb8b
+ok = #a3be8c
+selection_bg = #434c5e
+selection_fg = #eceff4
+link = #88c0d0
+
+color0 = #3b4252
+color1 = #bf616a
+color2 = #a3be8c
+color3 = #ebcb8b
+color4 = #81a1c1
+color5 = #b48ead
+color6 = #88c0d0
+color7 = #e5e9f0
+color8 = #4c566a
+color9 = #bf616a
+color10 = #a3be8c
+color11 = #ebcb8b
+color12 = #81a1c1
+color13 = #b48ead
+color14 = #8fbcbb
+color15 = #eceff4
+
+font = Sans
+mono_font = monospace
+font_size = 11
+cursor_theme = Adwaita
+cursor_size = 24
+icon_theme = Adwaita
+radius = 6
+gap = 8
+border_width = 2

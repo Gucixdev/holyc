@@ -1,0 +1,45 @@
+# colorado theme
+name = light
+variant = light
+
+bg = #f5f7f9
+bg_alt = #e5eaef
+fg = #161a1d
+fg_dim = #65686b
+accent = #1a5fd0
+accent_fg = #ffffff
+border = #c4c6c9
+border_focus = #1a5fd0
+urgent = #da261f
+warn = #98640c
+ok = #247f43
+selection_bg = #1a5fd0
+selection_fg = #ffffff
+link = #1a5fd0
+
+color0 = #161a1d
+color1 = #cd3c37
+color2 = #218241
+color3 = #8e6b24
+color4 = #3271c8
+color5 = #bb2fbb
+color6 = #217a82
+color7 = #e5eaef
+color8 = #64676a
+color9 = #a72e2a
+color10 = #17592d
+color11 = #654c1a
+color12 = #285a9f
+color13 = #922592
+color14 = #175459
+color15 = #f5f7f9
+
+font = Sans
+mono_font = monospace
+font_size = 11
+cursor_theme = Adwaita
+cursor_size = 24
+icon_theme = Adwaita
+radius = 6
+gap = 8
+border_width = 2

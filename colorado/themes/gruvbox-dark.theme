@@ -1,0 +1,45 @@
+# colorado theme
+name = gruvbox-dark
+variant = dark
+
+bg = #282828
+bg_alt = #3c3836
+fg = #ebdbb2
+fg_dim = #a89984
+accent = #83a598
+accent_fg = #282828
+border = #504945
+border_focus = #83a598
+urgent = #fb4934
+warn = #fabd2f
+ok = #b8bb26
+selection_bg = #665c54
+selection_fg = #ebdbb2
+link = #83a598
+
+color0 = #282828
+color1 = #cc241d
+color2 = #98971a
+color3 = #d79921
+color4 = #458588
+color5 = #b16286
+color6 = #689d6a
+color7 = #a89984
+color8 = #928374
+color9 = #fb4934
+color10 = #b8bb26
+color11 = #fabd2f
+color12 = #83a598
+color13 = #d3869b
+color14 = #8ec07c
+color15 = #ebdbb2
+
+font = Sans
+mono_font = monospace
+font_size = 11
+cursor_theme = Adwaita
+cursor_size = 24
+icon_theme = Adwaita
+radius = 6
+gap = 8
+border_width = 2

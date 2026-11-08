@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# unit - compile and run unit_test.c (colour maths vs known WCAG values, round trips, merges, derivation, extraction).
+set -eu
+cd "$(dirname "$(readlink -f "$0")")"
+w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+cc -std=gnu11 -Wall -Wextra -Wno-format-truncation -Wno-unused-function -O1 -I../src/mods unit_test.c -o "$w/u" -lm
+"$w/u"

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# run - build colorado (when a source is newer) and run the whole test suite. No arguments. The tool itself is bin/colorado (`bin/colorado help`, `bin/colorado -tui`).
+# Needs only a C compiler (cc, gcc or clang) and libm. Tests use a throw-away HOME; nothing in your real config is read for writing or touched.
+set -eu
+cd "$(dirname "$(readlink -f "$0")")" || exit 1
+cc=${CC:-}
+if [ -z "$cc" ]; then for c in cc gcc clang; do command -v "$c" >/dev/null 2>&1 && { cc=$c; break; }; done; fi
+if [ -z "$cc" ] || ! command -v "$cc" >/dev/null 2>&1; then echo "colorado: no C compiler found (looked for cc, gcc, clang). Install one, e.g. 'pacman -S gcc', then run ./run again." >&2; exit 1; fi
+if [ ! -x bin/colorado ] || [ -n "$(find src themes -type f -newer bin/colorado -print -quit)" ]; then
+	mkdir -p bin
+	echo "colorado: building bin/colorado with $cc ..." >&2
+	nice -n 19 "$cc" -std=gnu11 -Wall -Wextra -Wno-format-truncation -O2 -Isrc -Isrc/mods src/colorado.c -o bin/colorado.tmp -lm || { rm -f bin/colorado.tmp; echo "colorado: the build failed (see above)" >&2; exit 1; }
+	mv bin/colorado.tmp bin/colorado
+fi
+exec nice -n 19 tests/all

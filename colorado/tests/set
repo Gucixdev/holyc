@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# set - the main command: `set` applies everywhere with backup, `current` reports in sync / DRIFTED per toolkit, `watch` re-applies on theme changes,
+# --reload hooks only touch what is safe (a private tmux server, a fake xsettingsd). Temp HOME and a private TMUX_TMPDIR throughout.
+set -u
+cd "$(dirname "$(readlink -f "$0")")" || exit 1
+BIN=${BIN:-$PWD/../bin/colorado}
+w=$(mktemp -d); trap 'tmux kill-server 2>/dev/null; kill $(jobs -p) 2>/dev/null; rm -rf "$w"' EXIT
+export HOME=$w/h XDG_CONFIG_HOME=$w/h/.config XDG_DATA_HOME=$w/h/.local/share COLORADO_THEMES=$PWD/../themes TMUX_TMPDIR=$w/tmx; unset TMUX
+mkdir -p "$HOME" "$TMUX_TMPDIR" "$w/bin"
+pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | head -20 | sed 's/^/      | /'; }
+eq() { if [ "$1" = "$2" ]; then ok; else no "$3" "want: $1
+got:  $2"; fi; }
+state() { (cd "$HOME" && { find . -path ./.local -prune -o -printf '%y %p %m %l\n' | sort; find . -path ./.local -prune -o -type f -exec sha256sum {} + | sort; }); }
+
+out=$("$BIN" current 2>&1); eq 3 $? "current with nothing set exits 3"; grep -q 'colorado set NAME' <<<"$out" && ok || no "tells how to start" "$out"
+S0=$(state)
+out=$("$BIN" set dark --dry-run 2>&1); eq 0 $? "set --dry-run exits 0"; eq "$S0" "$(state)" "set --dry-run writes nothing"
+out=$("$BIN" set dark 2>&1); eq 0 $? "set exits 0"
+grep -q '^# \[colorado\] .*colorado/active' <<<"$out" && grep -q 'Backup:' <<<"$out" && grep -q 'Undo with: colorado rollback' <<<"$out" && ok || no "set shows the diff, backs up, offers rollback" "$out"
+grep -q 'live reload' <<<"$out" && grep -q 'not run, add --reload' <<<"$out" && ok || no "set lists the reload hooks but does not run them" "$out"
+grep -q '^name=dark$' "$XDG_CONFIG_HOME/colorado/active" && ok || no "active record written"
+out=$("$BIN" current 2>&1); eq 0 $? "current after set is clean"; grep -q 'active theme: dark' <<<"$out" && grep -q 'in sync' <<<"$out" && ! grep -q DRIFTED <<<"$out" && ok || no "current output" "$out"
+for g in gtk3 gtk4 qt5ct qt6ct foot tmux desktop fontconfig; do grep -q "^$g .*in sync" <<<"$out" && ok || no "current lists $g"; done
+
+# drift: hand edits in two toolkits
+sed -i 's/^gtk-font-name=.*/gtk-font-name=Comic Sans 20/' "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
+sed -i '0,/#ff/s//#fe/' "$XDG_CONFIG_HOME/qt5ct/colors/colorado.conf"
+out=$("$BIN" current -v 2>&1); eq 1 $? "drift makes current exit 1"
+grep -q '^gtk3 .*DRIFTED' <<<"$out" && grep -q '^qt5ct .*DRIFTED' <<<"$out" && grep -q '^gtk4 .*in sync' <<<"$out" && grep -q '^qt6ct .*in sync' <<<"$out" && ok || no "only the edited toolkits are flagged" "$out"
+grep -q "first difference at line" <<<"$out" && grep -q 'Comic Sans' <<<"$out" && ok || no "-v shows the first difference" "$out"
+rm -f "$XDG_CONFIG_HOME/foot/colorado.ini"; out=$("$BIN" current 2>&1); grep -q '^foot .*MISSING' <<<"$out" && ok || no "a deleted file is MISSING" "$out"
+"$BIN" set dark >/dev/null 2>&1; "$BIN" current >/dev/null 2>&1; eq 0 $? "set again repairs the drift"
+grep -q '^gtk-font-name=Sans 11$' "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" && ok || no "font restored"
+
+# the theme file itself changing shows as drift everywhere
+mkdir -p "$w/themes"; cp ../themes/dark.theme "$w/themes/mine.theme"; sed -i 's/^name = dark/name = mine/' "$w/themes/mine.theme"
+export COLORADO_THEMES=$w/themes
+"$BIN" set mine >/dev/null 2>&1; "$BIN" current >/dev/null 2>&1; eq 0 $? "custom theme set + in sync"
+sed -i 's/^accent = .*/accent = #ff8800/' "$w/themes/mine.theme"
+out=$("$BIN" current 2>&1); eq 1 $? "editing the theme file is reported as drift"; grep -q 'colorado set mine' <<<"$out" && ok || no "tells which command re-applies" "$out"
+
+# --reload hooks
+cp "$(command -v sleep)" "$w/bin/xsettingsd"; "$w/bin/xsettingsd" 300 & fake=$!; sleep 0.3
+"$BIN" set mine --only xsettingsd >/dev/null 2>&1; kill -0 $fake 2>/dev/null && ok || no "without --reload nothing is signalled"
+out=$("$BIN" set mine --only xsettingsd --reload 2>&1); grep -q 'SIGHUP sent' <<<"$out" && ok || no "xsettingsd gets SIGHUP with --reload" "$out"
+sleep 0.3; kill -0 $fake 2>/dev/null && no "the fake xsettingsd (a renamed sleep) should have received SIGHUP" || ok
+if command -v tmux >/dev/null; then
+	out=$("$BIN" set mine --only tmux --reload 2>&1); grep -q 'no running server' <<<"$out" && ok || no "tmux hook without a server" "$out"
+	tmux -f /dev/null new-session -d -s hk 'sleep 60'
+	sed -i 's/^accent = .*/accent = #00ff88/' "$w/themes/mine.theme"
+	out=$("$BIN" set mine --only tmux --reload 2>&1); grep -q 'reloaded (source-file)' <<<"$out" && ok || no "tmux hook reloads a running server" "$out"
+	want=$(sed -n 's/^bg_alt = //p' "$w/themes/mine.theme"); got=$(tmux show-options -gv status-style); [ "$got" = "bg=$want,fg=$(sed -n 's/^fg = //p' "$w/themes/mine.theme")" ] && ok || no "running tmux has the colours" "$got"
+	got=$(tmux show-options -gv window-status-current-style); case "$got" in bg=#00ff88*) ok;; *) no "running tmux picked up the new accent" "$got";; esac
+	tmux kill-server
+fi
+
+# watch
+rm -rf "$XDG_CONFIG_HOME" ; mkdir -p "$XDG_CONFIG_HOME"
+cp ../themes/nord.theme "$w/themes/w.theme"; sed -i 's/^name = nord/name = w/' "$w/themes/w.theme"; sleep 1.2
+"$BIN" watch w --interval 1 --max 1 >"$w/watch.out" 2>&1 & wp=$!
+sleep 1.3; sed -i 's/^accent = .*/accent = #ff0000/' "$w/themes/w.theme"
+for i in $(seq 1 20); do kill -0 $wp 2>/dev/null || break; sleep 0.3; done
+wait $wp; eq 0 $? "watch --max 1 exits after one re-apply"
+grep -q 'theme changed' "$w/watch.out" && ok || no "watch reports the change" "$(cat "$w/watch.out")"
+grep -qi 'ff0000' "$XDG_CONFIG_HOME/gtk-4.0/gtk.css" && ok || no "watch wrote the new accent"
+"$BIN" current >/dev/null 2>&1; eq 0 $? "after watch everything is in sync"
+printf 'set: %d passed, %d failed\n' "$pass" "$fail"; [ "$fail" = 0 ]

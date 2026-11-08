@@ -1,0 +1,45 @@
+# colorado theme
+name = dark
+variant = dark
+
+bg = #11161d
+bg_alt = #1a222d
+fg = #e2e5e9
+fg_dim = #8e9297
+accent = #4f9cff
+accent_fg = #000000
+border = #3f444a
+border_focus = #4f9cff
+urgent = #e44943
+warn = #eea62b
+ok = #39c668
+selection_bg = #4f9cff
+selection_fg = #000000
+link = #4f9cff
+
+color0 = #1a222d
+color1 = #d45853
+color2 = #47d175
+color3 = #d1a347
+color4 = #4781d1
+color5 = #d147d1
+color6 = #47c6d1
+color7 = #c9ccd1
+color8 = #60666f
+color9 = #de807c
+color10 = #70db94
+color11 = #dbb770
+color12 = #709ddb
+color13 = #db70db
+color14 = #70d3db
+color15 = #e2e5e9
+
+font = Sans
+mono_font = monospace
+font_size = 11
+cursor_theme = Adwaita
+cursor_size = 24
+icon_theme = Adwaita
+radius = 6
+gap = 8
+border_width = 2

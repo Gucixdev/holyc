@@ -1,0 +1,45 @@
+# colorado theme
+name = high-contrast
+variant = dark
+
+bg = #000000
+bg_alt = #0d0d0d
+fg = #ffffff
+fg_dim = #999999
+accent = #ffee00
+accent_fg = #000000
+border = #383838
+border_focus = #ffee00
+urgent = #e23c36
+warn = #eea62b
+ok = #39c668
+selection_bg = #ffee00
+selection_fg = #000000
+link = #ffee00
+
+color0 = #0d0d0d
+color1 = #d14c47
+color2 = #47d175
+color3 = #d1a347
+color4 = #4781d1
+color5 = #d147d1
+color6 = #47c6d1
+color7 = #e0e0e0
+color8 = #626262
+color9 = #db7470
+color10 = #70db94
+color11 = #dbb770
+color12 = #709ddb
+color13 = #db70db
+color14 = #70d3db
+color15 = #ffffff
+
+font = Sans
+mono_font = monospace
+font_size = 11
+cursor_theme = Adwaita
+cursor_size = 24
+icon_theme = Adwaita
+radius = 6
+gap = 8
+border_width = 2

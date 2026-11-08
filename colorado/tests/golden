@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# golden - every generator's exact output for expected/theme.theme must equal the checked-in files in expected/out/. UPDATE=1 ./golden regenerates (review the git diff!).
+set -u
+cd "$(dirname "$(readlink -f "$0")")" || exit 1
+BIN=${BIN:-$PWD/../bin/colorado}
+w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+export HOME=$w/h XDG_CONFIG_HOME=$w/h/.config XDG_DATA_HOME=$w/h/.local/share; mkdir -p "$HOME"
+"$BIN" export expected/theme.theme all --out "$w/out" >/dev/null || { echo "FAIL export"; exit 1; }
+# the Qt scheme path and include hints embed the config dir, a temp dir here: normalise it
+find "$w/out" -type f -exec sed -i "s|$XDG_CONFIG_HOME|@CFG@|g" {} +
+if [ "${UPDATE:-}" = 1 ]; then mkdir -p expected/out; cp -a "$w/out/." expected/out/; echo "golden: regenerated"; exit 0; fi
+if diff -ru expected/out "$w/out" >"$w/d"; then echo "golden: $(find expected/out -type f | wc -l) files identical"; else head -60 "$w/d"; echo "golden: FAIL (UPDATE=1 ./golden after reviewing)"; exit 1; fi

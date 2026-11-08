@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# tui - drive `colorado -tui` inside a real tmux pane (private socket, temp HOME): frame text at 100x30 and 44x12, navigation, lightness and hex edits,
+# contrast warnings, help popup, save to disk, unsaved-quit guard, and that the terminal is left clean on exit.
+set -u
+cd "$(dirname "$(readlink -f "$0")")" || exit 1
+BIN=${BIN:-$PWD/../bin/colorado}
+w=$(mktemp -d); trap 'tmux -L coltui kill-server 2>/dev/null; rm -rf "$w"' EXIT
+export HOME=$w/h XDG_CONFIG_HOME=$w/h/.config XDG_DATA_HOME=$w/h/.local/share COLORADO_THEMES=$PWD/../themes; mkdir -p "$HOME"
+command -v tmux >/dev/null || { echo "tui: tmux not installed, skipped"; exit 0; }
+T="tmux -L coltui"
+pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/      | /'; }
+snap() { $T capture-pane -p -t t; }
+has() { local s i; for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do s=$(snap); grep -qF -- "$1" <<<"$s" && { ok; return; }; sleep 0.2; done; no "$2 (wanted '$1')" "$s"; }
+hasnt() { local s i; for i in 1 2 3 4 5 6 7 8 9 10; do s=$(snap); grep -qF -- "$1" <<<"$s" || { ok; return; }; sleep 0.2; done; no "$2 (did not want '$1')" "$s"; }
+keys() { $T send-keys -t t "$@"; sleep 0.25; }
+start() { $T kill-server 2>/dev/null; $T -u new-session -d -s t -x "$1" -y "$2" "TERM=xterm-256color $BIN -tui ${3:-dark}; echo EXIT:\$?; sleep 30"; sleep 0.8; }
+
+start 100 30
+has "theme dark (dark)" "title line"; has "bg_alt" "role list"; has "j/k role" "key bar"; has "q quit" "key bar quit"
+has "title bar" "mock window drawn"; has "Primary button" "mock button"; has "contrast: all" "no warnings on a passing theme"
+hasnt "[modified]" "clean at start"
+keys j; has "> bg_alt" "j selects bg_alt"
+keys l; has "[modified]" "l edits and marks modified"; has "bg_alt = #" "slider line shows the role"
+keys u; hasnt "[modified]" "u reverts the role"
+keys x; has "hex for bg_alt" "x opens the hex prompt"; keys e 2 e 5 e 9 Enter; has "bg_alt = #e2e5e9" "hex entry applied"
+has "! fg on bg_alt" "same colour as fg raises a contrast warning"; has "[modified]" "modified after hex"
+keys '?'; has "edit a theme live" "help popup"; keys z; hasnt "edit a theme live" "any key closes help"
+keys x; keys e s c; has "hex for bg_alt" "prompt stays open on junk keys"; keys Escape; sleep 0.3; hasnt "hex for" "Esc cancels the prompt"
+keys x; keys z z z Enter; sleep 0.3; hasnt "hex for" "empty/invalid input closes the prompt"
+keys w; has "saved " "w saves"; hasnt "[modified]" "saved clears the flag"
+f=$XDG_CONFIG_HOME/colorado/themes/dark.theme
+[ -f "$f" ] && grep -q '^bg_alt = #e2e5e9$' "$f" && ok || no "saved file has the edit" "$(cat "$f" 2>/dev/null)"
+"$BIN" check "$f" >/dev/null 2>&1; [ $? -eq 1 ] && ok || no "saved theme is valid and check reports the failure"
+keys d; has "(light)" "d flips the dark/light flag"; keys d
+keys '[' ']' '-' '='; keys H L
+keys q; has "EXIT:0" "q quits cleanly"
+s=$(snap); grep -q '^EXIT:0' <<<"$s" && ok || no "shell prompt line after exit"
+
+# unsaved quit guard
+start 100 30; keys l; keys q; has "unsaved changes" "q on unsaved asks first"; keys q; has "EXIT:0" "second q quits"
+# arrows work, wrap-around
+start 100 30; keys Down Down; has "> fg" "arrow down x2 from bg"; keys Up Up Up; has "> color15" "wraps to the last role"; keys q
+# tiny terminal: no crash, key bar still visible
+start 44 12; has "colorado" "44x12 draws"; has "q quit" "44x12 key bar"; keys j; keys '?'; keys x; keys Escape; keys q; has "EXIT:0" "44x12 survives all keys"
+start 100 30; $T resize-window -t t -x 60 -y 20; sleep 0.5; has "q quit" "resize redraws"; keys q
+# Ctrl-C leaves the terminal usable
+start 100 30; $T send-keys -t t C-c; sleep 0.4; s=$(snap); grep -q 'EXIT:' <<<"$s" && ok || no "Ctrl-C ends the TUI" "$s"
+# not a terminal: falls back to the table
+out=$("$BIN" -tui dark </dev/null 2>&1 | head -3); grep -q 'theme dark' <<<"$out" && ok || no "no tty: swatch table" "$out"
+printf 'tui: %d passed, %d failed\n' "$pass" "$fail"; [ "$fail" = 0 ]
