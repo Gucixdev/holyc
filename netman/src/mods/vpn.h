@@ -74,7 +74,11 @@ NETMAN_VPN_API int  netman_vpn_type(const char *name);                          
 NETMAN_VPN_API int  netman_vpn_up(const char *name, int wait_sec);                    /* wait_sec: OpenVPN wait for "connected" */
 NETMAN_VPN_API int  netman_vpn_down(const char *name);
 NETMAN_VPN_API int  netman_vpn_status(const char *name);                              /* prints; 0 up, 1 down */
-NETMAN_VPN_API int  netman_vpn_list(void);
+NETMAN_VPN_API int  netman_vpn_list(void);                                            /* "NAME TYPE up|down|connecting|failed|locked|untrusted [ep=.. hs=S rx=B tx=B]" per profile, then "killswitch on|off|unknown" */
+NETMAN_VPN_API int  netman_vpn_info(const char *name);                                /* "key   value" lines: type, state, endpoint, handshake, transfer, allowed ips, split/full tunnel, dns, ... */
+NETMAN_VPN_API int  netman_vpn_import(const char *file, const char *name_or_null);    /* copy a WireGuard / OpenVPN config into the profile dir (mode 0600); refuses to overwrite */
+NETMAN_VPN_API int  netman_vpn_ks_state(void);                                        /* nftables kill switch table: 1 on, 0 off, -1 cannot tell (not root / no nft) */
+NETMAN_VPN_API void netman_vpn_env(void);                                             /* NETMAN_VPN_CONF_DIR / NETMAN_VPN_RUN_DIR -> netman_vpn_conf_dir / _run_dir */
 NETMAN_VPN_API int  netman_vpn_logs(const char *name, int lines);                     /* OpenVPN log tail */
 NETMAN_VPN_API int  netman_vpn_wg_stats(const char *ifname, netman_vpn_wgstat *st);
 /* extras */
@@ -935,7 +939,7 @@ static int netman_vpn__wg_up(const char *name, const char *text, size_t len) {
     eps = calloc(c.npeers ? c.npeers : 1, sizeof *eps);
     if (!eps) { netman_vpn__fail("out of memory"); goto out; }
     for (size_t i = 0; i < c.npeers; i++) if (c.peers[i].endpoint && netman_vpn__ep_resolve(c.peers[i].endpoint, &eps[i].ss, &eps[i].sl)) { netman_vpn__fail("%s: cannot resolve a peer endpoint", name); goto out; }
-    if (netman_vpn__rundir()) { netman_vpn__fail("%s: %s", netman_vpn_run_dir, strerror(errno)); goto out; }
+    if (netman_vpn__rundir()) { netman_vpn__fail("%s: %s%s", netman_vpn_run_dir, strerror(errno), errno == EACCES || errno == EPERM || errno == EROFS ? " (vpn up/down needs root)" : ""); goto out; }
     if (netman_vpn__hooks(&c.pre_up, name)) goto out;
     fd = netman_vpn__nl_open(NETLINK_ROUTE); gfd = netman_vpn__nl_open(NETLINK_GENERIC);
     if (fd < 0 || gfd < 0) { netman_vpn__fail("netlink: %s", strerror(errno)); goto out; }
@@ -1021,7 +1025,7 @@ static int netman_vpn__secret_file_ok(const char *path) {
 static int netman_vpn__ovpn_up(const char *name, const char *conf, const char *text, int wait_sec) {
     if (!netman_vpn_valid_name(name, 32)) return netman_vpn__fail("bad profile name");
     if (netman_vpn__ovpn_pid(name, NULL)) return netman_vpn__fail("%s is already running", name);
-    if (netman_vpn__rundir()) return netman_vpn__fail("%s: %s", netman_vpn_run_dir, strerror(errno));
+    if (netman_vpn__rundir()) return netman_vpn__fail("%s: %s%s", netman_vpn_run_dir, strerror(errno), errno == EACCES || errno == EPERM || errno == EROFS ? " (vpn up/down needs root)" : "");
     char auth[PATH_MAX] = "", abs[PATH_MAX], pf[PATH_MAX], lf[PATH_MAX], dir[PATH_MAX];
     int bare = 0;
     for (const char *p = text; *p; ) {
@@ -1127,22 +1131,169 @@ NETMAN_VPN_API int netman_vpn_status(const char *name) {
     netman_vpn__say("%s: wireguard up, %d peer%s, handshake %s, rx %s, tx %s", name, st.npeers, st.npeers == 1 ? "" : "s", hs, rx, tx);
     return 0;
 }
+NETMAN_VPN_API void netman_vpn_env(void) {
+    const char *e;
+    if ((e = getenv("NETMAN_VPN_CONF_DIR")) && *e) netman_vpn_conf_dir = e;
+    if ((e = getenv("NETMAN_VPN_RUN_DIR")) && *e) netman_vpn_run_dir = e;
+}
+static void netman_vpn__hs_text(long long hs, char *b, size_t n) {
+    if (hs <= 0) { snprintf(b, n, "never"); return; }
+    long long age = (long long)time(NULL) - hs; if (age < 0) age = 0;
+    if (age < 120) snprintf(b, n, "%llds ago", age); else if (age < 7200) snprintf(b, n, "%lldm ago", age / 60); else snprintf(b, n, "%lldh ago", age / 3600);
+}
+/* first peer's endpoint of a WireGuard config text, or "" */
+static void netman_vpn__first_ep(const char *text, size_t len, char *ep, size_t n) {
+    netman_vpn_wg c; ep[0] = 0;
+    if (netman_vpn_wg_parse(text, len, &c, NULL, 0)) return;
+    for (size_t i = 0; i < c.npeers; i++) if (c.peers[i].endpoint) { snprintf(ep, n, "%s", c.peers[i].endpoint); break; }
+    netman_vpn_wg_free(&c);
+}
+NETMAN_VPN_API int netman_vpn_ks_state(void) {
+    int p[2]; if (pipe2(p, O_CLOEXEC)) return -1;
+    pid_t pid = fork();
+    if (pid < 0) { close(p[0]); close(p[1]); return -1; }
+    if (pid == 0) { int dn = open("/dev/null", O_WRONLY); if (dn >= 0) dup2(dn, 1); dup2(p[1], 2); execlp("nft", "nft", "list", "table", "inet", "netman_vpn_ks", (char *)NULL); _exit(127); }
+    close(p[1]);
+    char err[512]; size_t o = 0; ssize_t r;
+    while (o < sizeof err - 1 && (r = read(p[0], err + o, sizeof err - 1 - o)) != 0) { if (r < 0) { if (errno == EINTR) continue; break; } o += (size_t)r; }
+    err[o] = 0; close(p[0]);
+    int st; while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    if (!WIFEXITED(st)) return -1;
+    if (WEXITSTATUS(st) == 0) return 1;
+    if (WEXITSTATUS(st) == 127 || strstr(err, "ermitted") || strstr(err, "ermission")) return -1;
+    return 0;
+}
 NETMAN_VPN_API int netman_vpn_list(void) {
     DIR *d = opendir(netman_vpn_conf_dir);
-    if (!d) return netman_vpn__fail("%s: %s", netman_vpn_conf_dir, strerror(errno));
+    if (!d) { if (errno == ENOENT) goto ks; return netman_vpn__fail("%s: %s", netman_vpn_conf_dir, strerror(errno)); }
     struct dirent *e;
     while ((e = readdir(d))) {
         char *dot = strrchr(e->d_name, '.');
         if (!dot || (strcmp(dot, ".conf") && strcmp(dot, ".ovpn"))) continue;
         char nm[256]; snprintf(nm, sizeof nm, "%.*s", (int)(dot - e->d_name), e->d_name);
         if (!netman_vpn_valid_name(nm, 32)) continue;
-        netman_vpn__mute = 1; int ty = netman_vpn_type(nm); netman_vpn__mute = 0; const char *state = "down";
-        if (ty == NETMAN_VPN_WG) state = if_nametoindex(nm) && netman_vpn__is_wg_link(nm) ? "up" : "down";
-        else if (ty == NETMAN_VPN_OVPN) state = netman_vpn__ovpn_state(nm);
-        else continue;
-        netman_vpn__say("%-16s %-10s %s", nm, ty == NETMAN_VPN_WG ? "wireguard" : "openvpn", state);
+        char path[PATH_MAX], extra[300] = ""; size_t l = 0; int ty = 0; const char *state = "down";
+        netman_vpn__mute = 1; char *t = netman_vpn__load(nm, &l, &ty, path, sizeof path); netman_vpn__mute = 0;
+        if (!t) {                                           /* cannot read it: say so instead of hiding the profile */
+            char fp[PATH_MAX]; snprintf(fp, sizeof fp, "%s/%s", netman_vpn_conf_dir, e->d_name);
+            if (access(fp, R_OK)) netman_vpn__say("%-16s %-10s %s", nm, dot[1] == 'o' ? "openvpn" : "?", "locked");
+            else if (errno == EACCES) netman_vpn__say("%-16s %-10s %s", nm, dot[1] == 'o' ? "openvpn" : "?", "untrusted");
+            continue;
+        }
+        if (ty == NETMAN_VPN_WG) {
+            char ep[128]; netman_vpn__first_ep(t, l, ep, sizeof ep);
+            state = if_nametoindex(nm) && netman_vpn__is_wg_link(nm) ? "up" : "down";
+            size_t o = 0;
+            if (ep[0]) o += (size_t)snprintf(extra + o, sizeof extra - o, " ep=%s", ep);
+            if (!strcmp(state, "up")) {
+                netman_vpn_wgstat st;
+                if (netman_vpn_wg_stats(nm, &st) == 0 && st.present)
+                    snprintf(extra + o, sizeof extra - o, " hs=%lld rx=%lld tx=%lld", st.last_handshake > 0 ? (long long)time(NULL) - st.last_handshake : -1LL, st.rx, st.tx);
+            }
+        } else {
+            const char *s = netman_vpn__ovpn_state(nm);
+            state = !strcmp(s, "connected") ? "up" : !strcmp(s, "auth failed") ? "failed" : s;
+        }
+        netman_vpn__wipe(t, l); free(t);
+        netman_vpn__say("%-16s %-10s %s%s", nm, ty == NETMAN_VPN_WG ? "wireguard" : "openvpn", state, extra);
     }
     closedir(d);
+ks:;
+    int k = netman_vpn_ks_state();
+    netman_vpn__say("killswitch %s", k > 0 ? "on" : k == 0 ? "off" : "unknown");
+    return 0;
+}
+NETMAN_VPN_API int netman_vpn_info(const char *name) {
+    if (!netman_vpn_valid_name(name, 32)) return netman_vpn__fail("bad profile name");
+    char path[PATH_MAX]; size_t l = 0; int ty;
+    char *t = netman_vpn__load(name, &l, &ty, path, sizeof path);
+    if (!t) return 1;
+    netman_vpn__say("profile      %s", path);
+    if (ty == NETMAN_VPN_OVPN) {
+        netman_vpn__say("type         openvpn");
+        netman_vpn__say("state        %s", netman_vpn__ovpn_state(name));
+        for (const char *p = t; *p; ) {
+            const char *e = strchr(p, '\n'); size_t n = e ? (size_t)(e - p) : strlen(p);
+            char line[512]; snprintf(line, sizeof line, "%.*s", (int)(n < sizeof line - 1 ? n : sizeof line - 1), p);
+            char *s = netman_vpn__trim(line);
+            if (!strncmp(s, "remote ", 7) || !strncmp(s, "proto ", 6) || !strncmp(s, "dev ", 4) || !strncmp(s, "redirect-gateway", 16) || !strncmp(s, "route ", 6)) netman_vpn__say("%-12s %s", strncmp(s, "remote", 6) == 0 ? "remote" : strncmp(s, "proto", 5) == 0 ? "proto" : strncmp(s, "dev", 3) == 0 ? "device" : "route", strchr(s, ' ') ? netman_vpn__trim(strchr(s, ' ')) : "");
+            if (!e) break;
+            p = e + 1;
+        }
+        pid_t pid; if (netman_vpn__ovpn_pid(name, &pid)) netman_vpn__say("pid          %d", (int)pid);
+        netman_vpn__wipe(t, l); free(t); return 0;
+    }
+    netman_vpn_wg c; char err[128];
+    int up = if_nametoindex(name) && netman_vpn__is_wg_link(name);
+    netman_vpn__say("type         wireguard");
+    netman_vpn__say("state        %s", up ? "up" : "down");
+    if (netman_vpn_wg_parse(t, l, &c, err, sizeof err)) { netman_vpn__say("config       %s", err); netman_vpn__wipe(t, l); free(t); return 0; }
+    netman_vpn__wipe(t, l); free(t);
+    char b[160];
+    for (size_t i = 0; i < c.naddr; i++) netman_vpn__say("%-12s %s/%d", i ? "" : "address", netman_vpn__ip_str(&c.addr[i], b, sizeof b), c.addr[i].prefix);
+    if (c.mtu) netman_vpn__say("mtu          %d", c.mtu);
+    if (c.dns.n) { char d[300] = ""; for (size_t i = 0; i < c.dns.n; i++) snprintf(d + strlen(d), sizeof d - strlen(d), "%s%s", i ? " " : "", c.dns.v[i]); netman_vpn__say("dns          %s", d); }
+    int full = 0;
+    for (size_t i = 0; i < c.npeers; i++) {
+        const netman_vpn_peer *p = &c.peers[i];
+        netman_vpn__say("peer %zu       endpoint %s", i + 1, p->endpoint ? p->endpoint : "-");
+        if (p->keepalive) netman_vpn__say("             keepalive %ds", p->keepalive);
+        char al[400] = "";
+        for (size_t j = 0; j < p->nallowed; j++) {
+            if (p->allowed[j].prefix == 0) full = 1;
+            size_t o = strlen(al); if (o + 60 > sizeof al) { snprintf(al + o, sizeof al - o, " ..."); break; }
+            snprintf(al + o, sizeof al - o, "%s%s/%d", j ? " " : "", netman_vpn__ip_str(&p->allowed[j], b, sizeof b), p->allowed[j].prefix);
+        }
+        netman_vpn__say("             allowed ips %s", al[0] ? al : "-");
+    }
+    netman_vpn__say("routing      %s", c.table_off ? "no routes installed (Table = off)" : full ? "full tunnel (default route through the VPN)" : "split tunnel (only the allowed ips go through the VPN)");
+    if (up) {
+        netman_vpn_wgstat st;
+        if (netman_vpn_wg_stats(name, &st) == 0 && st.present) {
+            char hs[48], rx[32], tx[32]; netman_vpn__hs_text(st.last_handshake, hs, sizeof hs);
+            netman_vpn__hbytes(st.rx, rx, sizeof rx); netman_vpn__hbytes(st.tx, tx, sizeof tx);
+            netman_vpn__say("handshake    %s  (%d of %d peers)", hs, st.handshaked, st.npeers);
+            netman_vpn__say("transfer     rx %s  tx %s", rx, tx);
+            netman_vpn__say("listen port  %d", st.listen_port);
+        } else netman_vpn__say("handshake    - (reading the live tunnel needs root)");
+    }
+    int k = netman_vpn_ks_state();
+    netman_vpn__say("kill switch  %s", k > 0 ? "on" : k == 0 ? "off" : "unknown (needs root and nft)");
+    netman_vpn_wg_free(&c);
+    return 0;
+}
+NETMAN_VPN_API int netman_vpn_import(const char *file, const char *name_in) {
+    if (!file || !*file) return netman_vpn__fail("import: no file given (netman vpn import FILE [NAME])");
+    size_t l = 0; char *t = netman_vpn__slurp(file, &l, 256u << 10, 0);
+    if (!t) return netman_vpn__fail("%s: %s", file, errno == EFBIG ? "not a regular file or too big (max 256 KiB)" : strerror(errno));
+    int ty = netman_vpn__detect(t);
+    if (!ty) { netman_vpn__wipe(t, l); free(t); return netman_vpn__fail("%s: cannot tell WireGuard from OpenVPN (a WireGuard file has [Interface], an OpenVPN file remote/client/dev lines)", file); }
+    char name[64];
+    if (name_in && *name_in) snprintf(name, sizeof name, "%s", name_in);
+    else {
+        const char *b = strrchr(file, '/'); b = b ? b + 1 : file;
+        snprintf(name, sizeof name, "%s", b);
+        char *dot = strrchr(name, '.'); if (dot && dot != name) *dot = 0;
+        for (char *c = name; *c; c++) if (!(isalnum((unsigned char)*c) || strchr("_=+.-", *c))) *c = '-';
+        while (name[0] == '.' || name[0] == '-') memmove(name, name + 1, strlen(name));
+    }
+    if (!netman_vpn_valid_name(name, 32)) { netman_vpn__wipe(t, l); free(t); return netman_vpn__fail("\"%s\" is not a usable profile name (1-32 chars of A-Za-z0-9_=+.-; WireGuard interface names are cut to 15)", name); }
+    if (ty == NETMAN_VPN_WG) {
+        netman_vpn_wg c; char err[128];
+        if (netman_vpn_wg_parse(t, l, &c, err, sizeof err)) { netman_vpn__wipe(t, l); free(t); return netman_vpn__fail("%s: %s", file, err); }
+        netman_vpn_wg_free(&c);
+        if (strlen(name) > 15) netman_vpn__fail("note: %s is longer than 15 chars; a WireGuard interface name cannot be, so `up` will refuse it (use: vpn import FILE SHORTNAME)", name);
+    }
+    char path[PATH_MAX], other[PATH_MAX]; struct stat st;
+    snprintf(path, sizeof path, "%s/%s.%s", netman_vpn_conf_dir, name, ty == NETMAN_VPN_WG ? "conf" : "ovpn");
+    snprintf(other, sizeof other, "%s/%s.%s", netman_vpn_conf_dir, name, ty == NETMAN_VPN_WG ? "ovpn" : "conf");
+    if (lstat(path, &st) == 0 || lstat(other, &st) == 0) { netman_vpn__wipe(t, l); free(t); return netman_vpn__fail("a profile called %s already exists in %s (pass another NAME)", name, netman_vpn_conf_dir); }
+    if (netman_vpn__mkdirs(netman_vpn_conf_dir, 0755)) { int e = errno; netman_vpn__wipe(t, l); free(t); return netman_vpn__fail("%s: %s%s", netman_vpn_conf_dir, strerror(e), e == EACCES || e == EPERM ? " (import needs root)" : ""); }
+    if (netman_vpn__spit(path, t, l, 0600)) { int e = errno; netman_vpn__wipe(t, l); free(t); return netman_vpn__fail("%s: %s%s", path, strerror(e), e == EACCES || e == EPERM ? " (import needs root)" : ""); }
+    int refs = ty == NETMAN_VPN_OVPN && (strstr(t, "\nca ") || strstr(t, "\ncert ") || strstr(t, "\nkey ") || strstr(t, "\nauth-user-pass "));
+    netman_vpn__wipe(t, l); free(t);
+    netman_vpn__say("imported %s as %s (%s, mode 0600)", file, path, ty == NETMAN_VPN_WG ? "WireGuard" : "OpenVPN");
+    if (refs) netman_vpn__say("note: this OpenVPN profile references other files (ca/cert/key/auth); copy them next to it in %s", netman_vpn_conf_dir);
     return 0;
 }
 
@@ -1728,7 +1879,8 @@ NETMAN_VPN_API int netman_vpn_provider_connect(const char *provider, const char 
 
 /* ---------------------------------------------------------------- command front end */
 static void netman_vpn__usage(void) {
-    fputs("usage: netman vpn list | up NAME [secs] | down NAME | status [NAME] | logs NAME [N]\n"
+    fputs("usage: netman vpn list | up NAME [secs] | down NAME | status [NAME] | info NAME | logs NAME [N]\n"
+          "       netman vpn import FILE [NAME]      copy a WireGuard / OpenVPN config into the profile dir (mode 0600)\n"
           "       netman vpn ks NAME on|off          kill switch (nftables, atomic, survives tunnel flaps; NETMAN_VPN_KS_LAN=1 allows LAN)\n"
           "       netman vpn run NAME CMD [ARGS]     run one command through the tunnel in its own network namespace\n"
           "       netman vpn watch NAME [interval [stale]]   reconnect when the tunnel dies or the handshake gets stale\n"
@@ -1737,12 +1889,12 @@ static void netman_vpn__usage(void) {
           "       netman vpn genkey | pubkey         (pubkey reads a private key on stdin)\n", NV_ERR);
 }
 NETMAN_VPN_API int netman_vpn_cmd(int argc, char **argv) {
-    const char *e;
-    if ((e = getenv("NETMAN_VPN_CONF_DIR"))) netman_vpn_conf_dir = e;
-    if ((e = getenv("NETMAN_VPN_RUN_DIR"))) netman_vpn_run_dir = e;
+    netman_vpn_env();
     if (argc < 2) { netman_vpn__usage(); return 2; }
     const char *c = argv[1];
     if (!strcmp(c, "list")) return netman_vpn_list();
+    if (!strcmp(c, "import") && argc >= 3) return netman_vpn_import(argv[2], argc > 3 ? argv[3] : NULL);
+    if (!strcmp(c, "info") && argc >= 3) return netman_vpn_info(argv[2]);
     if (!strcmp(c, "up") && argc >= 3) return netman_vpn_up(argv[2], argc > 3 ? atoi(argv[3]) : 30);
     if (!strcmp(c, "down") && argc >= 3) return netman_vpn_down(argv[2]);
     if (!strcmp(c, "status")) {
@@ -1752,7 +1904,7 @@ NETMAN_VPN_API int netman_vpn_cmd(int argc, char **argv) {
         closedir(d); return 0;
     }
     if (!strcmp(c, "logs") && argc >= 3) return netman_vpn_logs(argv[2], argc > 3 ? atoi(argv[3]) : 40);
-    if (!strcmp(c, "ks") && argc >= 4 && (!strcmp(argv[3], "on") || !strcmp(argv[3], "off"))) return netman_vpn_killswitch(argv[2], !strcmp(argv[3], "on"));
+    if ((!strcmp(c, "ks") || !strcmp(c, "killswitch")) && argc >= 4 && (!strcmp(argv[3], "on") || !strcmp(argv[3], "off"))) return netman_vpn_killswitch(argv[2], !strcmp(argv[3], "on"));
     if (!strcmp(c, "run") && argc >= 4) return netman_vpn_run(argv[2], argv + 3);
     if (!strcmp(c, "watch") && argc >= 3) return netman_vpn_watch(argv[2], argc > 3 ? atoi(argv[3]) : 15, argc > 4 ? atoi(argv[4]) : 180);
     if (!strcmp(c, "rtt") && argc >= 3) { int r = netman_vpn_rtt_ms(argv[2], 1000); if (r < 0) return netman_vpn__fail("no reply from %s", argv[2]); netman_vpn__say("%d ms", r); return 0; }

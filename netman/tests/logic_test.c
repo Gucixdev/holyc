@@ -96,6 +96,8 @@ int main(void)
 		nm_vpn v[4];
 		n = nm_parse_vpn("office           wireguard  up\nhome             openvpn    down\nnetman vpn: junk\n", v, 4);
 		CHECK(n == 2 && v[0].up && !strcmp(v[1].kind, "openvpn") && !v[1].up, "vpn: %d", n);
+		n = nm_parse_vpn("a wireguard up ep=1.2.3.4:51820 hs=7 rx=100 tx=200\nb openvpn connecting\nc wireguard locked\nd wireguard untrusted\ne openvpn failed\nkillswitch on\n", v, 4);
+		CHECK(n == 4 && v[0].up && !strcmp(v[0].ep, "1.2.3.4:51820") && v[0].hs == 7 && v[0].rx == 100 && v[0].tx == 200 && v[1].active && !v[1].up && !strcmp(v[2].state, "locked") && !v[2].active && !strcmp(v[3].state, "untrusted") && v[1].hs == -1, "vpn extras/states: %d", n);
 	}
 
 	/* ---- item 1: hidden rows, never an empty row ---- */

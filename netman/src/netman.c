@@ -67,7 +67,9 @@ int main(int argc, char **argv)
 			wpa = netman_wifi_backend_is_wpa();
 			ok = access(wd && *wd ? wd : "/run/wpa_supplicant", R_OK | X_OK) == 0;
 		}
-		if (nm_priv_needed(c->root, netman_config_str(&nc_cfg, NC_PRIV_SUDO), wpa, ok, (unsigned)geteuid()) && nm_priv_escalate(argc, argv) < 0) return 1;
+		int root = c->root;
+		if (tui && nc_enabled("vpn") && nc_vpn_has_profiles()) root = NM_ROOT_YES;   /* vpn up/down/kill switch are netlink + nft: the TUI needs root as soon as there is a profile to bring up */
+		if (nm_priv_needed(root, netman_config_str(&nc_cfg, NC_PRIV_SUDO), wpa, ok, (unsigned)geteuid()) && nm_priv_escalate(argc, argv) < 0) return 1;
 	}
 	if (tui) return nc_tui();
 	{

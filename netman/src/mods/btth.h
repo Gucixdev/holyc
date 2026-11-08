@@ -24,6 +24,7 @@ int netman_bt_power(int on);
 void netman_bt_set_pin(const char *pin);                             /* non-interactive: answer PIN/passkey prompts with it, accept confirmations */
 int netman_bt_agent(int seconds);                                    /* register as the default pairing agent for N seconds (<=0: until SIGINT) */
 int netman_bt_info(const char *name_or_mac);                         /* details of one device: address, class, RSSI, paired/trusted/connected, battery, profiles */
+int netman_bt_adapter(void);                                         /* "key   value" lines of the adapter: address, name, powered, discoverable, pairable, discovering, paired / connected counts */
 int netman_bt_status(void);                                          /* "bt       adapter on, nothing connected" style lines */
 #ifdef __cplusplus
 }
@@ -320,6 +321,32 @@ int netman_bt_info(const char *what)
 		snprintf(list, sizeof list, "%s", v);
 		for (q = strtok_r(list, ",", &sv); q; q = strtok_r(NULL, ",", &sv)) fprintf(NETMAN_OUT, "%-14s %s\n", "profile", netman_bt__profile(q) ?: q);
 	}
+	close(fd);
+	return 0;
+}
+
+int netman_bt_adapter(void)
+{
+	int fd = netman_dbus_system_bus(), paired = 0, conn = 0, known = 0;
+	const char *ad, *v;
+	if (fd < 0) return 1;
+	if (netman_dbus_load_objects(fd, netman_bt__BZ) || !(ad = netman_dbus_first_path(netman_bt__ADP))) { fputs("bluetooth: bluez is not running or there is no adapter\n", NETMAN_ERR); close(fd); return 1; }
+	for (int i = 0; i < netman_dbus_nprops; i++) {
+		const char *path = netman_dbus_props[i].path;
+		if (strcmp(netman_dbus_props[i].iface, netman_bt__DEV) || *netman_dbus_props[i].key) continue;
+		known++;
+		if (!strcmp(netman_dbus_pget(path, netman_bt__DEV, "Paired") ?: "", "true")) paired++;
+		if (!strcmp(netman_dbus_pget(path, netman_bt__DEV, "Connected") ?: "", "true")) conn++;
+	}
+#define NB_YN(k) (!strcmp(netman_dbus_pget(ad, netman_bt__ADP, k) ?: "", "true") ? "yes" : (netman_dbus_pget(ad, netman_bt__ADP, k) ? "no" : "-"))
+	fprintf(NETMAN_OUT, "%-14s %s\n", "adapter", (v = netman_dbus_pget(ad, netman_bt__ADP, "Name")) ? v : ad);
+	fprintf(NETMAN_OUT, "%-14s %s\n", "address", (v = netman_dbus_pget(ad, netman_bt__ADP, "Address")) ? v : "-");
+	fprintf(NETMAN_OUT, "%-14s %s\n", "powered", NB_YN("Powered"));
+	fprintf(NETMAN_OUT, "%-14s %s\n", "discoverable", NB_YN("Discoverable"));
+	fprintf(NETMAN_OUT, "%-14s %s\n", "pairable", NB_YN("Pairable"));
+	fprintf(NETMAN_OUT, "%-14s %s\n", "discovering", NB_YN("Discovering"));
+#undef NB_YN
+	fprintf(NETMAN_OUT, "%-14s %d paired, %d connected, %d known\n", "devices", paired, conn, known);
 	close(fd);
 	return 0;
 }

@@ -1103,6 +1103,7 @@ static int netman_wifi__wpa_info(const char *ifname, const char *ssid)
 		}
 	if (flags) {
 		netman_wifi__kv("security", "%s  %s", netman_wifi_sec_flags(flags), flags);
+		netman_wifi__kv("wps", "%s", strstr(flags, "WPS") ? "yes (advertised)" : "no");
 		netman_wifi__kv("bssid", "%s", bs);
 		netman_wifi__kv("access points", "%d", nb);
 		netman_wifi__info_freq(mhz);
@@ -1120,6 +1121,7 @@ static int netman_wifi__wpa_info(const char *ifname, const char *ssid)
 		if (netman_wifi__kv_get(st, "bssid", v, sizeof v)) netman_wifi__kv("bssid (now)", "%s", v);
 		if (netman_wifi__kv_get(st, "key_mgmt", v, sizeof v)) netman_wifi__kv("auth", "%s", v);
 		if (netman_wifi__kv_get(st, "pairwise_cipher", v, sizeof v)) netman_wifi__kv("cipher", "%s", v);
+		if (netman_wifi__kv_get(st, "group_cipher", v, sizeof v)) netman_wifi__kv("group cipher", "%s", v);
 		if (netman_wifi__kv_get(st, "ip_address", v, sizeof v)) netman_wifi__kv("ip (wpa)", "%s", v);
 		if (!netman_wifi__wpa_cmd(ifname, "SIGNAL_POLL", sp, sizeof sp)) {
 			int rssi = 0, noise = 0;
@@ -1127,6 +1129,8 @@ static int netman_wifi__wpa_info(const char *ifname, const char *ssid)
 			if (netman_wifi__kv_get(sp, "AVG_RSSI", v, sizeof v)) netman_wifi__kv("signal avg", "%d dBm", atoi(v));
 			if (netman_wifi__kv_get(sp, "NOISE", v, sizeof v)) { noise = atoi(v); netman_wifi__kv("noise", "%d dBm   SNR %d dB", noise, rssi - noise); }
 			if (netman_wifi__kv_get(sp, "LINKSPEED", v, sizeof v)) netman_wifi__kv("link speed", "%d Mbit/s", atoi(v));
+			if (netman_wifi__kv_get(sp, "RX_LINKSPEED", v, sizeof v)) netman_wifi__kv("rx rate", "%d Mbit/s", atoi(v) / 1000 ? atoi(v) / 1000 : atoi(v));
+			if (netman_wifi__kv_get(sp, "TX_LINKSPEED", v, sizeof v)) netman_wifi__kv("tx rate", "%d Mbit/s", atoi(v) / 1000 ? atoi(v) / 1000 : atoi(v));
 			if (netman_wifi__kv_get(sp, "FREQUENCY", v, sizeof v)) netman_wifi__info_freq(atoi(v));
 			if (netman_wifi__kv_get(sp, "WIDTH", v, sizeof v)) netman_wifi__kv("width", "%s", v);
 		}

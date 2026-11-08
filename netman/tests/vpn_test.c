@@ -45,7 +45,7 @@ static void test_crypto(void) {
 }
 
 static const char GOOD[] =
-    "# comment\n[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\nAddress = 10.0.0.2/24, fd00::2/64\nDNS = 1.1.1.1, 9.9.9.9, corp.example\nMTU = 1380\nListenPort = 51820\nFwMark = 0x1234\nTable = 77\n"
+    "# comment\n[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\nAddress = 10.0.0.2/24, fd00::2/64\nDNS = 1.1.1.1, 9.9.9.9, corp.example\nMTU = 1380\nListenPort = 51820\nFwMark = 0x1234\nTable = 77\n"
     "PostUp = echo up %i\nPostDown = echo down %i\n\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nPresharedKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\n"
     "Endpoint = vpn.example.com:51820   # trailing\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = [2001:db8::1]:443\nAllowedIPs = 10.9.0.0/16\n";
 
@@ -65,9 +65,9 @@ static void test_parser(void) {
     const char *bad[] = {
         "", "PrivateKey = x\n", "[Interface]\nPrivateKey = tooshort\n", "[Interface]\nBogus = 1\n", "[Interface]\nAddress = 10.0.0.1/33\n", "[Interface]\nAddress = nope\n",
         "[Interface]\nMTU = 12\n", "[Interface]\nListenPort = 70000\n", "[Interface]\n[Interface]\n", "[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\n",
-        "[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n[Peer]\nEndpoint = 1.2.3.4:5\n",
-        "[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = nocolon\n",
-        "[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAllowedIPs = 1.2.3.4/99\n",
+        "[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\n[Peer]\nEndpoint = 1.2.3.4:5\n",
+        "[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = nocolon\n",
+        "[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAllowedIPs = 1.2.3.4/99\n",
         "[Interface]\nDNS = bad domain!\n", "[Interface]\nTable = 254\n", "[Interface\n", "[Nope]\n", "[Interface]\nFwMark = 0\n", "[Interface]\nmissing equals\n"};
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { r = netman_vpn_wg_parse(bad[i], strlen(bad[i]), &c, err, sizeof err); CHK(r == -1, "bad config #%zu accepted", i); }
     char nul[] = "[Interface]\nPrivateKey = AAAA\0AAAA\n"; OK(netman_vpn_wg_parse(nul, sizeof nul - 1, &c, err, sizeof err) == -1, "NUL byte rejected");
@@ -152,7 +152,7 @@ static void test_dns_files(void) {
     char rundir[600], rc[600], other[600];
     snprintf(rundir, sizeof rundir, "%s/run", dir); snprintf(rc, sizeof rc, "%s/resolv.conf", dir); snprintf(other, sizeof other, "%s/real.conf", dir);
     netman_vpn_run_dir = rundir; netman_vpn_resolv_path = rc; netman_vpn__rundir();
-    const char *cf = "[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\nDNS = 10.64.0.1, lab.example\n";
+    const char *cf = "[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\nDNS = 10.64.0.1, lab.example\n";
     netman_vpn_wg c; netman_vpn_wg_parse(cf, strlen(cf), &c, NULL, 0);
     OK(c.dns.n == 1, "dns parsed");
     netman_vpn__spit(rc, "nameserver 9.9.9.9\n", 19, 0644);
@@ -369,10 +369,46 @@ static void live(void) {
     char cmd[400]; snprintf(cmd, sizeof cmd, "rm -rf %s", TD); if (system(cmd)) {}
 }
 
+/* list / info / import against a temp profile dir; pure file work, no network, works unprivileged */
+static void test_profiles(void) {
+    char d[] = "/tmp/netman_vpn_profXXXXXX", src[300], *p; size_t l;
+    if (!mkdtemp(d)) { fails++; return; }
+    char dir[300]; snprintf(dir, sizeof dir, "%s/conf", d);
+    const char *sd = netman_vpn_conf_dir, *srd = netman_vpn_run_dir; FILE *so = netman_vpn_out, *se = netman_vpn_err;
+    netman_vpn_conf_dir = dir; netman_vpn_run_dir = strdup("/nonexistent-run");
+    FILE *m = open_memstream(&p, &l); netman_vpn_out = m;
+    OK(netman_vpn_list() == 0, "list on a missing directory is empty, not an error");
+    fclose(m); OK(strstr(p, "NAME") == NULL, "no profile lines"); free(p);
+    snprintf(src, sizeof src, "%s/in.conf", d);
+    FILE *f = fopen(src, "w"); fputs("[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\nEndpoint = 192.0.2.1:51820\nAllowedIPs = 0.0.0.0/0\n", f); fclose(f);
+    FILE *dn = fopen("/dev/null", "w"); netman_vpn_out = dn; netman_vpn_err = dn;
+    OK(netman_vpn_import(src, "my vpn") != 0, "a name with a space is refused or sanitised");
+    OK(netman_vpn_import(src, "office") == 0, "import writes the profile");
+    OK(netman_vpn_import(src, "office") != 0, "import refuses to overwrite");
+    { struct stat st; char pp[400]; snprintf(pp, sizeof pp, "%s/office.conf", dir); OK(stat(pp, &st) == 0 && (st.st_mode & 077) == 0, "imported profile is mode 0600"); }
+    f = fopen(src, "w"); fputs("not a vpn profile\n", f); fclose(f);
+    OK(netman_vpn_import(src, "junk") != 0, "garbage is not imported");
+    netman_vpn_import("/nonexistent/file.conf", NULL);
+    fclose(dn);
+    m = open_memstream(&p, &l); netman_vpn_out = m; netman_vpn_err = so ? so : stderr;
+    OK(netman_vpn_list() == 0, "list works");
+    fclose(m);
+    OK(strstr(p, "office") && strstr(p, "wireguard") && strstr(p, "down"), "list shows NAME TYPE STATE");
+    OK(strstr(p, "killswitch ") != NULL, "list ends with the kill switch state");
+    free(p);
+    m = open_memstream(&p, &l); netman_vpn_out = m;
+    OK(netman_vpn_info("office") == 0, "info works for a down profile");
+    fclose(m);
+    OK(strstr(p, "192.0.2.1:51820") && strstr(p, "0.0.0.0/0") && strstr(p, "full tunnel"), "info shows endpoint, allowed ips and the routing mode");
+    free(p);
+    netman_vpn_conf_dir = sd; netman_vpn_run_dir = srd; netman_vpn_out = so; netman_vpn_err = se;
+    char cmd[400]; snprintf(cmd, sizeof cmd, "rm -rf %s", d); if (system(cmd)) {}
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "ns")) { execlp("unshare", "unshare", "-Urn", argv[0], "inner", (char *)NULL); perror("unshare"); return 2; }
     int inner = argc > 1 && !strcmp(argv[1], "inner");
-    test_crypto(); test_parser(); test_json_providers("."); test_dns_files();
+    test_crypto(); test_parser(); test_profiles(); test_json_providers("."); test_dns_files();
     if (inner) { if (guard_ns()) live(); else fails++; }
     printf("%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;

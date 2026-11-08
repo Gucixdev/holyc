@@ -77,7 +77,7 @@ Tabs Wi-Fi | Ethernet/IP | Bluetooth | VPN. Calls that can block run in a worker
     tests/pty                                    the real binary in tmux against fake iwd / wpa_supplicant / bluez (tests/fakes.c): 105 checks
     tests/cli_test                               help, man sync, config, module gating, exit codes (41)
     cc -std=gnu11 -Isrc -o /tmp/nm_priv tests/priv_test.c; cc ... tests/config_test.c src/config.c [src/netman.conf.example]   15 / 77
-    tests/wifi_bt_test.c (75), net_test (+ `selftest` under unshare -Urn), vpn_test, fw_test, net_score_test (unshare -Urn)
+    tests/pty_vpn (real WireGuard in unshare -Urn, drives the VPN tab), tests/wifi_bt_test.c (75), net_test (+ `selftest` under unshare -Urn), vpn_test, fw_test, net_score_test (unshare -Urn)
 
 Not tested: real iwd / wpa_supplicant / bluez and real hardware, real networks, a real sudo prompt, vpn up/down as root from the TUI, the DHCP lease-cache
 key used by the details pane (a guess: the SSID), the future daemon.

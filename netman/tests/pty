@@ -97,6 +97,26 @@ has "[*]" "ASCII lock fallback"; has "open" "ASCII open marker"; hasnt "🔒" "n
 EXTRA="FAKES_WPA=1 NETMAN_WIFI_BACKEND=wpa" start 100 26
 has "1 Wi-Fi" "wpa: tabs"; has "<hidden>" "wpa: hidden row"; has "Home" "wpa: Home"; keys i; has "bssid" "wpa: bssid in the details"; keys Escape; keys q
 
+# --- header row + the I "all info" view on every tab, at three sizes: nothing wider than the window, still alive
+printf '[privileges]\nsudo = never\n' >"$work/c.conf"
+for size in "100 26" "80 24" "40 12"; do
+	set -- $size
+	start "$1" "$2"
+	s=$(snap); grep -qE 'default|dns|net' <<<"$(sed -n 2p <<<"$s")" && ok || no "header row 2 at $1x$2" "$s"
+	for tab in 1 2 3 4; do
+		keys "$tab"; keys I
+		s=$(snap); w=$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' <<<"$s")
+		[ "$w" -le "$1" ] && ok || no "tab $tab: no row wider than $1 in the I view at $1x$2" "$s"
+		grep -q "all info" <<<"$s" && ok || no "tab $tab: I view opened at $1x$2" "$s"
+		keys Next; keys j; keys I
+	done
+	$T list-sessions >/dev/null 2>&1 && ok || no "TUI died at $1x$2"
+	keys q
+done
+start 100 26
+has "wifi: " "header row keeps the wifi status"; keys I; has "access points" "wifi all-info: AP count"; has "first seen" "wifi all-info: first seen"; has "roam history" "wifi all-info: roam history"; has "bitrate" "wifi all-info: bitrate"
+keys I; keys 3; keys I; has "adapter" "bt all-info: adapter block"; keys I; keys q
+
 # --- disabled modules hide their tabs
 printf '[bluetooth]\nenabled = no\n[vpn]\nenabled = no\n[privileges]\nsudo = never\n' >"$work/c.conf"
 start 100 26

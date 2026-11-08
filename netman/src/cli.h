@@ -26,6 +26,7 @@ static void nc_apply(const netman_config *c)
 {
 	const char *b = netman_config_str(c, NC_WIFI_BACKEND), *d = netman_config_str(c, NC_NET_DNS_MODE), *u = netman_config_str(c, NC_ROAM_PROBE_URL);
 	int port = 80;
+	netman_vpn_env();
 	netman_wifi_backend(!strcmp(b, "iwd") ? 1 : !strcmp(b, "wpa") ? 2 : 0);
 	netman_dns_mode = !strcmp(d, "resolvconf") ? 1 : !strcmp(d, "resolved") ? 2 : 0;
 	netman_state_dir = netman_config_str(c, NC_NET_STATE_DIR);
@@ -33,6 +34,18 @@ static void nc_apply(const netman_config *c)
 	if (netman_config_bool(c, NC_ROAM_PROBE) && *u && !netman_config_split_url(u, nc_probe_host, sizeof nc_probe_host, &port, nc_probe_path, sizeof nc_probe_path)) {
 		netman_probe_host = nc_probe_host; netman_probe_path = nc_probe_path; netman_probe_port = port;
 	} else netman_probe_host = "";
+}
+
+/* 1 when the VPN profile dir holds a *.conf / *.ovpn, or cannot be listed by us (then there probably is one that needs root) */
+static int nc_vpn_has_profiles(void)
+{
+	DIR *d = opendir(netman_vpn_conf_dir);
+	struct dirent *e;
+	int found = 0;
+	if (!d) return errno == EACCES;
+	while (!found && (e = readdir(d))) { const char *dot = strrchr(e->d_name, '.'); found = dot && (!strcmp(dot, ".conf") || !strcmp(dot, ".ovpn")); }
+	closedir(d);
+	return found;
 }
 
 static int nc_enabled(const char *module)
@@ -414,6 +427,8 @@ static const nc_cmd nc_table[] = {
 	{ "roam status", "", h_roam_status, R_NO, "roaming", "probe setting and the score of each live interface", "" },
 	{ "roam prefer", "PROFILE PRIORITY", h_roam_prefer, R_YES, "roaming", "set a profile priority (higher wins)", "" },
 	{ "vpn list", "", h_vpn, R_NO, "vpn", "WireGuard and OpenVPN profiles and their state", "" },
+	{ "vpn import", "FILE [NAME]", h_vpn, R_YES, "vpn", "copy a WireGuard / OpenVPN config into the profile dir (/etc/netman/vpn, mode 0600)", "Refuses to overwrite. Directory override: env NETMAN_VPN_CONF_DIR." },
+	{ "vpn info", "NAME", h_vpn, R_YES, "vpn", "everything known about one profile: endpoint, handshake, transfer, allowed ips, split or full tunnel, kill switch", "" },
 	{ "vpn up", "NAME [WAIT_S]", h_vpn, R_YES, "vpn", "bring a tunnel up (plus the kill switch if vpn.killswitch)", "" },
 	{ "vpn down", "NAME", h_vpn, R_YES, "vpn", "take a tunnel down", "" },
 	{ "vpn status", "[NAME]", h_vpn, R_NO, "vpn", "tunnel state, handshake, transfer", "" },
