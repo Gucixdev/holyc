@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# pty - drive the real TUI inside a tmux pane against the stateful fake iwd + bluez (tests/fakes.c). Nothing real is touched.
+# Checks the rendered frame text at 80x24 and 40x12, navigation, connect / disconnect / forget / autoconnect / bluetooth actions
+# (verified from the fake's call log), a masked passphrase prompt, resize, and that the terminal is restored on quit.
+set -u
+cd "$(dirname "$(readlink -f "$0")")" || exit 1
+inc=../../notcoreutils
+work=$(mktemp -d); trap 'tmux -L nmtest kill-server 2>/dev/null; rm -rf "$work"' EXIT
+gcc -std=gnu11 -Wall -Wextra -O2 -I"$inc" -o "$work/fakes" fakes.c && gcc -std=gnu11 -Wall -Wextra -O2 -I"$inc" -I.. -o "$work/nm" ../netmanager.c || exit 1
+T="tmux -L nmtest"
+pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/      | /'; }
+snap() { $T capture-pane -p -t t; }
+has() { local s; s=$(snap); if grep -qF -- "$1" <<<"$s"; then ok; else no "$2 (wanted '$1')" "$s"; fi; }
+hasnt() { local s; s=$(snap); if grep -qF -- "$1" <<<"$s"; then no "$2 (did not want '$1')" "$s"; else ok; fi; }
+log_has() { if grep -qF -- "$1" "$work/log/calls.log"; then ok; else no "$2 (fake never saw '$1')" "$(cat "$work/log/calls.log")"; fi; }
+keys() { $T send-keys -t t "$@"; sleep 0.5; }
+start() { # cols rows
+	$T kill-server 2>/dev/null; rm -rf "$work/log"
+	$T -u new-session -d -s t -x "$1" -y "$2" "LANG=C.UTF-8 TERM=xterm-256color $work/fakes $work/log $work/nm -tui; echo EXIT:\$?; sleep 30"
+	sleep 2.5
+}
+
+start 80 24
+has "1 Wi-Fi" "tab bar"; has "4 VPN" "tab bar vpn"; has "Home" "home listed"; has "Guest cafe" "open network listed"; has "Zażółć" "utf-8 ssid"
+has "saved auto" "home flagged saved+auto"; has "enter connect" "keybar"; has "q quit" "keybar quit"
+
+# --- Wi-Fi: connect to a saved network, disconnect
+keys Enter; has "connected to Home" "connect to a saved network"; log_has "n0 net.connman.iwd.Network.Connect" "Connect called on Home"
+has "* " "connected row is marked"
+keys d; has "disconnect" "disconnect message"; log_has "Station.Disconnect" "Disconnect called"
+# --- an unknown psk network asks for a masked passphrase
+keys j j; keys Enter; has "passphrase:" "passphrase prompt"
+keys h u n t e r 2; has "passphrase: *******" "typed chars are masked"; hasnt "hunter2" "passphrase never shown"
+keys Escape; hasnt "passphrase:" "esc cancels the prompt"
+keys Enter; keys h u n t e r 2; keys Enter; has "connected to Neighbour" "connect with passphrase"; has "saved" "Neighbour is saved afterwards"
+# --- forget needs a confirmation
+keys j; has "Office 5G" "office listed"; keys x; has "forget Office 5G?" "forget asks first"; keys n; hasnt "forget Office 5G?" "n backs out"
+if grep -q "KnownNetwork.Forget" "$work/log/calls.log"; then no "forget was called without confirmation"; else ok; fi
+keys x; keys y; log_has "k3 net.connman.iwd.KnownNetwork.Forget" "Forget called after y"
+# --- autoconnect toggle on Home
+keys g; keys a; log_has "set AutoConnect=false" "autoconnect off sent"
+# --- filter
+keys /; keys g u e s t; has "/guest" "filter shown"; hasnt "psk" "filter hides the other (psk) networks"; has "Guest cafe" "filter keeps the match"
+keys Escape; has "psk" "esc clears the filter"
+# --- help
+keys '?'; has "switch tab" "help text"; keys x; hasnt "switch tab" "any key closes help"
+# --- Bluetooth
+keys 3; has "Headphones" "bt list"; has "AA:BB:CC:DD:EE:FF" "bt address"; has "CPT" "headphones flags"
+keys Enter; log_has "dev_0 org.bluez.Device1.Connect" "bt connect"; has "CP-" "Fake Pad now connected"
+keys j j; keys p; has "pairing PIN" "pair asks for a PIN"; keys Enter; log_has "dev_2 org.bluez.Device1.Pair" "bt pair"
+keys t; log_has "set Trusted=true" "bt trust"
+keys o; log_has "set Powered=false" "bt power off"; has "adapter off" "summary shows adapter off"
+# --- placeholder tabs
+keys 2; has "link" "ethernet header"; has "not wired yet" "ethernet note"
+keys 4; has "VPN: backend not wired yet" "vpn placeholder"
+# --- resize to a small terminal: layout follows
+$T resize-window -t t -x 40 -y 12; sleep 0.7
+keys 1; has "q quit" "40x12 keybar"; has "1 Wi-Fi" "40x12 tabs"; hasnt "Ethernet/IP" "40x12 uses short tab names"
+s=$(snap); w=$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' <<<"$s"); if [ "$w" -le 40 ]; then ok; else no "40x12 frame wider than 40 ($w)"; fi
+# --- quit restores the terminal
+keys q; has "EXIT:0" "clean exit, terminal back to the shell screen"; hasnt "1 Wi-Fi" "alternate screen left"
+echo "pty: $pass ok, $fail failed"
+[ "$fail" -eq 0 ]
