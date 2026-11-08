@@ -16,7 +16,7 @@ OUT     ?= bin
 PREFIX  ?= /usr/local
 INC      = -Ideps/utils -Ideps/libutil -Ideps/singlefile/abstract
 
-TOOLS   := cb cloc colorado dv fzf gtop man netcat notts scenario shot snip sudo tgates tree
+TOOLS   := cb cloc colorado dv fzf gtop man netcat netmanager_blue notts scenario shot snip sudo tgates tree
 
 LIBS_cb   = -lX11
 LIBS_sudo = -lcrypt

@@ -1,0 +1,28 @@
+.TH NETMANAGER_BLUE 1 "2026-11-08" "holyc" "User Commands"
+.SH NAME
+netmanager_blue \- small network and bluetooth manager
+.SH SYNOPSIS
+.B netmanager_blue
+[\fBstatus\fR]
+.br
+.B netmanager_blue wifi
+list | connect \fISSID\fR [\fIPASSPHRASE\fR] | disconnect | forget \fISSID\fR
+.br
+.B netmanager_blue bt
+list | scan [\fISEC\fR] | connect|disconnect|pair|trust|remove \fINAME_OR_MAC\fR | power on|off
+.br
+.B netmanager_blue fw
+.SH DESCRIPTION
+No libraries: it talks D\-Bus to iwd and bluez, or the control socket of wpa_supplicant, and reads sysfs.
+.B status
+shows ethernet, wifi and bluetooth. The wifi backend is chosen automatically: wpa_supplicant when
+.I /run/wpa_supplicant/wlan0
+exists (this needs root), otherwise iwd. The interface can be changed with NMB_IFACE.
+.B fw
+prints the nft ruleset (root).
+.SH NOT YET
+WPS, VPN, ethernet configuration, a TUI, bluetooth pairing agent (PIN entry); wifi forget works with iwd only.
+.SH SEE ALSO
+.BR iwctl (1),
+.BR bluetoothctl (1),
+.BR nft (8)

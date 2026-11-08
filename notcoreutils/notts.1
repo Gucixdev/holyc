@@ -1,0 +1,47 @@
+.TH NOTTS 1 "2026-11-08" "holyc" "User Commands"
+.SH NAME
+notts \- notification daemon and sender
+.SH SYNOPSIS
+.B notts
+.br
+.B notts send
+[\fB\-u\fR \fIlow|normal|critical\fR] [\fB\-t\fR \fIMS\fR] [\fB\-a\fR \fIAPP\fR] \fISUMMARY\fR [\fIBODY\fR]
+.br
+.B notts history
+[\fIN\fR]
+.br
+.B notts last
+.br
+.B notts dnd on|off|status
+.SH DESCRIPTION
+Without arguments runs as the
+.B org.freedesktop.Notifications
+daemon on the session bus. It speaks the D\-Bus protocol itself and needs no libraries. Every notification is logged;
+hooks and forwards can act on it. Stop other daemons (dunst, mako) first, only one may own the name.
+.SH COMMANDS
+.TP
+.B send
+send a notification to whichever daemon runs; prints its id
+.TP
+.B history
+the last N (default 20) notifications
+.TP
+.B last
+the newest one, for a status bar
+.TP
+.B dnd
+do\-not\-disturb: logged but silent, critical notifications always pass
+.SH FILES
+.TP
+.I ~/.config/notts/config
+one "key value" per line: \fBhook\fR CMD (run with NOTTS_ID, NOTTS_APP, NOTTS_SUMMARY, NOTTS_BODY, NOTTS_URGENCY),
+\fBdiscord\fR WEBHOOK_URL, \fBtelegram\fR TOKEN CHAT_ID, \fBignore\fR APP. Discord and Telegram need curl.
+.TP
+.I ~/.local/state/notts/history
+tab separated log.
+.TP
+.I $XDG_RUNTIME_DIR/notts.last
+newest notification.
+.SH SEE ALSO
+.BR notify-send (1),
+.BR shot (1)

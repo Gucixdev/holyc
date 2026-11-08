@@ -1,0 +1,37 @@
+.TH SCENARIO 1 "2026-11-08" "holyc" "User Commands"
+.SH NAME
+scenario \- keyboard and mouse macro recorder and player
+.SH SYNOPSIS
+.B scenario record
+[\fINAME\fR] [\fIDEVICE\fR...]
+.br
+.B scenario stop
+.br
+.B scenario play
+[\fB\-s\fR \fIFACTOR\fR] [\fB\-n\fR \fITIMES\fR] \fINAME\fR
+.br
+.B scenario list
+|
+.B delete
+\fINAME\fR |
+.B rename
+\fIOLD NEW\fR |
+.B show
+\fINAME\fR
+.SH DESCRIPTION
+Records input events from evdev devices (default: every keyboard and mouse) and replays them through a virtual uinput device.
+Needs root and re-runs itself through sudo when it is not root.
+.SH OPTIONS
+.TP
+.B \-s \fIFACTOR\fR
+playback speed, 2 is twice as fast
+.TP
+.B \-n \fITIMES\fR
+repeat count, 0 means until Ctrl\-C
+.SH FILES
+.I $XDG_DATA_HOME/scenario/NAME.N.evemu
+(default ~/.local/share/scenario), one file per device, in the text format of evemu.
+.SH WARNING
+A recording of a keyboard contains every key typed, passwords included. Delete such recordings.
+.SH SEE ALSO
+.BR shot (1)

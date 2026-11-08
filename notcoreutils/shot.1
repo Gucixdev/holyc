@@ -1,0 +1,66 @@
+.TH SHOT 1 "2026-11-08" "holyc" "User Commands"
+.SH NAME
+shot \- screenshot, screen recording and area selection for Wayland
+.SH SYNOPSIS
+.B shot
+[\fIOPTIONS\fR] [\fIMODE\fR]
+.br
+.B shot rec
+[\fIOPTIONS\fR] [\fIMODE\fR]
+.br
+.B shot sel
+.br
+.B shot \-l
+.SH DESCRIPTION
+Takes a screenshot (default), starts or stops a screen recording, or lets you drag an area and prints it as
+.IR "X,Y WxH" .
+Running
+.B shot rec
+a second time stops the recording, so it can be bound to one key.
+.SH MODES
+.TP
+.B full
+every screen together (default)
+.TP
+.B output
+one screen: \fB\-o\fR NAME, or the selected screen under dwl
+.TP
+.B area
+drag a rectangle
+.TP
+.B window
+the focused window (dwl, from its control socket)
+.SH OPTIONS
+.TP
+.B \-o \fINAME\fR
+which screen (implies output)
+.TP
+.B \-f \fIFILE\fR
+write to FILE instead of ~/Pictures/shot-DATE.png
+.TP
+.B \-d \fISEC\fR
+wait before capturing
+.TP
+.B \-c
+clipboard only, no file
+.TP
+.B \-n
+no clipboard copy and no notification
+.TP
+.B \-a
+(rec) record audio too
+.TP
+.B \-l
+list the screens
+.SH FILES
+.TP
+.I $XDG_RUNTIME_DIR/shot.rec
+pid and file of the running recorder.
+.TP
+.I $XDG_RUNTIME_DIR/dwl.sock
+dwl control socket, used to find screens and the focused window.
+.SH REQUIRES
+grim, slurp, wf-recorder, wl-copy, and optionally notify-send.
+.SH SEE ALSO
+.BR notts (1),
+.BR scenario (1)
