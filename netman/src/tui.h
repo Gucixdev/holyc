@@ -921,13 +921,18 @@ static void nm__keyof(const nm_ui *u, char *keep, size_t n)
 	if (s < c) nm__copy(keep, n, u->tab == NM_WIFI ? nm__hkey(&u->nets[idx[s]]) : u->tab == NM_BT ? u->devs[idx[s]].addr : u->tab == NM_ETH ? u->ifs[idx[s]].f.name : u->vpns[idx[s]].name);
 }
 
+static int nm__scan_req;   /* set only by the `r` key: everything else reads cached scan results */
+
 void nm_refresh(nm_ui *u)
 {
 	char keep[100];
 	nm__keyof(u, keep, sizeof keep);
 	if (u->tab == NM_WIFI) {
 		nm_net known[NM_MAXNET];
-		int nk, rc = NM_CALL(u, "scanning networks", netman_wifi_scan());
+		int nk, rc;
+		netman_wifi_passive = !nm__scan_req;
+		rc = NM_CALL(u, nm__scan_req ? "scanning networks" : "reading networks", netman_wifi_scan());
+		netman_wifi_passive = 0;
 		if (rc) nm__report(u, "wifi scan", rc);
 		else { u->nnets = nm_parse_scan(nm__o(), u->nets, NM_MAXNET); u->msg[0] = 0; }
 		nm__cap_free();
@@ -1382,7 +1387,7 @@ void nm_ui_key(nm_ui *u, int key)
 	case 'g': case NM_K_HOME: u->sel[u->tab] = 0; nm__clamp(u); break;
 	case 'G': case NM_K_END: u->sel[u->tab] = 1 << 20; nm__clamp(u); break;
 	case '/': u->mode = NM_FILTER; u->masked = 0; u->inlen = (int)strlen(u->filter); nm__copy(u->in, sizeof u->in, u->filter); break;
-	case 'r': nm_refresh(u); break;
+	case 'r': nm__scan_req = 1; nm_refresh(u); nm__scan_req = 0; break;
 	case 'i': nm_info_open(u); break;
 	case NM_K_ENTER: nm__enter(u); break;
 	default:

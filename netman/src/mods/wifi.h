@@ -114,6 +114,8 @@ static int netman_wifi__wpa_safe(const char *s) { return s && *s && !strpbrk(s, 
 
 #define netman_wifi__IWD "net.connman.iwd"
 
+int netman_wifi_passive;   /* 1 = listing reads the backend's cached results and never triggers a scan (the TUI scans only on `r`) */
+
 static int netman_wifi__iwd_load(int fd)
 {
 	if (netman_dbus_load_objects(fd, netman_wifi__IWD)) { fputs("wifi: iwd is not running (systemctl start iwd)\n", NETMAN_ERR); return -1; }
@@ -811,7 +813,7 @@ static int netman_wifi__iwd_rows(int fd, const char *st, netman_wifi__Row *rows,
 	size_t end;
 	int n = 0;
 	const char *conn = netman_dbus_pget(st, netman_wifi__IWD ".Station", "ConnectedNetwork");
-	if (netman_wifi__scan(fd, st)) return -1;
+	if (!netman_wifi_passive && netman_wifi__scan(fd, st)) return -1;
 	conn = netman_dbus_pget(st, netman_wifi__IWD ".Station", "ConnectedNetwork");
 	if (netman_dbus_call(fd, &m, netman_wifi__IWD, st, netman_wifi__IWD ".Station", "GetOrderedNetworks", NULL, NULL)) { netman_dbus_fail(&m, "list"); return -1; }
 	r = (netman_dbus_R){ m.body, 0, m.blen, 0 };
@@ -909,8 +911,10 @@ static int netman_wifi__wpa_rows(const char *ifname, netman_wifi__Row *rows, int
 	static struct netman_wifi__knownset ks;
 	int n = 0;
 	char cbss[20] = "", cssid[64] = "", tmp[96];
-	netman_wifi__wpa_cmd(ifname, "SCAN", out, sizeof out);
-	{ const char *e = getenv("NETMAN_SCAN_SECS"); sleep((unsigned)(e && *e ? atoi(e) : 4)); }
+	if (!netman_wifi_passive) {
+		netman_wifi__wpa_cmd(ifname, "SCAN", out, sizeof out);
+		{ const char *e = getenv("NETMAN_SCAN_SECS"); sleep((unsigned)(e && *e ? atoi(e) : 4)); }
+	}
 	if (netman_wifi__wpa_cmd(ifname, "SCAN_RESULTS", out, sizeof out)) { netman_wifi__seterr("cannot talk to wpa_supplicant (needs root or the netdev group)", 0); return -1; }
 	if (!netman_wifi__wpa_status(ifname, st, sizeof st)) {
 		if (netman_wifi__kv_get(st, "wpa_state", tmp, sizeof tmp) && !strcmp(tmp, "COMPLETED")) {
