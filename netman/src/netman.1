@@ -112,6 +112,12 @@ set a profile priority (higher wins)
 .B netman vpn list
 WireGuard and OpenVPN profiles and their state
 .TP
+.B netman vpn import FILE [NAME]
+copy a WireGuard / OpenVPN config into the profile dir (/etc/netman/vpn, mode 0600). Refuses to overwrite. Directory override: env NETMAN_VPN_CONF_DIR.
+.TP
+.B netman vpn info NAME
+everything known about one profile: endpoint, handshake, transfer, allowed ips, split or full tunnel, kill switch
+.TP
 .B netman vpn up NAME [WAIT_S]
 bring a tunnel up (plus the kill switch if vpn.killswitch)
 .TP
@@ -166,6 +172,66 @@ append one sample per interface to metrics.dir
 .B netman metrics watch [COUNT]
 print rates every metrics.interval_s seconds
 .TP
+.B netman ent list
+saved enterprise profiles (bond, bridge, vlan, route, ecmp, tether ...)
+.TP
+.B netman ent show NAME
+live state of a profile's device
+.TP
+.B netman ent save NAME KIND [KEY=VALUE...]
+create or replace a profile. KIND: bond team bridge vlan macvlan ipvlan veth dummy tether dot1x route rule ecmp link ipv6 wol. Keys are the profile keys, e.g. `ent save bond0 bond mode=802.3ad member=eth0 member=eth1 miimon=100`. Stored as NAME.ent in the netman config directory.
+.TP
+.B netman ent add NAME
+create the device / install the routes of a profile. Needs enterprise.enabled = yes. Everything goes through rtnetlink, ethtool ioctls and /proc/sys; only nft, dnsmasq and wpa_supplicant are ever exec'd, and only for tether and 802.1X.
+.TP
+.B netman ent del NAME
+tear a profile's device / routes down
+.TP
+.B netman ent apply
+apply every saved profile in dependency order. dummy/veth, bond/team, bridge, vlan/macvlan/ipvlan, link/ipv6/wol, route/rule/ecmp, tether/dot1x.
+.TP
+.B netman ent ecmp NAME
+run the multi\-uplink failover loop for an ecmp profile. Probes each uplink with an ICMP echo bound to its interface; fail_after / ok_after consecutive results flip it, the default route (metric 50) follows. Ctrl\-C stops.
+.TP
+.B netman ent tether
+detected USB (RNDIS/NCM/ECM/ipheth) and Bluetooth PAN tethering devices
+.TP
+.B netman wol IFACE MAC
+send a Wake\-on\-LAN magic packet out of IFACE. UDP broadcast to port 9. Setting the NIC itself to wake on LAN is `ent save NAME wol wol=g`.
+.TP
+.B netman licence status
+licences and their expiry (exit 1 when any expires soon or has). Files NAME.lic in enterprise.licence_dir. Warns inside enterprise.licence_warn_days.
+.TP
+.B netman licence renew NAME
+renew a licence through enterprise.renew_hook. The hook gets NAME CURRENT_PATH NEW_PATH and writes the new licence; netman checks it names the same licence and expires later, then swaps atomically and keeps NAME.lic.prev. netman itself never contacts a network.
+.TP
+.B netman key rotate NAME
+new WireGuard key for NAME; prints the new public key. Writes NAME.key mode 0600, keeps the old one as NAME.key.prev, then runs enterprise.key_apply_hook (NAME PUBKEY); if the hook fails the old key is restored. No `wg` binary needed.
+.TP
+.B netman key show NAME
+public key of NAME.key
+.TP
+.B netman wg show [IF]
+live WireGuard state: port, peers, endpoint, allowed ips, handshake age, transfer. Without IF: every profile of the vpn directory that is up. Reading the device needs root.
+.TP
+.B netman wg genkey
+new private key on stdout (nothing is written)
+.TP
+.B netman wg pubkey
+public key for the private key on stdin
+.TP
+.B netman wg genpsk
+new preshared key on stdout
+.TP
+.B netman wg peer add IF PUBKEY [allowed=IP,..] [endpoint=HOST:PORT] [keepalive=S] [psk\-file=FILE]
+add or update ONE peer on a running interface; the other peers and their sessions are not touched. Allowed ips are written as given (host bits masked). Routes are not changed: a peer inside the interface's own subnet needs none, anything else is a route you add (or put in the profile). A key that already exists has its allowed ips, endpoint and keepalive replaced.
+.TP
+.B netman wg peer del IF PUBKEY
+remove one peer from a running interface. Exit 1 when the interface has no such peer.
+.TP
+.B netman wg peer endpoint IF PUBKEY HOST:PORT
+point an existing peer at a new endpoint (roaming server, new IP) without restarting. Never creates a peer: an unknown key is an error.
+.TP
 .B netman config show
 every setting with its value and where it came from
 .TP
@@ -174,6 +240,9 @@ validate the config files and environment. Errors are FILE:LINE with a did\-you\
 .TP
 .B netman config set SECTION.KEY VALUE
 edit the user config file (atomic, comments kept)
+.TP
+.B netman daemon [\-\-bus ADDRESS]
+serve the NetworkManager D\-Bus API (drop\-in for NM clients). Claims org.freedesktop.NetworkManager on the system bus (fails if a NetworkManager owns it) and answers until SIGTERM. \-\-bus selects another bus, e.g. a private dbus\-daemon. See docs/nm\-api\-surface.md for what is implemented.
 .TP
 .B netman config toggle SECTION.KEY
 flip a yes/no setting
@@ -186,30 +255,66 @@ this list, or the help for one command or group
 .TP
 .B netman \-tui
 the terminal UI (also \-\-tui, \-t); ? inside shows help
+.SH COMMAND GROUPS
+.TP
+.B ent
+enterprise networking: bonding/teaming, bridges with STP and vlan filtering, vlans and QinQ, macvlan/ipvlan, veth, routes, rules and tables, ECMP with failover, link settings, IPv6 prefix delegation, USB/Bluetooth tethering, wired 802.1X. Profiles are NAME.ent files ("key = value", same syntax as net profiles) in the netman config directory. team is bonding: the kernel team driver is deprecated, so kind=team maps runner= (activebackup, lacp, loadbalance, broadcast, roundrobin) onto the bonding driver. Tethering share\-out uses its own nft table `inet netman_tether` (firewall.h replaces `inet netman`, so the two never clobber each other); an accept there cannot override a drop in another table, so a strict firewall must allow the downstream interface itself. Changing commands need enterprise.enabled = yes.
+.TP
+.B licence
+licence files NAME.lic with expiry, the expiry check (exit 1 when anything expires soon), and hook\-driven renewal. Switched by licence.enabled.
+.TP
+.B key
+WireGuard key rotation (NAME.key in enterprise.licence_dir). Switched by licence.enabled.
+.TP
+.B wol
+Wake\-on\-LAN magic packet. Switched by enterprise.enabled.
+.TP
+.B wg
+native WireGuard over generic netlink (src/mods/wireguard.c), no wg binary: keys and live peer edits on a running interface (add, delete, new endpoint: the other peers keep their sessions). Profiles and routes stay with the vpn commands. Switched by wireguard.enabled; with it off only OpenVPN profiles come up.
 .SH TUI
 Start it with \fBnetman \-tui\fR; \fB?\fR inside shows the same text:
 .nf
 GENERAL
-  tab / shift\-tab, h l, 1\-4   switch tab (tabs of modules disabled in config are hidden)
+  tab / shift\-tab, h l, 1\-5   switch tab (tabs of modules disabled in config are hidden)
   j k, arrows, PgUp PgDn      move;  g G  first / last
   /                           filter by name
   r                           refresh / rescan
+  i                           details popup for the selected row;  I  toggle the big "all info" view
+                              (replaces the list; j k pick another row, PgUp PgDn scroll, esc / I close)
   ?                           this help;  q  quit
 WI\-FI
   enter    connect: known networks join at once; others ask for the passphrase
            (masked; tab shows/hides it); open networks ask for confirmation;
            802.1X asks identity then password; a wrong password says so and offers a retry
-  i        details: BSSIDs, security, channel/band, signal, rates, IP/gateway/DNS/lease, link speed, rx/tx
+  i        details: BSSIDs, security (pairwise / group / AKM), WPS, channel/width, signal, noise, rx/tx bitrate,
+           first/last seen, roam history, IP/gateway/DNS/lease, link speed, rx/tx;  I  the same plus the raw backend text
   s        cycle sort: signal / name / secured first / open first;  o  all / only open / only secured
   d x a    disconnect / forget / toggle autoconnect;  w  WPS;  H  hotspot
   Signal is dBm and percent (green good, yellow ok, red weak); a lock marks security,
   OPEN networks get a warning colour. Without Unicode: [*] and open.
 BLUETOOTH
-  enter conn/disc   p pair   t trust   x remove   s scan   o power   i details
+  enter conn/disc   p pair   t trust   x remove   s scan   o power   i details   I all info (adds the adapter:
+  powered, discoverable, pairable, paired/connected counts)
 ETHERNET / IP
-  addresses, gateway, DNS, lease, link speed and live rx/tx per interface;  i  details
+  addresses, gateway, DNS, lease, link speed and live rx/tx per interface;  i  details: driver, MAC, MTU,
+  speed/duplex, link detected, IPv4/IPv6, DHCP server and lease times, rx/tx rates and errors;  I  adds sysfs
 VPN
-  enter up / down the selected profile;  r  refresh
+  Profiles are <dir>/NAME.conf (WireGuard) or NAME.ovpn; dir = /etc/netman/vpn or env NETMAN_VPN_CONF_DIR.
+  An empty list names the directory; add a profile with  netman vpn import FILE [NAME].
+  enter    up / down the selected profile (also turns the kill switch on when vpn.killswitch = yes)
+  K        toggle the nftables kill switch;  i  details: endpoint, allowed ips, handshake age, transfer, split tunnel
+  States: up, down, connecting, failed; locked = unreadable (run as root), untrusted = file must be root/self
+  owned and not group/world writable. Creating tunnels needs root: with VPN profiles present the TUI asks sudo.
+  r        refresh
+ENTERPRISE (only with enterprise.enabled = yes)
+  read\-only status: bonds, bridges, vlans, uplinks (ECMP), tethering (when tether.enabled) and licences
+  (when licence.enabled), from the saved .ent profiles and the live kernel state;  i  details of the selected
+  row;  I  the same plus the raw profile text. Changes are made with  netman ent ... / licence ... / key ...
+HEADER (row 2, every tab)
+  wifi / bt status, hostname, default route (iface via gateway), ip (pub = a public address), dns,
+  and the network score 0\-100 with its reasons (rtt, loss, dBm). The score is measured in the background
+  (3 pings to the gateway); "ping n/a" = the kernel does not allow unprivileged ICMP. A field the system
+  does not report is shown as \-. On a narrow terminal the lowest\-priority fields are dropped.
 .fi
 .SH CONFIGURATION
 Settings come from defaults, \fI/etc/netman/netman.conf\fR, \fI~/.config/netman/netman.conf\fR and the environment variables \fBNETMAN_\fISECTION\fB_\fIKEY\fR, later ones win. \fBnetman config show\fR lists every value and where it came from; \fBnetman config check\fR validates; \fBnetman config set\fR and \fBtoggle\fR edit the user file.
@@ -294,6 +399,39 @@ Where `metrics record` appends one TSV file per interface (rotated at 1 MiB). De
 .TP
 .B metrics.interval_s
 Seconds between samples for `metrics watch` and `metrics record \-\-loop`. Default: 5.
+.TP
+.B enterprise.enabled
+Enterprise networking: bonding, bridges, vlans, routes and rules, ECMP, tethering. Off by default: it changes links and routes. Default: no.
+.TP
+.B enterprise.probe_ms
+ECMP: per\-uplink ICMP probe timeout and the tick between probes (ms). Default: 1000.
+.TP
+.B enterprise.licence_dir
+Where licence (.lic) and VPN key (.key) files live. Default: /etc/netman/licences.
+.TP
+.B enterprise.licence_warn_days
+`licence status` flags a licence expiring within this many days. Default: 30.
+.TP
+.B enterprise.renew_hook
+Command (split on spaces, no shell) run by `licence renew NAME`: gets NAME CURRENT_PATH NEW_PATH and must write the renewed licence to NEW_PATH. netman never contacts a network for renewal itself. Default: .
+.TP
+.B enterprise.key_apply_hook
+Command run after `key rotate NAME`: gets NAME NEW_PUBKEY; failing restores the old key. Default: .
+.TP
+.B licence.enabled
+Licence files, expiry check, renewal hook and WireGuard key rotation: the licence and key commands, the licence line in the Enterprise tab. Default: yes.
+.TP
+.B tether.enabled
+USB / Bluetooth tethering detection and share\-out: `ent tether`, tether profile adds, the tether rows in the Enterprise tab. Off by default: sharing changes firewall and forwarding. Default: no.
+.TP
+.B wireguard.enabled
+Native WireGuard (generic netlink): the wg commands and WireGuard profiles of the vpn commands. no = only OpenVPN profiles work. Default: yes.
+.TP
+.B nmapi.enabled
+NetworkManager D\-Bus API (org.freedesktop.NetworkManager) served by `netman daemon`, so nm\-applet / libnm / nmcli style clients work against netman. Default: yes.
+.TP
+.B nmapi.refresh_s
+Seconds between the daemon's looks at the links and the Wi\-Fi state (it emits the D\-Bus signals for whatever changed). Default: 5.
 .TP
 .B tui.theme
 TUI colours. Default: default.

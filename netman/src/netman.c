@@ -1,6 +1,6 @@
 /* netman - network + Bluetooth manager, a NetworkManager/bluez drop-in in plain C.
  *
- * Build (see ./run):  cc -std=gnu11 -O2 -Isrc -Isrc/mods src/netman.c src/config.c -o bin/netman
+ * Build (see ./run):  cc -std=gnu11 -O2 -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c src/mods/wireguard.c -o bin/netman
  * One translation unit: the stb-style modules in src/mods/, the command table (cli.h), help (help.c) and the TUI (tui.h) are included here.
  * `netman help` lists every command; the table in cli.h is the single source for dispatch, root decision, help and the man page.
  */
@@ -28,9 +28,13 @@
 #include "mods/wifi.h"
 #include "mods/btth.h"
 #include "mods/firewall.h"
+#include "mods/enterprise.h"
+#include "mods/licence.h"
 #include "config.h"
 #include "priv.h"
 #include "cli.h"
+#include "mods/nmapi.c"
+#include "daemon.c"
 #include "help.c"
 #include "tui.h"
 
@@ -67,7 +71,9 @@ int main(int argc, char **argv)
 			wpa = netman_wifi_backend_is_wpa();
 			ok = access(wd && *wd ? wd : "/run/wpa_supplicant", R_OK | X_OK) == 0;
 		}
-		if (nm_priv_needed(c->root, netman_config_str(&nc_cfg, NC_PRIV_SUDO), wpa, ok, (unsigned)geteuid()) && nm_priv_escalate(argc, argv) < 0) return 1;
+		int root = c->root;
+		if (tui && nc_enabled("vpn") && nc_vpn_has_profiles()) root = NM_ROOT_YES;   /* vpn up/down/kill switch are netlink + nft: the TUI needs root as soon as there is a profile to bring up */
+		if (nm_priv_needed(root, netman_config_str(&nc_cfg, NC_PRIV_SUDO), wpa, ok, (unsigned)geteuid()) && nm_priv_escalate(argc, argv) < 0) return 1;
 	}
 	if (tui) return nc_tui();
 	{

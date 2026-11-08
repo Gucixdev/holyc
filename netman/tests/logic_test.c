@@ -1,6 +1,6 @@
 /* netman TUI logic tests - parsers, display width, renderer, sort/filter, modals, key handling. No terminal, no network; nothing real is touched.
  *
- *   cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c && /tmp/nm_logic
+ *   cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c src/mods/wireguard.c && /tmp/nm_logic
  */
 #define NETMAN_NO_MAIN
 #include "../src/netman.c"
@@ -96,6 +96,8 @@ int main(void)
 		nm_vpn v[4];
 		n = nm_parse_vpn("office           wireguard  up\nhome             openvpn    down\nnetman vpn: junk\n", v, 4);
 		CHECK(n == 2 && v[0].up && !strcmp(v[1].kind, "openvpn") && !v[1].up, "vpn: %d", n);
+		n = nm_parse_vpn("a wireguard up ep=1.2.3.4:51820 hs=7 rx=100 tx=200\nb openvpn connecting\nc wireguard locked\nd wireguard untrusted\ne openvpn failed\nkillswitch on\n", v, 4);
+		CHECK(n == 4 && v[0].up && !strcmp(v[0].ep, "1.2.3.4:51820") && v[0].hs == 7 && v[0].rx == 100 && v[0].tx == 200 && v[1].active && !v[1].up && !strcmp(v[2].state, "locked") && !v[2].active && !strcmp(v[3].state, "untrusted") && v[1].hs == -1, "vpn extras/states: %d", n);
 	}
 
 	/* ---- item 1: hidden rows, never an empty row ---- */

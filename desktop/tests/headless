@@ -191,6 +191,9 @@ unset DESKTOP_PANEL_KEYS DESKTOP_PANEL_DUMP
 check "dump-api" '"$D/build-new/desktop" --dump-api | grep -q "^\[settings\]"'
 
 kill $SUB $FA $FB $FC 2>/dev/null
+echo "== layouts, two outputs (tests/layouts)"
+"$D/tests/layouts" 2>&1 | grep -E "^(ok|FAIL|passed)" | sed "s/^/   /"
+
 echo; echo "passed $pass, failed $fail"
 echo "--- compositor stderr:"; head -20 "$T/stderr"
 [ $fail = 0 ]

@@ -7,6 +7,8 @@
  * Keys: Tab / Down next field, Shift-Tab / Up previous, PgUp PgDn Home End, Space or Enter toggle (bool) / cycle (choice) /
  * edit (number, text, colour), Left Right step a number or cycle a choice, Esc closes (cancels an edit first). Mouse: wheel
  * scrolls, click selects, click on a value acts on it.
+ * `desktop settings volume` is the small volume panel (speaker + microphone bars), `... volume --osd` the same as a keyboardless
+ * on-screen display that closes itself after the volume_osd_ms setting; both talk to the compositor's `volume` command (audio.c).
  * Test hooks (no real keyboard needed): DESKTOP_PANEL_KEYS="Tab space Down ..." feeds key names after the first draw,
  * DESKTOP_PANEL_DUMP=1 prints the state to stdout after that. */
 #include <ctype.h>
@@ -14,6 +16,10 @@
 #include <fcntl.h>
 #include <locale.h>
 #include <math.h>
+#include <poll.h>
+#include <stdarg.h>
+#include <time.h>
+#include <sys/file.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -251,6 +257,9 @@ scroll_to_sel(void)
 
 static void
 draw(void);
+static void blit(void);
+static void vol_paint(void);
+static int volmode, osdmode;
 
 /* one key, from the real keyboard or from the test hook */
 static void
@@ -293,6 +302,7 @@ draw(void)
 	int x0 = border + pad, w0 = pw - 2 * x0, v = visible_rows(), rowh = fh + 2 * rowpady, y, labw = w0 * 55 / 100, i;
 	char buf[300];
 	if (!configured) return;
+	if (volmode) { vol_paint(); blit(); return; }
 	drw_setscheme(drw, scheme[SNorm]);
 	drw_rect(drw, 0, 0, (unsigned)pw, (unsigned)ph, 1, 1);
 	drw_setscheme(drw, scheme[SAcc]);
@@ -338,6 +348,12 @@ draw(void)
 	drw_text(drw, x0, ph - x0 - rowh, (unsigned)w0, (unsigned)rowh, (unsigned)rowpadx,
 		status[0] ? status : editing ? "Enter accept   Esc cancel   Ctrl-U clear" : "Tab next  S-Tab prev  Space/Enter change  Left/Right step  Esc close", 0);
 
+	blit();
+}
+
+static void
+blit(void)
+{
 	if (!shm_pixels || shm_size != (size_t)pw * ph * 4) {
 		struct wl_shm_pool *pool;
 		if (wl_buf) { wl_buffer_destroy(wl_buf); munmap(shm_pixels, shm_size); close(shm_fd); }
@@ -361,6 +377,127 @@ draw(void)
 	wl_surface_commit(surface);
 }
 
+
+/* ---- the volume panel: two bars (speaker, microphone) over the compositor's `volume` command */
+static struct { int pct, muted; } vol[2];
+static long vseq = -1, vstep_seen;
+static int vosd_ms = 1500, vstep = 5, vmax = 100, vsel, vdrag = -1;
+static long long vdeadline;
+
+static long long
+now_ms(void)
+{
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+/* ask the compositor; 1 when something differs from what we drew */
+static int
+vol_poll(void)
+{
+	char *r = ctl("volume get");
+	int a, am, b, bm, osd, st, mx, ch;
+	long sq;
+	if (!r) { snprintf(status, sizeof status, "compositor not reachable"); status_err = 1; return 0; }
+	if (sscanf(r, "spk %d %d mic %d %d seq %ld osd %d step %d max %d", &a, &am, &b, &bm, &sq, &osd, &st, &mx) != 8) {
+		snprintf(status, sizeof status, "%.150s", r + (!strncmp(r, "error: ", 7) ? 7 : 0));
+		status[strcspn(status, "\n")] = 0;
+		status_err = 1; free(r); return 0;
+	}
+	free(r);
+	status_err = 0; status[0] = 0;
+	ch = a != vol[0].pct || am != vol[0].muted || b != vol[1].pct || bm != vol[1].muted || sq != vseq;
+	vol[0].pct = a; vol[0].muted = am; vol[1].pct = b; vol[1].muted = bm; vseq = sq;
+	vosd_ms = osd; vstep = st; vmax = mx > 0 ? mx : 100;
+	if (ch && osdmode) vdeadline = now_ms() + vosd_ms;
+	return ch;
+}
+
+static void
+vol_send(const char *fmt, ...)
+{
+	char line[96];
+	va_list ap;
+	char *r;
+	va_start(ap, fmt); vsnprintf(line, sizeof line, fmt, ap); va_end(ap);
+	if ((r = ctl(line))) free(r);
+	vol_poll();
+	if (osdmode) vdeadline = now_ms() + vosd_ms;
+}
+
+/* geometry shared by drawing and the mouse: row i of the two */
+static int vol_rowh(void) { return fh + 2 * rowpady; }
+static int vol_rowy(int i) { return border + pad + vol_rowh() + 8 + i * (vol_rowh() + 6); }
+static int vol_barx(void) { return border + pad + 90; }
+static int vol_barw(void) { return pw - border - pad - 80 - vol_barx(); }
+static int vol_row_at(int y) { for (int i = 0; i < 2; i++) if (y >= vol_rowy(i) && y < vol_rowy(i) + vol_rowh()) return i; return -1; }
+
+static void
+vol_set_at(int row, int x)
+{
+	int bx = vol_barx(), bw = vol_barw(), pct;
+	if (bw < 2) return;
+	pct = (int)lround((double)(x - bx) * vmax / (bw - 1));
+	if (pct < 0) pct = 0;
+	if (pct > vmax) pct = vmax;
+	vol_send("volume set %s %d", row ? "mic" : "spk", pct);
+}
+
+static void
+vol_paint(void)
+{
+	int x0 = border + pad, w0 = pw - 2 * x0, rowh = vol_rowh(), y, i;
+	char buf[64];
+	drw_setscheme(drw, scheme[SNorm]);
+	drw_rect(drw, 0, 0, (unsigned)pw, (unsigned)ph, 1, 1);
+	drw_setscheme(drw, scheme[SAcc]);
+	for (y = 0; y < border; y++) drw_rect(drw, y, y, (unsigned)(pw - 2 * y), (unsigned)(ph - 2 * y), 0, 0);
+	drw_text(drw, x0, x0, (unsigned)w0, (unsigned)rowh, (unsigned)rowpadx, "Volume", 0);
+	for (i = 0; i < 2; i++) {
+		int issel = !osdmode && i == vsel, ry = vol_rowy(i), bx = vol_barx(), bw = vol_barw(), fill;
+		drw_setscheme(drw, scheme[issel ? SSel : SNorm]);
+		drw_text(drw, x0, ry, 90, (unsigned)rowh, (unsigned)rowpadx, i ? "mic" : "speaker", 0);
+		drw_setscheme(drw, scheme[SDim]);
+		drw_rect(drw, bx, ry + 4, (unsigned)bw, (unsigned)(rowh - 8), 0, 0);
+		fill = (int)((long long)(bw - 4) * vol[i].pct / vmax);
+		if (fill > bw - 4) fill = bw - 4;
+		drw_setscheme(drw, scheme[vol[i].muted ? SDim : vol[i].pct > 100 ? SErr : SAcc]);
+		if (fill > 0) drw_rect(drw, bx + 2, ry + 6, (unsigned)fill, (unsigned)(rowh - 12), 1, 0);
+		if (vol[i].muted) snprintf(buf, sizeof buf, "MUTE"); else snprintf(buf, sizeof buf, "%d%%", vol[i].pct);
+		drw_setscheme(drw, scheme[vol[i].muted ? SErr : SNorm]);
+		drw_text(drw, bx + bw + 4, ry, 76, (unsigned)rowh, 6, buf, 0);
+	}
+	drw_setscheme(drw, scheme[status_err ? SErr : SDim]);
+	drw_text(drw, x0, ph - x0 - rowh, (unsigned)w0, (unsigned)rowh, (unsigned)rowpadx,
+		status[0] ? status : osdmode ? "click, drag or wheel to adjust" : "Tab row  </> level  m mute  Esc", 0);
+}
+
+static void
+vol_handle(xkb_keysym_t sym)
+{
+	const char *pre = vsel ? "mic" : "";
+	switch (sym) {
+	case XKB_KEY_Escape: case XKB_KEY_q: running = 0; return;
+	case XKB_KEY_Tab: case XKB_KEY_ISO_Left_Tab: case XKB_KEY_Up: case XKB_KEY_Down: case XKB_KEY_j: case XKB_KEY_k: vsel = !vsel; break;
+	case XKB_KEY_Left: case XKB_KEY_h: case XKB_KEY_minus: case XKB_KEY_underscore: vol_send("volume %sdown", pre); break;
+	case XKB_KEY_Right: case XKB_KEY_l: case XKB_KEY_plus: case XKB_KEY_equal: vol_send("volume %sup", pre); break;
+	case XKB_KEY_Prior: vol_send("volume %sup 25", pre); break;
+	case XKB_KEY_Next: vol_send("volume %sdown 25", pre); break;
+	case XKB_KEY_Home: vol_send("volume set %s 0", vsel ? "mic" : "spk"); break;
+	case XKB_KEY_End: vol_send("volume set %s %d", vsel ? "mic" : "spk", vmax); break;
+	case XKB_KEY_m: case XKB_KEY_space: case XKB_KEY_Return: case XKB_KEY_KP_Enter: vol_send("volume %smute", vsel ? "mic" : ""); break;
+	default: break;
+	}
+}
+
+static void
+vol_wheel(int dir, int row)
+{
+	if (row < 0) row = vsel;
+	vol_send("volume %s%s", row ? "mic" : "", dir > 0 ? "down" : "up");
+}
+
 static void scroll_by(int dir);
 
 /* ---- test hook */
@@ -374,15 +511,24 @@ feed_test_keys(void)
 	for (tok = strtok_r(copy, " ", &save); tok; tok = strtok_r(NULL, " ", &save)) {
 		char u[8] = "";
 		xkb_keysym_t s;
+		if (volmode && !strncmp(tok, "click:", 6)) { /* click:spk:70 = a click at 70% of the speaker bar */
+			int row = tok[6] == 'm', pct = atoi(tok + 10);
+			vol_set_at(row, vol_barx() + (vol_barw() - 1) * pct / vmax); continue;
+		}
+		if (volmode && !strncmp(tok, "mute:", 5)) { vol_send("volume %smute", tok[5] == 'm' ? "mic" : ""); continue; }
 		if (!strcmp(tok, "wheeldown") || !strcmp(tok, "wheelup")) { scroll_by(tok[5] == 'd' ? 1 : -1); continue; } /* the mouse wheel path */
 		if (!strncmp(tok, "ctrl+", 5)) { s = xkb_keysym_from_name(tok + 5, XKB_KEYSYM_NO_FLAGS); handle(s, "", 1); continue; }
 		s = xkb_keysym_from_name(tok, XKB_KEYSYM_NO_FLAGS);
+		if (volmode && s != XKB_KEY_NoSymbol) { vol_handle(s); continue; }
 		if (s == XKB_KEY_NoSymbol) { fprintf(stderr, "settings: unknown test key '%s'\n", tok); continue; }
 		xkb_keysym_to_utf8(s, u, sizeof u);
 		handle(s, u, 0);
 	}
 	free(copy);
-	if (getenv("DESKTOP_PANEL_DUMP")) {
+	if (getenv("DESKTOP_PANEL_DUMP") && volmode) {
+		printf("spk=%d spkmuted=%d mic=%d micmuted=%d sel=%s\n", vol[0].pct, vol[0].muted, vol[1].pct, vol[1].muted, vsel ? "mic" : "spk");
+		fflush(stdout);
+	} else if (getenv("DESKTOP_PANEL_DUMP")) {
 		printf("selected=%s editing=%d top=%d status=%s\n", F[sel].key, editing, top, status);
 		for (int i = 0; i < nf; i++) printf("%s=%s\n", F[i].key, F[i].cur);
 		fflush(stdout);
@@ -400,6 +546,7 @@ layer_configure(void *data, struct zwlr_layer_surface_v1 *ls, uint32_t serial, u
 	configured = 1;
 	drw_resize(drw, (unsigned)pw, (unsigned)ph);
 	scroll_to_sel();
+	if (first && volmode) vol_poll();
 	if (first) feed_test_keys();
 	draw();
 }
@@ -432,7 +579,7 @@ kb_key(void *data, struct wl_keyboard *kb, uint32_t serial, uint32_t time, uint3
 	sym = xkb_state_key_get_one_sym(xkb_state, key + 8);
 	ctrl = xkb_state_mod_name_is_active(xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0;
 	if (xkb_state_key_get_utf8(xkb_state, key + 8, buf, sizeof buf) < 0) buf[0] = 0;
-	handle(sym, buf, ctrl);
+	if (volmode) vol_handle(sym); else handle(sym, buf, ctrl);
 	draw();
 }
 static void kb_mods(void *d, struct wl_keyboard *kb, uint32_t serial, uint32_t dep, uint32_t lat, uint32_t lock, uint32_t grp)
@@ -453,11 +600,27 @@ row_at(int y)
 }
 static void ptr_enter(void *d, struct wl_pointer *p, uint32_t s, struct wl_surface *sf, wl_fixed_t x, wl_fixed_t y) { px = wl_fixed_to_int(x); py = wl_fixed_to_int(y); }
 static void ptr_leave(void *d, struct wl_pointer *p, uint32_t s, struct wl_surface *sf) {}
-static void ptr_motion(void *d, struct wl_pointer *p, uint32_t t, wl_fixed_t x, wl_fixed_t y) { px = wl_fixed_to_int(x); py = wl_fixed_to_int(y); }
+static void
+ptr_motion(void *d, struct wl_pointer *p, uint32_t t, wl_fixed_t x, wl_fixed_t y)
+{
+	px = wl_fixed_to_int(x); py = wl_fixed_to_int(y);
+	if (volmode && osdmode) vdeadline = now_ms() + vosd_ms; /* the pointer on the OSD keeps it up */
+	if (volmode && vdrag >= 0) { vol_set_at(vdrag, px); draw(); }
+}
 static void
 ptr_button(void *d, struct wl_pointer *p, uint32_t serial, uint32_t t, uint32_t button, uint32_t state)
 {
-	int r = row_at(py), x0 = border + pad, labw = (pw - 2 * x0) * 55 / 100;
+	int r = volmode ? -1 : row_at(py), x0 = border + pad, labw = (pw - 2 * x0) * 55 / 100;
+	if (volmode) {
+		int row = vol_row_at(py);
+		if (state == WL_POINTER_BUTTON_STATE_RELEASED) { vdrag = -1; return; }
+		if (state != WL_POINTER_BUTTON_STATE_PRESSED || row < 0) return;
+		vsel = row;
+		if (px >= vol_barx() + vol_barw()) vol_send("volume %smute", row ? "mic" : "");   /* the MUTE / percent text */
+		else if (px >= vol_barx()) { vdrag = row; vol_set_at(row, px); }
+		draw();
+		return;
+	}
 	if (state != WL_POINTER_BUTTON_STATE_PRESSED || r < 0) return;
 	if (editing) editing = 0;
 	sel = r;
@@ -472,6 +635,7 @@ static void
 scroll_by(int dir)
 {
 	int v = visible_rows();
+	if (volmode) { vol_wheel(dir, vol_row_at(py)); return; }
 	top += dir * 3;
 	if (top > nf - v) top = nf - v;
 	if (top < 0) top = 0;
@@ -516,15 +680,29 @@ settings_main(int argc, char *argv[])
 	struct wl_registry *registry;
 	int i;
 	for (i = 1; i < argc; i++)
-		if (!strcmp(argv[i], "-l")) { /* no window: print the schema the compositor gave us, for scripts */
+		if (!strcmp(argv[i], "volume")) volmode = 1;
+		else if (volmode && !strcmp(argv[i], "--osd")) osdmode = 1;
+		else if (!strcmp(argv[i], "-l")) { /* no window: print the schema the compositor gave us, for scripts */
 			char *r = ctl("schema");
 			if (!r) die("settings: compositor not running (no control socket)");
 			fputs(r, stdout);
 			free(r);
 			return 0;
 		} else
-			die("usage: desktop settings [-l]");
-	if (load_schema()) die("settings: cannot read the schema - is the desktop (dwl) running? ($XDG_RUNTIME_DIR/dwl.sock)");
+			die("usage: desktop settings [-l] | desktop settings volume [--osd]");
+	if (volmode) { /* one volume panel at a time: the OSD that a key press starts must not pile up */
+		const char *rt = getenv("XDG_RUNTIME_DIR");
+		char lock[512];
+		int lfd;
+		snprintf(lock, sizeof lock, "%s/desktop-volume.lock", rt ? rt : "/tmp");
+		lfd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+		if (lfd >= 0 && flock(lfd, LOCK_EX | LOCK_NB)) {
+			/* an OSD already up: it just follows the volume, so it quits; a panel the user asked for waits for it to time out */
+			for (i = 0; !osdmode && i < 40 && flock(lfd, LOCK_EX | LOCK_NB); i++) usleep(100000);
+			if (osdmode || i >= 40) return 0;
+		}
+		if (!ctl("volume get")) die("volume: compositor not running (no control socket)");
+	} else if (load_schema()) die("settings: cannot read the schema - is the desktop (dwl) running? ($XDG_RUNTIME_DIR/dwl.sock)");
 	if (!setlocale(LC_CTYPE, "")) fputs("warning: no locale support\n", stderr);
 	if (!(display = wl_display_connect(NULL))) die("settings: cannot connect to Wayland display");
 	xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
@@ -540,14 +718,35 @@ settings_main(int argc, char *argv[])
 	lrpad = fh;
 	for (i = 0; i < SLast; i++) scheme[i] = drw_scm_create(drw, colors[i], 2);
 
+	if (volmode) { pw = 460; ph = 2 * (border + pad) + 4 * (fh + 2 * rowpady) + 20; }
 	surface = wl_compositor_create_surface(compositor);
-	layer_surface = zwlr_layer_shell_v1_get_layer_surface(layer_shell, surface, NULL, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "settings");
+	layer_surface = zwlr_layer_shell_v1_get_layer_surface(layer_shell, surface, NULL, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, volmode ? "volume" : "settings");
 	zwlr_layer_surface_v1_add_listener(layer_surface, &layer_listener, NULL);
 	zwlr_layer_surface_v1_set_size(layer_surface, (uint32_t)pw, (uint32_t)ph);
 	zwlr_layer_surface_v1_set_anchor(layer_surface, 0);
 	zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, -1);
-	zwlr_layer_surface_v1_set_keyboard_interactivity(layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
+	zwlr_layer_surface_v1_set_keyboard_interactivity(layer_surface, osdmode ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
+	if (osdmode) { /* bottom centre, out of the way, never takes the keyboard from a dmenu */
+		zwlr_layer_surface_v1_set_anchor(layer_surface, ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
+		zwlr_layer_surface_v1_set_margin(layer_surface, 0, 0, 80, 0);
+	}
 	wl_surface_commit(surface);
+	if (volmode) { /* poll the socket as well: other keys / scripts change the volume while we are up */
+		vdeadline = now_ms() + vosd_ms;
+		while (running) {
+			struct pollfd pfd = { wl_display_get_fd(display), POLLIN, 0 };
+			while (wl_display_prepare_read(display) != 0)
+				if (wl_display_dispatch_pending(display) < 0) return 0;
+			if (wl_display_flush(display) < 0 && errno != EAGAIN) { wl_display_cancel_read(display); break; }
+			if (poll(&pfd, 1, 100) > 0 && (pfd.revents & POLLIN)) {
+				if (wl_display_read_events(display) < 0 || wl_display_dispatch_pending(display) < 0) break;
+			} else
+				wl_display_cancel_read(display);
+			if (configured && vol_poll()) draw();
+			if (osdmode && now_ms() > vdeadline) running = 0;
+		}
+		return 0;
+	}
 	while (running && wl_display_dispatch(display) >= 0)
 		;
 	(void)lrpad; (void)ncfg;

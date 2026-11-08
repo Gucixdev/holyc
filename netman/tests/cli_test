@@ -4,7 +4,7 @@
 set -u
 cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods src/netman.c src/config.c -o "$work/netman" || exit 1
+cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c src/mods/wireguard.c -o "$work/netman" || exit 1
 N="$work/netman"; pass=0 fail=0
 ok() { pass=$((pass + 1)); }
 no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; }
@@ -38,7 +38,15 @@ chk 3 "disabled wifi connect" "$N" wifi connect X
 chk 0 "toggle wifi back" "$N" config toggle wifi.enabled
 chk 0 "toggle vpn off" "$N" config toggle vpn.enabled; chk 3 "disabled vpn" "$N" vpn list; contains "vpn disabled in config" "vpn message"
 chk 0 "fw plan still works when firewall is off" "$N" config set firewall.enabled no; chk 3 "fw apply gated" "$N" fw apply x; contains "firewall disabled" "fw message"
-# broken config: only help/config keep working
+# wireguard: keys are pure, peer commands validate before any netlink call, the module toggle gates
+chk 0 "wg genkey" "$N" wg genkey; [ "${#LAST}" = 44 ] && ok || no "genkey length"; key=$LAST
+chk 0 "wg pubkey" bash -c "echo $key | $N wg pubkey"; [ "${#LAST}" = 44 ] && [ "$LAST" != "$key" ] && ok || no "pubkey"
+chk 0 "wg genpsk" "$N" wg genpsk; [ "${#LAST}" = 44 ] && ok || no "genpsk length"
+chk 2 "wg peer add bad key" "$N" wg peer add wg0 notakey; contains "not a WireGuard key" "bad key message"
+chk 2 "wg peer endpoint bad endpoint" "$N" wg peer endpoint wg0 "$key" nonsense; contains "cannot resolve endpoint" "bad endpoint message"
+chk 2 "wg peer add bad option" "$N" wg peer add wg0 "$key" foo=1; contains "unknown option" "bad option message"
+chk 0 "toggle wireguard off" "$N" config toggle wireguard.enabled; chk 3 "disabled wireguard" "$N" wg show; contains "wireguard disabled in config" "wireguard message"
+chk 0 "toggle wireguard back" "$N" config toggle wireguard.enabled
 printf 'this is not = [valid\n' >"$work/c.conf"
 chk 1 "broken config stops commands" "$N" status; chk 0 "help works with a broken config" "$N" help; chk 1 "config check reports it" "$N" config check
 echo "cli: $pass ok, $fail failed"

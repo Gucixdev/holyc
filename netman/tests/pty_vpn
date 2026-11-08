@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# pty_vpn - drive the VPN tab of the real TUI against a REAL WireGuard interface, inside `unshare -Urn` (a user+net namespace, so
+# nothing outside is touched; userns-root may create wireguard links). Profiles come from a temp dir via NETMAN_VPN_CONF_DIR.
+# Skips (exit 0) when unshare / tmux / `ip link add type wireguard` are unavailable.
+set -u
+self=$(readlink -f "$0"); cd "$(dirname "$self")" || exit 1
+if [ -z "${NM_PTY_VPN_INNER:-}" ]; then
+	command -v tmux >/dev/null && command -v unshare >/dev/null || { echo "pty_vpn: skipped (tmux/unshare missing)"; exit 0; }
+	unshare -Urn true 2>/dev/null || { echo "pty_vpn: skipped (no user namespaces)"; exit 0; }
+	NM_PTY_VPN_INNER=1 exec unshare -Urn "$self"
+fi
+ip link set lo up
+ip link add nmprobe type wireguard 2>/dev/null || { echo "pty_vpn: skipped (no wireguard in this kernel)"; exit 0; }
+ip link del nmprobe
+work=$(mktemp -d); trap 'tmux -L nmvpn kill-server 2>/dev/null; rm -rf "$work"' EXIT
+cc -std=gnu11 -Wall -Wextra -O2 -I../src -I../src/mods -o "$work/nm" ../src/netman.c ../src/config.c ../src/mods/enterprise.c ../src/mods/tether.c ../src/mods/licence.c ../src/mods/wireguard.c || exit 1
+mkdir -p "$work/conf" "$work/run"
+chmod 755 "$work"
+key() { head -c32 /dev/urandom | base64; }
+mkwg() { printf '[Interface]\nPrivateKey = %s\nAddress = 10.9.0.2/32\n\n[Peer]\nPublicKey = %s\nEndpoint = 127.0.0.1:51820\nAllowedIPs = 10.9.0.0/24\nPersistentKeepalive = 25\n' "$(key)" "$(key)" >"$1"; chmod 600 "$1"; }
+mkwg "$work/conf/wgtest.conf"
+printf '[privileges]\nsudo = never\n[wifi]\nenabled = no\n[bluetooth]\nenabled = no\n' >"$work/c.conf"
+T="tmux -L nmvpn"
+pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/      | /'; }
+snap() { $T capture-pane -p -t t; }
+has() { local s i; for i in $(seq 1 16); do s=$(snap); grep -qF -- "$1" <<<"$s" && { ok; return; }; sleep 0.25; done; no "$2 (wanted '$1')" "$s"; }
+hasnt() { local s i; for i in $(seq 1 16); do s=$(snap); grep -qF -- "$1" <<<"$s" || { ok; return; }; sleep 0.25; done; no "$2 (did not want '$1')" "$s"; }
+iface_is() { # name present|absent
+	local i; for i in $(seq 1 16); do
+		if ip link show "$1" >/dev/null 2>&1; then [ "$2" = present ] && { ok; return; }; else [ "$2" = absent ] && { ok; return; }; fi
+		sleep 0.25
+	done; no "interface $1 should be $2" "$(ip -br link)"
+}
+keys() { $T send-keys -t t "$@"; sleep 0.6; }
+start() { # cols rows
+	$T kill-server 2>/dev/null
+	$T -u new-session -d -s t -x "$1" -y "$2" "NETMAN_VPN_CONF_DIR=$work/conf NETMAN_VPN_RUN_DIR=$work/run NETMAN_CONFIG=$work/c.conf LANG=C.UTF-8 TERM=xterm-256color $work/nm -tui; echo EXIT:\$?; sleep 30"
+	sleep 2
+}
+
+# --- a profile exists: listed, up, down ---
+start 100 26
+has "1 Ethernet" "tabs renumbered: wifi and bt are off"; has "2 VPN" "vpn tab"
+keys 2
+has "wgtest" "profile listed"; has "wireguard" "type shown"; has "down" "state down"; has "kill switch" "kill switch state visible"
+keys Enter
+iface_is wgtest present
+has "up" "state up after enter"; has "127.0.0.1:51820" "endpoint shown"
+keys Enter
+iface_is wgtest absent
+has "down" "state down after the second enter"
+keys i
+has "allowed ips" "info popup: allowed ips"; has "10.9.0.0/24" "info popup: the route"; has "endpoint" "info popup: endpoint"
+keys Escape
+keys I
+has "all info" "I opens the all-info view"; has "keepalive" "keepalive shown in all-info"
+keys I
+hasnt "all info" "I closes it"
+keys K
+has "kill switch" "K gives feedback"
+keys K
+# --- the header line is on this tab too ---
+has "default" "header: default route"; has "dns" "header: dns"
+# --- failure is visible: a profile that cannot come up ---
+printf '[Interface]\nPrivateKey = notbase64!!\nAddress = 10.9.0.3/32\n\n[Peer]\nPublicKey = x\nEndpoint = 127.0.0.1:1\nAllowedIPs = 0.0.0.0/0\n' >"$work/conf/bad.conf"; chmod 600 "$work/conf/bad.conf"
+keys r
+has "bad" "second profile appears after r"
+keys g; keys Enter
+sleep 1
+s=$(snap); if grep -qiE 'fail|invalid|error|key' <<<"$s"; then ok; else no "a failing up must show an error" "$s"; fi
+iface_is bad absent
+# --- 80x24 and 40x12: no crash, nothing wider than the window ---
+for size in "80 24" "40 12"; do
+	set -- $size
+	start "$1" "$2"; keys 2; keys I
+	s=$(snap); w=$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' <<<"$s")
+	[ "$w" -le "$1" ] && ok || no "no row wider than $1 at $1x$2" "$s"
+	has "q quit" "keybar survives at $1x$2" || true
+	$T list-sessions >/dev/null 2>&1 && ok || no "still alive at $1x$2"
+	keys I; keys q
+done
+# --- an empty dir tells the user where to put profiles ---
+rm -f "$work/conf/"*
+start 100 26; keys 2
+has "no VPN profiles in $work/conf" "empty list names the directory"; has "netman vpn import" "empty list names the import command"
+# --- a world-writable profile is flagged, not silently dropped ---
+mkwg "$work/conf/loose.conf"; chmod 666 "$work/conf/loose.conf"
+keys r
+has "untrusted" "untrusted profile flagged"
+keys Enter
+has "chmod 600" "enter on it explains how to fix it"
+echo "pty_vpn: $pass ok, $fail failed"
+[ "$fail" -eq 0 ]

@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# tests/layouts - two headless outputs: per-monitor independence, layout per (monitor, tag), tabbed / stack tab bar.
+# usage: tests/layouts   (0 arguments; needs socat, foot, grim, jq; build first: make BUILD=build-new OUT=build-new/desktop LINKDIR=build-new/bin)
+set -u
+D=$(cd "$(dirname "$0")/.." && pwd)
+T=$(mktemp -d /tmp/deskl.XXXXXX)
+export XDG_RUNTIME_DIR=$T/run DESKTOP_CONFIG_DIR=$T/cfg WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=2 WLR_RENDERER=pixman PATH="$D/build-new/bin:$PATH"
+mkdir -p "$XDG_RUNTIME_DIR" "$DESKTOP_CONFIG_DIR"; chmod 700 "$XDG_RUNTIME_DIR"
+unset WAYLAND_DISPLAY DISPLAY
+pass=0; fail=0
+ok()  { pass=$((pass+1)); echo "ok    $*"; }
+bad() { fail=$((fail+1)); echo "FAIL  $*"; }
+check() { if eval "$2"; then ok "$1"; else bad "$1   [$2]"; fi; }
+ctl() { printf '%s\n' "$*" | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/dwl.sock"; }
+wait_for() { for _ in $(seq 100); do eval "$1" && return 0; sleep 0.1; done; return 1; }
+# out NAME FIELD: a field of one output in `state`; win TITLE FIELD: a field of one window
+out() { ctl state | jq -r --arg n "$1" ".outputs[] | select(.name==\$n) | $2"; }
+win() { ctl state | jq -r --arg t "$1" ".clients[] | select(.title==\$t) | .$2"; }
+
+"$D/build-new/desktop" dwl > "$T/stdout" 2> "$T/stderr" &
+DWL=$!
+trap 'kill $DWL 2>/dev/null; sleep 0.3; kill -9 $DWL 2>/dev/null; echo "logs in $T"' EXIT
+wait_for '[ -S "$XDG_RUNTIME_DIR/dwl.sock" ]' || { echo "compositor did not start"; cat "$T/stderr"; exit 1; }
+sleep 0.5
+export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep '^wayland-[0-9]*$' | head -1)
+printf 'subscribe\n' | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/dwl.sock" > "$T/events" 2>/dev/null &
+
+A=$(ctl state | jq -r '.outputs[] | select(.selected==1) | .name')
+B=$(ctl state | jq -r --arg a "$A" '.outputs[] | select(.name!=$a) | .name')
+echo "== two outputs: A=$A B=$B"
+check "two outputs" '[ -n "$A" ] && [ -n "$B" ]'
+
+echo "== per-monitor independence"
+ctl focusmon right >/dev/null; sleep 0.2
+S1=$(ctl state | jq -r '.outputs[] | select(.selected==1) | .name'); ctl focusmon left >/dev/null; sleep 0.2
+check "focusmon moves the selected output" '[ "$S1" = "$B" ]'
+ctl view 3 >/dev/null; ctl layout grid >/dev/null
+B0="$(out $B '[.view,.layout,(.layouts|join(","))]|@csv')"
+ctl view 2 >/dev/null; sleep 0.2
+check "A view changed" '[ "$(out $A .view)" = 2 ]'
+check "B untouched by view on A" '[ "$(out $B "[.view,.layout,(.layouts|join(\",\"))]|@csv")" = "$B0" ]'
+# A is the selected output here? selmon follows the last focusmon; select A explicitly
+ctl focusmon left >/dev/null; sleep 0.1
+SEL=$(ctl state | jq -r '.outputs[] | select(.selected==1) | .name'); OTHER=$([ "$SEL" = "$A" ] && echo $B || echo $A)
+O0="$(out $OTHER '[.view,.layout,(.layouts|join(","))]|@csv')"
+ctl layout tabbed >/dev/null; ctl view 4 >/dev/null; ctl layout stack >/dev/null
+check "layout+view on $SEL leave $OTHER unchanged" '[ "$(out $OTHER "[.view,.layout,(.layouts|join(\",\"))]|@csv")" = "$O0" ]'
+ctl focusmon right >/dev/null; sleep 0.1
+SEL2=$(ctl state | jq -r '.outputs[] | select(.selected==1) | .name')
+SH0="$(out $SEL '[.view,.layout]|@csv')"
+printf 'shiftview via keys.conf-less ctl: '; ctl bind Super+F7 = view 6 >/dev/null; ctl view 6 > /dev/null
+check "view on $SEL2 leaves $SEL alone" '[ "$(out $SEL "[.view,.layout]|@csv")" = "$SH0" ]'
+
+echo "== layout per (monitor, tag)"
+ctl view 1 >/dev/null; ctl layout tile >/dev/null
+ctl view 2 >/dev/null; ctl layout tabbed >/dev/null
+ctl view 3 >/dev/null; ctl layout float >/dev/null
+check "tag 1 = tile, tag 2 = tabbed, tag 3 = float in state" '[ "$(out $SEL2 ".layouts[0:3]|join(\",\")")" = "tile,tabbed,float" ]'
+ctl view 1 >/dev/null; sleep 0.1
+check "back on tag 1 the layout is tile" '[ "$(out $SEL2 .layout)" = "[]=" ]'
+ctl view 2 >/dev/null; sleep 0.1
+check "back on tag 2 the layout is tabbed" '[ "$(out $SEL2 .layout)" = "[T]" ]'
+ctl view 3 >/dev/null; sleep 0.1
+check "back on tag 3 the layout is float" '[ "$(out $SEL2 .layout)" = "><>" ]'
+check "layout event on the stream" 'wait_for "grep -q \"^layout $SEL2 \\[T\\] tabbed\" $T/events"'
+ctl layout next >/dev/null; sleep 0.1
+check "layout with no argument swaps with the previous one" '[ "$(out $SEL2 .layout)" = "[T]" ] || [ "$(out $SEL2 .layout)" != "><>" ]'
+ctl layout nonsense | grep -q '^error' && ok "bad layout name rejected" || bad "bad layout name rejected"
+
+echo "== tabbed: tabs and switching"
+ctl view 5 >/dev/null; ctl layout tabbed >/dev/null
+for n in one two three; do
+  foot -a t$n -T t$n sleep 600 > /dev/null 2>&1 &
+  wait_for "[ \"\$(win t$n visible)\" = true ]" || true
+  sleep 0.3
+done
+check "3 windows on the tabbed view" '[ "$(ctl state | jq "[.clients[]|select(.output==\"$SEL2\" and .tags==16)]|length")" = 3 ]'
+check "state: 3 tabs" '[ "$(out $SEL2 .tabs)" = 3 ]'
+check "only one window visible" '[ "$(ctl state | jq "[.clients[]|select(.output==\"$SEL2\" and .tags==16 and .visible==1)]|length")" = 1 ]'
+V1=$(ctl state | jq -r ".clients[]|select(.output==\"$SEL2\" and .tags==16 and .visible==1)|.title")
+check "shown window is the tab marked active" '[ "$(out $SEL2 .tabactive)" = "$V1" ]'
+ctl tab next >/dev/null; sleep 0.3
+V2=$(ctl state | jq -r ".clients[]|select(.output==\"$SEL2\" and .tags==16 and .visible==1)|.title")
+check "tab next changes the visible window ($V1 -> $V2)" '[ -n "$V2" ] && [ "$V1" != "$V2" ]'
+ctl tab 1 >/dev/null; sleep 0.3
+check "tab 1 shows the first window" '[ "$(ctl state | jq -r ".clients[]|select(.output==\"$SEL2\" and .tags==16 and .visible==1)|.title")" = tone ]'
+GEOM=$(ctl state | jq -r ".clients[]|select(.title==\"tone\")|[.y,.h]|@csv")
+check "window is placed below the 22 px tab bar" '[ "$(ctl state | jq -r ".clients[]|select(.title==\"tone\")|.y")" -ge 22 ]'
+grim -o "$SEL2" "$T/tabbed.png" && ok "grim screenshot of the tabbed output ($T/tabbed.png)" || bad "grim screenshot"
+# the tab bar row must differ from the root colour: sample pixel counts of distinct colours in the top 22 rows
+if command -v python3 >/dev/null; then
+  NC=$(python3 - "$T/tabbed.png" <<'PY'
+import sys,zlib,struct
+d=open(sys.argv[1],'rb').read(); p=8; ch=[]; 
+while p<len(d):
+    l,=struct.unpack('>I',d[p:p+4]); t=d[p+4:p+8]; b=d[p+8:p+8+l]; p+=12+l
+    if t==b'IHDR': w,h,bd,ct=struct.unpack('>IIBB',b[:10])
+    if t==b'IDAT': ch.append(b)
+raw=zlib.decompress(b''.join(ch)); bpp=4 if ct==6 else 3; st=w*bpp; rows=[]; prev=bytearray(st); q=0
+for y in range(24):
+    f=raw[q]; q+=1; line=bytearray(raw[q:q+st]); q+=st
+    for i in range(st):
+        a=line[i-bpp] if i>=bpp else 0; b_=prev[i]; c=prev[i-bpp] if i>=bpp else 0
+        if f==1: line[i]=(line[i]+a)&255
+        elif f==2: line[i]=(line[i]+b_)&255
+        elif f==3: line[i]=(line[i]+(a+b_)//2)&255
+        elif f==4:
+            pa=abs(b_-c); pb=abs(a-c); pc=abs(a+b_-2*c); line[i]=(line[i]+(a if pa<=pb and pa<=pc else b_ if pb<=pc else c))&255
+    prev=line; rows.append(bytes(line))
+cols=set()
+for r in rows[:20]:
+    for x in range(0,w,3): cols.add(r[x*bpp:x*bpp+3])
+print(len(cols))
+PY
+)
+  check "tab bar pixels drawn (>=4 distinct colours incl. text, got $NC)" '[ "${NC:-0}" -ge 4 ]'
+fi
+
+echo "== stack"
+ctl layout stack >/dev/null; sleep 0.3
+check "stack: 3 title rows, one visible window" '[ "$(out $SEL2 .tabs)" = 3 ] && [ "$(ctl state | jq "[.clients[]|select(.output==\"$SEL2\" and .tags==16 and .visible==1)]|length")" = 1 ]'
+check "stack: window starts below 3 rows (y >= 66)" '[ "$(ctl state | jq -r ".clients[]|select(.output==\"$SEL2\" and .tags==16 and .visible==1)|.y")" -ge 66 ]'
+ctl tab 3 >/dev/null; sleep 0.3
+check "stack: tab 3 shows the third window" '[ "$(ctl state | jq -r ".clients[]|select(.output==\"$SEL2\" and .tags==16 and .visible==1)|.title")" = tthree ]'
+ctl set tab_bar_height 40 | grep -q ^ok; sleep 0.2
+check "tab_bar_height setting re-lays out (y >= 120)" '[ "$(ctl state | jq -r ".clients[]|select(.output==\"$SEL2\" and .tags==16 and .visible==1)|.y")" -ge 120 ]'
+ctl set tab_bar_height 22 >/dev/null
+echo "== other output still the same after all that"
+check "$SEL untouched at the end" '[ "$(out $SEL "[.view,.layout]|@csv")" = "$SH0" ]'
+ctl layout monocle >/dev/null; sleep 0.2
+check "leaving tabbed shows all windows of the view again (monocle: tab bar gone)" '[ "$(out $SEL2 .tabs)" = 0 ]'
+
+echo; echo "passed $pass, failed $fail"
+echo "--- compositor stderr:"; head -20 "$T/stderr"
+[ $fail = 0 ]

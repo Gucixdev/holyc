@@ -1,0 +1,6 @@
+#!/bin/sh
+# afk_run - start afkd from compositor autostart / any init (no init system needed).
+# Idempotent: a flock held by the running afkd makes repeat calls a no-op.
+d=$(dirname "$(readlink -f "$0")")
+[ -x "$d/build/afkd" ] || make -C "$d" >/dev/null || exit 1
+exec flock -n "${XDG_RUNTIME_DIR:-/tmp}/afkd.lock" setsid "$d/build/afkd" "$@"

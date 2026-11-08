@@ -1,0 +1,5 @@
+#!/bin/sh
+# resume hook: undo screensleep (outputs on) - best effort
+if command -v wlr-randr >/dev/null 2>&1; then
+	for o in $(wlr-randr | awk '/^[^ ]/{print $1}'); do wlr-randr --output "$o" --on; done
+fi

@@ -17,6 +17,7 @@ Layout of `src/` (everything is our own code, forked from dwl, dmenu and lemonba
 | `dwl.h`, `client.h` | shared types, prototypes, globals of the compositor |
 | `compositor.c` | display, outputs, layer shell, lock, popups, setup/run/cleanup, `dwl_main` |
 | `client.c` | windows: map/unmap, focus, tags/views, layouts tile/float/monocle/deck/grid, XWayland |
+| `tabs.c` | layouts `tabbed` and `stack` with their title bar (scene buffer drawn with drw.c), layout per (output, tag) |
 | `keys.c` | keyboards, key and mouse binding tables, pointer, cursor, tablets, drag, spawn/quit/chvt |
 | `config.c`, `theme.c` | rules, layouts, monitor/keyboard/trackpad settings; colours, borders, focus behaviour |
 | `settings.c`, `ime.c` | control fifo/socket and session restore; input-method relay |
@@ -44,6 +45,12 @@ scripts (grim/slurp/cliphist wrappers), foot (the terminal) and Emacs.
 Tested headless only: dwl starts, advertises tablet-v2, virtual keyboard and pointer, screencopy; wvkbd stays up and toggles,
 wtype exits 0. Not tested: a real pen, a real Deck, the keyboard on a touch screen.
 No brightnessctl installed, so no brightness keys yet. XWayland still off.
+
+## Layouts and outputs
+
+Seven layouts: tile, float, monocle, deck, grid, stack (title rows + one window), tabbed (tab bar + one window). Each (output, workspace)
+remembers its own; `layout NAME` / Super+t f m g s switch it, `tab next|prev|N` or a click on a tab picks the window (`tab_bar_height`
+setting). Every output has its own workspaces: view, layout and Super+z/x change only the focused output. Details: `docs/hacking.md` section 6.
 
 ## Session (log in to dwl)
 

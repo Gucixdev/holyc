@@ -712,6 +712,25 @@ void lt_timepicker_set_kind(lt_timepicker *tp, lt_timepicker_kind k);
 void lt_timepicker_draw(const lt_timepicker *tp, lt_canvas *c, lt_rect r, const lt_theme *t, bool focused);
 lt_wres lt_timepicker_event(lt_timepicker *tp, lt_rect r, const lt_event *ev);
 
+/* volumebar: a level bar (horizontal, or vertical with set_vertical) with a label ("spk", "mic"), a percent / MUTE text, keys (Left/Right or
+ * Down/Up or -/+ step, PgUp/PgDn x5, Home/End, m mutes) and mouse (click/drag sets, wheel steps, click on the text mutes). The audio backend
+ * stays outside: hand it get/set callbacks (any may be NULL - the widget then keeps that value itself). Levels are 0..max (max 1.0 default).
+ * Events return CHANGED (level moved) or TOGGLE (mute flipped); both already went through the callbacks. */
+typedef struct { double (*get)(void *ctx); void (*set)(void *ctx, double level); int (*get_mute)(void *ctx); void (*set_mute)(void *ctx, int muted); void *ctx; } lt_volume_cb;
+typedef struct lt_volumebar lt_volumebar;
+lt_volumebar *lt_volumebar_new(const char *label, lt_volume_cb cb);
+void lt_volumebar_free(lt_volumebar *v);
+void lt_volumebar_set_vertical(lt_volumebar *v, bool vertical);
+void lt_volumebar_set_step(lt_volumebar *v, double step);                  /* fraction of full scale per key / wheel notch, default 0.05 */
+void lt_volumebar_set_max(lt_volumebar *v, double max);                    /* 1.0 default; 1.5 allows boosting to 150% */
+void lt_volumebar_set_label(lt_volumebar *v, const char *label);
+double lt_volumebar_level(lt_volumebar *v);                                /* re-reads the get callback */
+bool lt_volumebar_muted(lt_volumebar *v);
+void lt_volumebar_set_level(lt_volumebar *v, double level);                /* also calls set */
+void lt_volumebar_set_muted(lt_volumebar *v, bool muted);
+void lt_volumebar_draw(lt_volumebar *v, lt_canvas *c, lt_rect r, const lt_theme *t, bool focused);
+lt_wres lt_volumebar_event(lt_volumebar *v, lt_rect r, const lt_event *ev);
+
 /* ---- navigation: tabs, breadcrumbs, menus, tree bar -------------------------------------------------------------------------------------
  * tabs: a strip of tabs on any side of a pane (lt_tabs_pane says where the content goes); click / arrows / Home / End / wheel switch (CHANGED).
  * breadcrumbs: a path as clickable segments "home > user > dev", the middle collapsed to "..." when it does not fit; click = ACTIVATE that segment.

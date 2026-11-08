@@ -1,0 +1,45 @@
+#!/bin/bash
+# afkd tests against tests/fakecomp (no real compositor, no real lock/suspend/update).
+# Scripts are fake shims in a temp dir that only touch marker files.
+d=$(cd "$(dirname "$0")/.." && pwd); B=$d/build
+T=$(mktemp -d); export XDG_RUNTIME_DIR=$T/rt; mkdir -p "$XDG_RUNTIME_DIR" "$T/s"
+fail=0; ok() { echo "ok   $1"; }; bad() { echo "FAIL $1"; fail=1; }
+cleanup() { kill $AP $CP 2>/dev/null; exec 3>&- 2>/dev/null; rm -rf "$T"; }; trap cleanup EXIT
+for n in a b; do printf '#!/bin/sh\necho x >> %s/%s.fired\n' "$T" $n >"$T/s/$n"; done
+printf '#!/bin/sh\necho x >> %s/slow.fired\nsleep 4\n' "$T" >"$T/s/slow"
+printf '#!/bin/sh\necho x >> %s/wake.fired\n' "$T" >"$T/s/wake"
+chmod +x "$T"/s/*
+printf 'idle 1 a\nidle 2 slow\nresume 0 wake\nresume 2 b\n' >"$T/conf"
+cnt() { [ -f "$T/$1.fired" ] && wc -l <"$T/$1.fired" || echo 0; }
+
+"$B/afkd" -c "$T/conf" -s "$T/s" --check >/dev/null && ok "--check valid" || bad "--check valid"
+printf 'idle 5 nosuch\n' >"$T/bad"; "$B/afkd" -c "$T/bad" -s "$T/s" --check 2>/dev/null && bad "--check rejects" || ok "--check rejects"
+"$B/afkd" -s "$T/s" --once a && [ "$(cnt a)" = 1 ] && ok "--once" || bad "--once"
+rm -f "$T/a.fired"
+
+# no notifier -> clear message
+WAYLAND_DISPLAY=nonexist "$B/afkd" -c "$T/conf" -s "$T/s" 2>&1 | grep -q "cannot connect" && ok "bails w/o compositor" || bad "bails w/o compositor"
+
+mkfifo "$T/in"; exec 3<>"$T/in"
+"$B/fakecomp" <"$T/in" >"$T/comp.out" 2>&1 & CP=$!
+for i in $(seq 50); do grep -q READY "$T/comp.out" && break; sleep 0.1; done
+export WAYLAND_DISPLAY=$(awk '/READY/{print $2}' "$T/comp.out")
+"$B/afkd" -c "$T/conf" -s "$T/s" 2>"$T/afkd.err" & AP=$!
+sleep 1.6; [ "$(cnt a)" = 1 ] && ok "idle 1s fires a" || bad "idle fires a ($(cnt a))"
+[ "$(cnt slow)" = 0 ] && ok "slow not early" || bad "slow early"
+sleep 1; [ "$(cnt slow)" = 1 ] && ok "idle 2s fires slow" || bad "slow fires"
+# stats while idle-waiting
+rss=$(awk '/VmRSS/{print $2}' /proc/$AP/status); t1=$(awk '{print $14+$15}' /proc/$AP/stat); sleep 0.5; t2=$(awk '{print $14+$15}' /proc/$AP/stat)
+echo "info afkd RSS=${rss}kB cpu_ticks_in_0.5s=$((t2-t1))"
+anon=$(awk "/RssAnon/{print \$2}" /proc/$AP/status); echo "info RssAnon=${anon}kB (rest is shared libc/libwayland pages)"; [ "$anon" -lt 700 ] && ok "RssAnon<700kB" || bad "RssAnon $anon"
+echo activity >&3; sleep 0.5
+[ "$(cnt wake)" = 1 ] && ok "resume fires wake" || bad "wake ($(cnt wake))"
+[ "$(cnt b)" = 1 ] && ok "resume 2 gated on stage ok" || bad "b ($(cnt b))"
+# single instance: slow still sleeping (4s from fire); re-idle 2s later would respawn -> must skip
+sleep 2.5; [ "$(cnt slow)" = 1 ] && ok "single-instance: slow skipped while running" || bad "single instance ($(cnt slow))"
+grep -q "already running" "$T/afkd.err" && ok "skip logged" || bad "skip log"
+echo activity >&3; sleep 0.4; echo activity >&3
+kill -0 $AP && ok "afkd alive" || bad "afkd died"
+echo quit >&3; wait $CP 2>/dev/null; sleep 0.3
+kill -0 $AP 2>/dev/null && bad "afkd should exit when compositor dies" || ok "exits when compositor dies"
+exit $fail

@@ -1,6 +1,6 @@
 /* vpn_test.c - tests for vpn.h.
  *
- *   cc -std=gnu11 -O1 -o vpn_test vpn_test.c && ./vpn_test        pure tests: crypto vectors, parser, fuzz, JSON, providers, DNS files
+ *   cc -std=gnu11 -O1 -o vpn_test vpn_test.c ../src/mods/wireguard.c && ./vpn_test        pure tests: crypto vectors, parser, fuzz, JSON, providers, DNS files
  *   ./vpn_test ns                                                         + live tests inside `unshare -Urn` (never touches the host network)
  *
  * The live part refuses to run unless it is inside a non-initial user namespace with an empty network namespace (only "lo"),
@@ -45,7 +45,7 @@ static void test_crypto(void) {
 }
 
 static const char GOOD[] =
-    "# comment\n[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\nAddress = 10.0.0.2/24, fd00::2/64\nDNS = 1.1.1.1, 9.9.9.9, corp.example\nMTU = 1380\nListenPort = 51820\nFwMark = 0x1234\nTable = 77\n"
+    "# comment\n[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\nAddress = 10.0.0.2/24, fd00::2/64\nDNS = 1.1.1.1, 9.9.9.9, corp.example\nMTU = 1380\nListenPort = 51820\nFwMark = 0x1234\nTable = 77\n"
     "PostUp = echo up %i\nPostDown = echo down %i\n\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nPresharedKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\n"
     "Endpoint = vpn.example.com:51820   # trailing\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = [2001:db8::1]:443\nAllowedIPs = 10.9.0.0/16\n";
 
@@ -65,9 +65,9 @@ static void test_parser(void) {
     const char *bad[] = {
         "", "PrivateKey = x\n", "[Interface]\nPrivateKey = tooshort\n", "[Interface]\nBogus = 1\n", "[Interface]\nAddress = 10.0.0.1/33\n", "[Interface]\nAddress = nope\n",
         "[Interface]\nMTU = 12\n", "[Interface]\nListenPort = 70000\n", "[Interface]\n[Interface]\n", "[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\n",
-        "[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n[Peer]\nEndpoint = 1.2.3.4:5\n",
-        "[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = nocolon\n",
-        "[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAllowedIPs = 1.2.3.4/99\n",
+        "[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\n[Peer]\nEndpoint = 1.2.3.4:5\n",
+        "[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nEndpoint = nocolon\n",
+        "[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\n[Peer]\nPublicKey = AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=\nAllowedIPs = 1.2.3.4/99\n",
         "[Interface]\nDNS = bad domain!\n", "[Interface]\nTable = 254\n", "[Interface\n", "[Nope]\n", "[Interface]\nFwMark = 0\n", "[Interface]\nmissing equals\n"};
     for (size_t i = 0; i < sizeof bad / sizeof *bad; i++) { r = netman_vpn_wg_parse(bad[i], strlen(bad[i]), &c, err, sizeof err); CHK(r == -1, "bad config #%zu accepted", i); }
     char nul[] = "[Interface]\nPrivateKey = AAAA\0AAAA\n"; OK(netman_vpn_wg_parse(nul, sizeof nul - 1, &c, err, sizeof err) == -1, "NUL byte rejected");
@@ -99,7 +99,7 @@ static void test_parser(void) {
     netman_vpn_ip ip; netman_vpn__ip_parse("10.1.2.3/20", &ip); netman_vpn__ip_mask(&ip);
     OK(ip.addr[0] == 10 && ip.addr[1] == 1 && ip.addr[2] == 0 && ip.addr[3] == 0, "prefix masking");
     char h[64]; int p;
-    OK(netman_vpn__ep_split("[::1]:51820", h, sizeof h, &p) == 0 && p == 51820 && !strcmp(h, "::1") && netman_vpn__ep_split("a.b:0", h, sizeof h, &p) == -1 && netman_vpn__ep_split("::1:5", h, sizeof h, &p) == -1 && netman_vpn__ep_split("a b:5", h, sizeof h, &p) == -1, "endpoint split");
+    OK(netman_wg_ep_split("[::1]:51820", h, sizeof h, &p) == 0 && p == 51820 && !strcmp(h, "::1") && netman_wg_ep_split("a.b:0", h, sizeof h, &p) == -1 && netman_wg_ep_split("::1:5", h, sizeof h, &p) == -1 && netman_wg_ep_split("a b:5", h, sizeof h, &p) == -1, "endpoint split");
 }
 
 static void test_json_providers(const char *dir) {
@@ -152,7 +152,7 @@ static void test_dns_files(void) {
     char rundir[600], rc[600], other[600];
     snprintf(rundir, sizeof rundir, "%s/run", dir); snprintf(rc, sizeof rc, "%s/resolv.conf", dir); snprintf(other, sizeof other, "%s/real.conf", dir);
     netman_vpn_run_dir = rundir; netman_vpn_resolv_path = rc; netman_vpn__rundir();
-    const char *cf = "[Interface]\nPrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\nDNS = 10.64.0.1, lab.example\n";
+    const char *cf = "[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\nDNS = 10.64.0.1, lab.example\n";
     netman_vpn_wg c; netman_vpn_wg_parse(cf, strlen(cf), &c, NULL, 0);
     OK(c.dns.n == 1, "dns parsed");
     netman_vpn__spit(rc, "nameserver 9.9.9.9\n", 19, 0644);
@@ -263,6 +263,28 @@ static void live_wireguard(void) {
     OK(wait_byte(fromB[0], 8000), "REAL handshake + data: B received the datagram through WireGuard");
     netman_vpn_wgstat st; OK(netman_vpn_wg_stats("wgA", &st) == 0 && st.present && st.npeers == 1 && st.handshaked == 1 && st.tx > 0 && st.rx > 0, "stats: handshake done, rx/tx counted");
     netman_vpn_out = save; netman_vpn_status("wgA"); netman_vpn_out = NULL;
+    {   /* wireguard.c: live peer list and one-peer changes while the tunnel runs */
+        netman_wg_peerinfo *pi = NULL; size_t np = 0; unsigned char k1[32], k2[32], ub1[32]; netman_wg_ip al[2]; netman_wg_peer np1; netman_wg_ep e2; char eb[64];
+        OK(netman_wg_peers("wgA", &pi, &np) == 0 && np == 1 && pi[0].last_handshake > 0 && pi[0].tx > 0 && pi[0].has_ep && pi[0].nallowed == 1 && pi[0].allowed[0].prefix == 32, "peers: endpoint, handshake, rx/tx and allowed ip read back");
+        netman_wg_ep_str(&pi[0].ep, eb, sizeof eb); CHK(!strcmp(eb, "192.168.55.2:51821"), "peers: endpoint text %s", eb);
+        memcpy(ub1, pi[0].pub, 32); netman_wg_peers_free(pi, np);
+        netman_vpn_genkey(k1); netman_vpn_pubkey(k1, k2);
+        memset(&np1, 0, sizeof np1); memcpy(np1.pub, k2, 32); np1.keepalive = 25;
+        netman_wg_resolve("192.168.55.9:4000", &np1.ep); np1.has_ep = 1;
+        memset(al, 0, sizeof al); al[0].family = AF_INET; al[0].addr[0] = 10; al[0].addr[1] = 99; al[0].addr[3] = 1; al[0].prefix = 32; np1.allowed = al; np1.nallowed = 1;
+        OK(netman_wg_peer_add("wgA", &np1) == 0, "peer add on the running interface");
+        OK(netman_wg_peers("wgA", &pi, &np) == 0 && np == 2, "two peers now"); netman_wg_peers_free(pi, np);
+        OK(netman_wg_stats("wgA", &st) == 0 && st.npeers == 2 && st.handshaked == 1, "the original peer kept its handshake while another was added");
+        OK(netman_wg_resolve("192.168.55.10:4001", &e2) == 0 && netman_wg_peer_endpoint("wgA", k2, &e2) == 0, "endpoint update");
+        OK(netman_wg_peers("wgA", &pi, &np) == 0, "peers read");
+        for (size_t i = 0; i < np; i++) if (!memcmp(pi[i].pub, k2, 32)) { netman_wg_ep_str(&pi[i].ep, eb, sizeof eb); CHK(!strcmp(eb, "192.168.55.10:4001") && pi[i].keepalive == 25, "new endpoint %s, keepalive untouched", eb); }
+        netman_wg_peers_free(pi, np);
+        OK(netman_wg_peer_endpoint("wgA", k1, &e2) == -ENOENT, "endpoint update of an unknown key does not create a peer");
+        OK(netman_wg_peer_del("wgA", k2) == 0 && netman_wg_peer_del("wgA", k2) == -ENOENT, "peer delete, second delete reports no such peer");
+        OK(netman_wg_stats("wgA", &st) == 0 && st.npeers == 1 && st.handshaked == 1, "back to the original peer, still handshaked");
+        OK(udp_send("10.77.0.2", 9999, "after-edits") == 0 && wait_byte(fromB[0], 8000), "data still flows after live edits");
+        (void)ub1;
+    }
     int rtt = netman_vpn_rtt_ms("192.168.55.2", 1000); CHK(rtt >= 0, "icmp rtt over veth (ms=%d)", rtt);
     int mtu = netman_vpn_mtu_probe("192.168.55.2"); CHK(mtu == 1400, "path mtu probe over a 1400 veth found %d", mtu);
     OK(netman_vpn_down("wgA") == 0 && !if_nametoindex("wgA"), "wgA down removes the link");
@@ -369,10 +391,46 @@ static void live(void) {
     char cmd[400]; snprintf(cmd, sizeof cmd, "rm -rf %s", TD); if (system(cmd)) {}
 }
 
+/* list / info / import against a temp profile dir; pure file work, no network, works unprivileged */
+static void test_profiles(void) {
+    char d[] = "/tmp/netman_vpn_profXXXXXX", src[300], *p; size_t l;
+    if (!mkdtemp(d)) { fails++; return; }
+    char dir[300]; snprintf(dir, sizeof dir, "%s/conf", d);
+    const char *sd = netman_vpn_conf_dir, *srd = netman_vpn_run_dir; FILE *so = netman_vpn_out, *se = netman_vpn_err;
+    netman_vpn_conf_dir = dir; netman_vpn_run_dir = strdup("/nonexistent-run");
+    FILE *m = open_memstream(&p, &l); netman_vpn_out = m;
+    OK(netman_vpn_list() == 0, "list on a missing directory is empty, not an error");
+    fclose(m); OK(strstr(p, "NAME") == NULL, "no profile lines"); free(p);
+    snprintf(src, sizeof src, "%s/in.conf", d);
+    FILE *f = fopen(src, "w"); fputs("[Interface]\nPrivateKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\nAddress = 10.0.0.2/32\n[Peer]\nPublicKey = gI6EdUSYvn8ugXOt8QQD6Yc+JyiZxIhp3GInSWRfWGE=\nEndpoint = 192.0.2.1:51820\nAllowedIPs = 0.0.0.0/0\n", f); fclose(f);
+    FILE *dn = fopen("/dev/null", "w"); netman_vpn_out = dn; netman_vpn_err = dn;
+    OK(netman_vpn_import(src, "my vpn") != 0, "a name with a space is refused or sanitised");
+    OK(netman_vpn_import(src, "office") == 0, "import writes the profile");
+    OK(netman_vpn_import(src, "office") != 0, "import refuses to overwrite");
+    { struct stat st; char pp[400]; snprintf(pp, sizeof pp, "%s/office.conf", dir); OK(stat(pp, &st) == 0 && (st.st_mode & 077) == 0, "imported profile is mode 0600"); }
+    f = fopen(src, "w"); fputs("not a vpn profile\n", f); fclose(f);
+    OK(netman_vpn_import(src, "junk") != 0, "garbage is not imported");
+    netman_vpn_import("/nonexistent/file.conf", NULL);
+    fclose(dn);
+    m = open_memstream(&p, &l); netman_vpn_out = m; netman_vpn_err = so ? so : stderr;
+    OK(netman_vpn_list() == 0, "list works");
+    fclose(m);
+    OK(strstr(p, "office") && strstr(p, "wireguard") && strstr(p, "down"), "list shows NAME TYPE STATE");
+    OK(strstr(p, "killswitch ") != NULL, "list ends with the kill switch state");
+    free(p);
+    m = open_memstream(&p, &l); netman_vpn_out = m;
+    OK(netman_vpn_info("office") == 0, "info works for a down profile");
+    fclose(m);
+    OK(strstr(p, "192.0.2.1:51820") && strstr(p, "0.0.0.0/0") && strstr(p, "full tunnel"), "info shows endpoint, allowed ips and the routing mode");
+    free(p);
+    netman_vpn_conf_dir = sd; netman_vpn_run_dir = srd; netman_vpn_out = so; netman_vpn_err = se;
+    char cmd[400]; snprintf(cmd, sizeof cmd, "rm -rf %s", d); if (system(cmd)) {}
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "ns")) { execlp("unshare", "unshare", "-Urn", argv[0], "inner", (char *)NULL); perror("unshare"); return 2; }
     int inner = argc > 1 && !strcmp(argv[1], "inner");
-    test_crypto(); test_parser(); test_json_providers("."); test_dns_files();
+    test_crypto(); test_parser(); test_profiles(); test_json_providers("."); test_dns_files();
     if (inner) { if (guard_ns()) live(); else fails++; }
     printf("%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;

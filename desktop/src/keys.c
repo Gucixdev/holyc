@@ -23,6 +23,17 @@ static const char *emacscmd[] = { "emacsclient", "-c", "-a", "", NULL };
 static const char *shotcmd[]  = { "shot", NULL };
 static const char *shotareacmd[] = { "shot", "area", NULL };
 
+/* `volume ARG` through the command language (audio.c): works whatever has the keyboard focus, a dmenu included */
+static void
+volumecmd(const Arg *arg)
+{
+	static FILE *nul;
+	char line[64];
+	if (!nul) nul = fopen("/dev/null", "w");
+	snprintf(line, sizeof line, "volume %s", (const char *)arg->v);
+	api_exec(line, nul ? nul : stderr);
+}
+
 const Key keys[] = {
 	/* modifier                  key                  function          argument */
 	{ MODKEY,                    XKB_KEY_w,           spawn,            {.v = menucmd} },
@@ -32,9 +43,10 @@ const Key keys[] = {
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_W,           spawn,            {.v = emacscmd} },
 	{ 0,                         XKB_KEY_Print,       spawn,            {.v = shotcmd} },
 	{ MODKEY,                    XKB_KEY_Print,       spawn,            {.v = shotareacmd} },
-	{ 0,                         XKB_KEY_XF86AudioRaiseVolume, spawn,   SHCMD("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+") },
-	{ 0,                         XKB_KEY_XF86AudioLowerVolume, spawn,   SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-") },
-	{ 0,                         XKB_KEY_XF86AudioMute,        spawn,   SHCMD("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle") },
+	{ 0,                         XKB_KEY_XF86AudioRaiseVolume, volumecmd, {.v = "up"} },
+	{ 0,                         XKB_KEY_XF86AudioLowerVolume, volumecmd, {.v = "down"} },
+	{ 0,                         XKB_KEY_XF86AudioMute,        volumecmd, {.v = "mute"} },
+	{ 0,                         XKB_KEY_XF86AudioMicMute,     volumecmd, {.v = "micmute"} },
 	{ MODKEY,                    XKB_KEY_Return,      spawn,            {.v = termcmd} },
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Return,      zoom,             {0} },
 	{ MODKEY,                    XKB_KEY_j,           focusstack,       {.i = +1} },
@@ -42,12 +54,16 @@ const Key keys[] = {
 	{ MODKEY,                    XKB_KEY_i,           incnmaster,       {.i = +1} },
 	{ MODKEY,                    XKB_KEY_d,           incnmaster,       {.i = -1} },
 	{ MODKEY|WLR_MODIFIER_CTRL,  XKB_KEY_h,           setmfact,         {.f = -0.05f} },
-	{ MODKEY,                    XKB_KEY_h,           spawn,            SHCMD("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+") },
+	{ MODKEY,                    XKB_KEY_h,           volumecmd,        {.v = "up"} },
 	{ MODKEY|WLR_MODIFIER_CTRL,  XKB_KEY_l,           setmfact,         {.f = +0.05f} },
-	{ MODKEY,                    XKB_KEY_l,           spawn,            SHCMD("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-") },
+	{ MODKEY,                    XKB_KEY_l,           volumecmd,        {.v = "down"} },
 	{ MODKEY,                    XKB_KEY_Tab,         view,             {0} },
 	/* i3 layouts: split / floating / tabbed are t f m above; stacking and grid: */
-	{ MODKEY,                    XKB_KEY_s,          setlayout,      {.v = &layouts[3]} },
+	{ MODKEY,                    XKB_KEY_s,          setlayout,      {.v = &layouts[5]} },
+	{ MODKEY,                    XKB_KEY_g,          setlayout,      {.v = &layouts[6]} },
+	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_S,          setlayout,      {.v = &layouts[3]} },
+	{ MODKEY,                    XKB_KEY_bracketleft,  focusstack,   {.i = -1} },  /* previous tab / window */
+	{ MODKEY,                    XKB_KEY_bracketright, focusstack,   {.i = +1} },  /* next tab / window */
 	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_T,          setlayout,      {.v = &layouts[4]} },
 	/* directional focus / move (all four directions - Up and Down were missing before) */
 	{ MODKEY,                    XKB_KEY_Left,       focusdir,       {.i = WLR_DIRECTION_LEFT} },
@@ -163,6 +179,12 @@ buttonpress(struct wl_listener *listener, void *data)
 		selmon = xytomon(cursor->x, cursor->y);
 		if (locked)
 			break;
+
+		/* a click on a tab of tabbed / stack shows that window */
+		if ((c = tabs_hit(selmon, cursor->x, cursor->y))) {
+			focusclient(c, 1);
+			return;
+		}
 
 		/* Change focus if the button was _pressed_ over a client
 		   or a layer surface with on-demand keyboard interactivity */

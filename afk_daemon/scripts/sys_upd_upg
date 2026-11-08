@@ -1,0 +1,6 @@
+#!/bin/sh
+# full system update while away; skipped on battery. $AFKD_UPD overrides the command.
+for b in /sys/class/power_supply/BAT*/status; do
+	[ -r "$b" ] && [ "$(cat "$b")" = Discharging ] && exit 0
+done
+exec ${AFKD_UPD:-paru -Syu --noconfirm}

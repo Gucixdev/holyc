@@ -20,13 +20,14 @@ APPLETS   = dwl dmenu stest menu lemonbar bar autostart wsw settings
 
 WLPC  = PKG_CONFIG_PATH=$(WLROOTS)/lib/pkgconfig pkg-config
 DWLCF = `pkg-config --cflags wayland-server xkbcommon libinput xcb xcb-icccm` `$(WLPC) --cflags wlroots-0.20` \
-        -Isrc -Isrc/protocols/server -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -DVERSION=\"desktop\" -DXWAYLAND -Wno-unused-parameter
+        -Isrc -Isrc/protocols/server -DWLR_USE_UNSTABLE -D_POSIX_C_SOURCE=200809L -DVERSION=\"desktop\" -DXWAYLAND -Wno-unused-parameter `pkg-config --cflags fontconfig freetype2 libdrm`
 CLICF = `pkg-config --cflags wayland-client xkbcommon fontconfig freetype2` -Isrc -Isrc/protocols/client \
         -D_DEFAULT_SOURCE -D_GNU_SOURCE -D_XOPEN_SOURCE=700 -DVERSION=\"desktop\"
 LIBS  = `pkg-config --libs wayland-server xkbcommon libinput xcb xcb-icccm wayland-client fontconfig freetype2` \
         `$(WLPC) --static --libs wlroots-0.20` -lm
 
-DWL_SRC    = compositor client keys settings fx ime config theme api
+DRWKEEP = $(addprefix --keep-global-symbol=,drw_create drw_resize drw_free drw_fontset_create drw_fontset_free drw_setscheme drw_rect drw_text)
+DWL_SRC    = compositor client keys settings fx ime config theme api tabs audio
 CLIENT_SRC = menu lemonbar drw panel
 CLIENT_PROTO = xdg-shell-protocol wlr-layer-shell-unstable-v1-protocol
 
@@ -60,7 +61,7 @@ $(BUILD)/cli.%.o: src/protocols/client/%.c | $(BUILD)
 
 $(BUILD)/clients.o: $(addprefix $(BUILD)/cli.,$(addsuffix .o,$(CLIENT_SRC) $(CLIENT_PROTO)))
 	ld -r -o $(BUILD)/clients.raw.o $^
-	objcopy --keep-global-symbol=dmenu_main --keep-global-symbol=menu_main --keep-global-symbol=lemonbar_main --keep-global-symbol=settings_main $(BUILD)/clients.raw.o $@
+	objcopy --keep-global-symbol=dmenu_main --keep-global-symbol=menu_main --keep-global-symbol=lemonbar_main --keep-global-symbol=settings_main $(DRWKEEP) $(BUILD)/clients.raw.o $@
 
 $(BUILD)/stest.o: src/stest.c src/arg.h | $(BUILD)
 	$(CC) -c $(OPT) -std=gnu11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L -Isrc $< -o $(BUILD)/stest.raw.o

@@ -3,6 +3,7 @@
  * rules / settings loaded from plain text files at runtime (`reload`). See docs/hacking.md; `desktop --dump-api` prints it all.
  * Part of the dwl compositor (dwl: https://codeberg.org/dwl/dwl, see src/LICENSES/). */
 #include "dwl.h"
+#include "audio.h"
 #include <ctype.h>
 #include <stdarg.h>
 #include <strings.h>
@@ -67,7 +68,7 @@ static float def_mfact = 0.55f;
 static int def_nmaster = 1;
 static int api_loading; /* settings are being read from a file: no events, no hooks */
 
-static const char *LAYNAMES = "tile,float,monocle,deck,grid";
+static const char *LAYNAMES = "tile,float,monocle,deck,grid,stack,tabbed";
 
 static void
 get_value(Setting *s, char *o, size_t n)
@@ -220,6 +221,7 @@ after_colors(void)
 		if (c->border[0])
 			client_set_border_color(c, c->isurgent ? urgentcolor : c == focused_client ? focuscolor : bordercolor);
 	if (root_bg) wlr_scene_rect_set_color(root_bg, rootcolor);
+	{ Monitor *m; wl_list_for_each(m, &mons, link) tabs_refresh(m); }
 }
 
 static void
@@ -233,17 +235,26 @@ after_layout(void)
 {
 	Monitor *m;
 	if (def_layout < 0 || def_layout >= (int)nlayouts) return;
-	wl_list_for_each(m, &mons, link) {
-		m->lt[m->sellt] = &layouts[def_layout];
-		arrange(m);
-	}
+	if (!selmon) return;
+	monsetlt(selmon, &layouts[def_layout], 0); /* only the focused monitor, only its shown workspace */
+	arrange(selmon);
+	printstatus();
+}
+
+static void
+after_tabs(void)
+{
+	Monitor *m;
+	wl_list_for_each(m, &mons, link) arrange(m);
 }
 
 static void
 after_mfact(void)
 {
 	Monitor *m;
-	wl_list_for_each(m, &mons, link) { m->mfact = def_mfact; m->nmaster = def_nmaster; arrange(m); }
+	if (!selmon) return;
+	m = selmon; /* only the focused monitor */
+	m->mfact = def_mfact; m->nmaster = def_nmaster; arrange(m);
 }
 
 static void
@@ -307,9 +318,15 @@ regsettings(void)
 	reg("kb_layout", K_STR, kb_layout, NULL, "live", "Keyboard layout (xkb, e.g. pl)", after_keymap);
 	reg("kb_variant", K_STR, kb_variant, NULL, "live", "Keyboard variant", after_keymap);
 	reg("kb_options", K_STR, kb_options, NULL, "live", "Keyboard options (e.g. ctrl:nocaps)", after_keymap);
+	/* volume: the `volume` command and the panel (audio.c) */
+	reg("volume_step", K_INT, &volume_step, "1:25", "live", "Volume step (percent per key press / wheel notch)", NULL);
+	reg("volume_osd_ms", K_INT, &volume_osd_ms, "0:10000:100", "live", "Volume panel timeout after a change (ms, 0 = no panel)", NULL);
+	reg("volume_max", K_INT, &volume_max, "100:150:5", "live", "Volume ceiling (percent)", NULL);
 	/* bar and session: read by the `session` script and the bar, so they need a restart of the session */
 	reg("bar_position", K_CHOICE, &bar_pos, "bottom,top", "restart", "Bar position", NULL);
 	reg("bar_font", K_STR, NULL, NULL, "restart", "Bar font (fontconfig name)", NULL);
+	reg("tab_bar_height", K_UINT, &tab_bar_height, "0:100", "live", "Tab bar height of tabbed / stack (px, 0 = no bar)", after_tabs);
+	reg("tab_font", K_STR, tab_font, NULL, "live", "Tab bar font (fontconfig name)", after_tabs);
 }
 
 /* ---- events and hooks ---------------------------------------------------------------------------------------------- */
@@ -812,6 +829,15 @@ static void c_layout(char *a, FILE *o)
 	if (n < 0 || n >= (int)nlayouts) { err_(o, "layout %s|next", LAYNAMES); return; }
 	g.v = &layouts[n]; setlayout(&g); fputs("ok\n", o);
 }
+static void c_tab(char *a, FILE *o)
+{
+	if (!selmon || !tabs_layout(selmon)) { err_(o, "tab: the focused output is not in tabbed or stack layout"); return; }
+	if (a && !strcmp(a, "next")) tabs_select(selmon, 1, -1);
+	else if (a && !strcmp(a, "prev")) tabs_select(selmon, -1, -1);
+	else if (a && isdigit((unsigned char)*a) && atoi(a) >= 1) tabs_select(selmon, 0, atoi(a) - 1);
+	else { err_(o, "tab next|prev|N (N is 1-based)"); return; }
+	fputs("ok\n", o);
+}
 static void c_mfact(char *a, FILE *o)
 {
 	Arg g = {0};
@@ -913,6 +939,16 @@ static void c_emit(char *a, FILE *o)
 	e.key = a; e.val = v ? v : "";
 	emit(&e); fputs("ok\n", o);
 }
+static void c_volume(char *a, FILE *o)
+{
+	char st[160];
+	if (audio_command(a, o)) {
+		Ev e = { .type = "user", .key = "volume", .val = st };
+		audio_state(st, sizeof st);
+		emit(&e);
+		audio_osd();
+	}
+}
 static void c_help(char *a, FILE *o);
 static void c_events(char *a, FILE *o)
 {
@@ -926,7 +962,8 @@ static const Cmd cmds[] = {
 	{ "toggleview", "N", "add or remove tag N from the view", c_toggleview },
 	{ "tag", "N|all", "move the focused window to tag N", c_tag },
 	{ "toggletag", "N", "toggle tag N on the focused window", c_toggletag },
-	{ "layout", "NAME|N|next", "tile float monocle deck grid (or 0..4); no argument = swap with the previous layout", c_layout },
+	{ "tab", "next|prev|N", "tabbed / stack on the focused output: show the next / previous / Nth window", c_tab },
+	{ "layout", "NAME|N|next", "tile float monocle deck grid stack tabbed (or 0..6); on the focused output and its shown workspace only; no argument = swap with the previous layout", c_layout },
 	{ "mfact", "+0.05|-0.05|0.55", "master area share, relative or absolute", c_mfact },
 	{ "nmaster", "+1|-1", "windows in the master area", c_nmaster },
 	{ "kill", "", "close the focused window", c_kill },
@@ -949,6 +986,7 @@ static const Cmd cmds[] = {
 	{ "bind", "CHORD = COMMAND", "add or replace a key binding now (Super+Shift+t = spawn foot; COMMAND none swallows the key)", c_bind },
 	{ "unbind", "CHORD", "swallow a key that is bound in the compiled table", c_unbind },
 	{ "binds", "", "list runtime bindings", c_binds },
+	{ "volume", "up|down|micup|micdown [PCT] | mute|micmute [on|off] | set spk|mic PCT | get | osd", "speaker / microphone volume and mute through wpctl (or the fake test backend); shows the volume panel; get prints `spk PCT MUTED mic PCT MUTED seq N osd MS step PCT max PCT`", c_volume },
 	{ "emit", "NAME [TEXT]", "broadcast `user NAME TEXT` to subscribers and the on-user hook", c_emit },
 	{ "subscribe", "", "keep the connection open: after `ok subscribed` every event arrives as one text line (socket only)", NULL },
 	{ "events", "", "list the event lines", c_events },
@@ -1008,7 +1046,7 @@ api_start(void)
 void
 api_monitor_defaults(Monitor *m)
 {
-	if (def_layout >= 0 && def_layout < (int)nlayouts) m->lt[m->sellt] = &layouts[def_layout];
+	if (def_layout >= 0 && def_layout < (int)nlayouts) monsetlt(m, &layouts[def_layout], 1);
 	if (def_mfact != 0.55f) m->mfact = def_mfact;
 	if (def_nmaster != 1) m->nmaster = def_nmaster;
 }

@@ -126,7 +126,8 @@ typedef struct {
 } Button;
 
 typedef struct Monitor Monitor;
-typedef struct {
+typedef struct Client Client;
+struct Client {
 	/* Must keep this field first */
 	unsigned int type; /* XDGShell or X11* */
 
@@ -173,7 +174,7 @@ typedef struct {
 	int isfloating, isurgent, isfullscreen;
 	double fx_x, fx_y, fx_vx, fx_vy, fx_t; /* spring state, fx.c */
 	int fx_init, fx_moving;
-} Client;
+};
 
 typedef struct {
 	uint32_t mod;
@@ -231,6 +232,11 @@ struct Monitor {
 	struct wlr_box w; /* window area, layout-relative */
 	struct wl_list layers[4]; /* LayerSurface.link */
 	const Layout *lt[2];
+	const Layout *tlt[31]; /* layout per tag of THIS monitor (index = tag number - 1); lt[sellt] is the one of the shown view */
+	const Layout *prevlt;  /* layout before the last change, for setlayout with no argument */
+	struct wlr_scene_buffer *tabbuf; /* tab bar of tabbed / stack, tabs.c */
+	Client *tabsel;           /* window shown by tabbed / stack */
+	int ntabs;
 	unsigned int seltags;
 	unsigned int sellt;
 	uint32_t tagset[2];
@@ -392,6 +398,18 @@ void tagmon(const Arg *arg);
 void tile(Monitor *m);
 void deck(Monitor *m);
 void grid(Monitor *m);
+void tabbed(Monitor *m);
+void stack(Monitor *m);
+void monsetlt(Monitor *m, const Layout *l, int all);
+void tabs_hide(Monitor *m);
+void tabs_refresh(Monitor *m);
+int tabs_layout(Monitor *m);
+int tabs_wants(Monitor *m, Client *c);
+Client *tabs_hit(Monitor *m, double lx, double ly);
+void tabs_select(Monitor *m, int delta, int idx);
+void tabs_forget(Monitor *m);
+extern unsigned int tab_bar_height;
+extern char tab_font[];
 void togglefloating(const Arg *arg);
 void togglefullscreen(const Arg *arg);
 void toggletag(const Arg *arg);

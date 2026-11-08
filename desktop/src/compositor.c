@@ -257,6 +257,7 @@ cleanupmon(struct wl_listener *listener, void *data)
 	wlr_scene_output_destroy(m->scene_output);
 
 	closemon(m);
+	tabs_forget(m);
 	wlr_scene_node_destroy(&m->fullscreen_bg->node);
 	free(m);
 }
@@ -493,8 +494,8 @@ createmon(struct wl_listener *listener, void *data)
 			m->nmaster = r->nmaster;
 			if (r->deftag)
 				m->tagset[0] = m->tagset[1] = 1 << (r->deftag - 1);
-			m->lt[0] = r->lt;
-			m->lt[1] = &layouts[nlayouts > 1 && r->lt != &layouts[1]];
+			monsetlt(m, r->lt, 1);
+			m->prevlt = &layouts[nlayouts > 1 && r->lt != &layouts[1]];
 			api_monitor_defaults(m);
 			strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
 			wlr_output_state_set_scale(&state, r->scale);

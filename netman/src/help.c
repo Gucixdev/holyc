@@ -9,28 +9,67 @@
 /* the TUI keys: the popup (?) shows exactly these lines; lines that start in column 0 are headings */
 static const char *const nc_tui_help[] = {
 	"GENERAL",
-	"  tab / shift-tab, h l, 1-4   switch tab (tabs of modules disabled in config are hidden)",
+	"  tab / shift-tab, h l, 1-5   switch tab (tabs of modules disabled in config are hidden)",
 	"  j k, arrows, PgUp PgDn      move;  g G  first / last",
 	"  /                           filter by name",
 	"  r                           refresh / rescan",
+	"  i                           details popup for the selected row;  I  toggle the big \"all info\" view",
+	"                              (replaces the list; j k pick another row, PgUp PgDn scroll, esc / I close)",
 	"  ?                           this help;  q  quit",
 	"WI-FI",
 	"  enter    connect: known networks join at once; others ask for the passphrase",
 	"           (masked; tab shows/hides it); open networks ask for confirmation;",
 	"           802.1X asks identity then password; a wrong password says so and offers a retry",
-	"  i        details: BSSIDs, security, channel/band, signal, rates, IP/gateway/DNS/lease, link speed, rx/tx",
+	"  i        details: BSSIDs, security (pairwise / group / AKM), WPS, channel/width, signal, noise, rx/tx bitrate,",
+	"           first/last seen, roam history, IP/gateway/DNS/lease, link speed, rx/tx;  I  the same plus the raw backend text",
 	"  s        cycle sort: signal / name / secured first / open first;  o  all / only open / only secured",
 	"  d x a    disconnect / forget / toggle autoconnect;  w  WPS;  H  hotspot",
 	"  Signal is dBm and percent (green good, yellow ok, red weak); a lock marks security,",
 	"  OPEN networks get a warning colour. Without Unicode: [*] and open.",
 	"BLUETOOTH",
-	"  enter conn/disc   p pair   t trust   x remove   s scan   o power   i details",
+	"  enter conn/disc   p pair   t trust   x remove   s scan   o power   i details   I all info (adds the adapter:",
+	"  powered, discoverable, pairable, paired/connected counts)",
 	"ETHERNET / IP",
-	"  addresses, gateway, DNS, lease, link speed and live rx/tx per interface;  i  details",
+	"  addresses, gateway, DNS, lease, link speed and live rx/tx per interface;  i  details: driver, MAC, MTU,",
+	"  speed/duplex, link detected, IPv4/IPv6, DHCP server and lease times, rx/tx rates and errors;  I  adds sysfs",
 	"VPN",
-	"  enter up / down the selected profile;  r  refresh",
+	"  Profiles are <dir>/NAME.conf (WireGuard) or NAME.ovpn; dir = /etc/netman/vpn or env NETMAN_VPN_CONF_DIR.",
+	"  An empty list names the directory; add a profile with  netman vpn import FILE [NAME].",
+	"  enter    up / down the selected profile (also turns the kill switch on when vpn.killswitch = yes)",
+	"  K        toggle the nftables kill switch;  i  details: endpoint, allowed ips, handshake age, transfer, split tunnel",
+	"  States: up, down, connecting, failed; locked = unreadable (run as root), untrusted = file must be root/self",
+	"  owned and not group/world writable. Creating tunnels needs root: with VPN profiles present the TUI asks sudo.",
+	"  r        refresh",
+	"ENTERPRISE (only with enterprise.enabled = yes)",
+	"  read-only status: bonds, bridges, vlans, uplinks (ECMP), tethering (when tether.enabled) and licences",
+	"  (when licence.enabled), from the saved .ent profiles and the live kernel state;  i  details of the selected",
+	"  row;  I  the same plus the raw profile text. Changes are made with  netman ent ... / licence ... / key ...",
+	"HEADER (row 2, every tab)",
+	"  wifi / bt status, hostname, default route (iface via gateway), ip (pub = a public address), dns,",
+	"  and the network score 0-100 with its reasons (rtt, loss, dBm). The score is measured in the background",
+	"  (3 pings to the gateway); \"ping n/a\" = the kernel does not allow unprivileged ICMP. A field the system",
+	"  does not report is shown as -. On a narrow terminal the lowest-priority fields are dropped.",
 };
 #define NC_NTUIHELP ((int)(sizeof nc_tui_help / sizeof *nc_tui_help))
+
+/* one-paragraph notes per command group: `netman help GROUP` and the man page */
+static const struct { const char *group, *text; } nc_group_notes[] = {
+	{ "ent", "enterprise networking: bonding/teaming, bridges with STP and vlan filtering, vlans and QinQ, macvlan/ipvlan, veth, routes, rules and tables, ECMP with failover, link settings, IPv6 prefix delegation, USB/Bluetooth tethering, wired 802.1X. "
+	         "Profiles are NAME.ent files (\"key = value\", same syntax as net profiles) in the netman config directory. "
+	         "team is bonding: the kernel team driver is deprecated, so kind=team maps runner= (activebackup, lacp, loadbalance, broadcast, roundrobin) onto the bonding driver. "
+	         "Tethering share-out uses its own nft table `inet netman_tether` (firewall.h replaces `inet netman`, so the two never clobber each other); an accept there cannot override a drop in another table, so a strict firewall must allow the downstream interface itself. "
+	         "Changing commands need enterprise.enabled = yes." },
+	{ "licence", "licence files NAME.lic with expiry, the expiry check (exit 1 when anything expires soon), and hook-driven renewal. Switched by licence.enabled." },
+	{ "key", "WireGuard key rotation (NAME.key in enterprise.licence_dir). Switched by licence.enabled." },
+	{ "wol", "Wake-on-LAN magic packet. Switched by enterprise.enabled." },
+	{ "wg", "native WireGuard over generic netlink (src/mods/wireguard.c), no wg binary: keys and live peer edits on a running interface (add, delete, new endpoint: the other peers keep their sessions). Profiles and routes stay with the vpn commands. Switched by wireguard.enabled; with it off only OpenVPN profiles come up." },
+};
+#define NC_NGROUPNOTES ((int)(sizeof nc_group_notes / sizeof *nc_group_notes))
+static const char *nc_group_note(const char *g, int l)
+{
+	for (int i = 0; i < NC_NGROUPNOTES; i++) if ((int)strlen(nc_group_notes[i].group) == l && !strncmp(nc_group_notes[i].group, g, (size_t)l)) return nc_group_notes[i].text;
+	return NULL;
+}
 
 static int nc_group_len(const char *name) { const char *s = strchr(name, ' '); return s ? (int)(s - name) : (int)strlen(name); }
 
@@ -84,7 +123,10 @@ static int nc_help_topic(FILE *o, const char *t)
 	}
 	for (int i = 0; i < NC_NTABLE; i++) {   /* a group */
 		const nc_cmd *c = &nc_table[i];
-		if (nc_group_len(c->name) == tl && !strncmp(c->name, t, tl)) { nc_help_row(o, c, 52); found = 1; }
+		if (nc_group_len(c->name) == tl && !strncmp(c->name, t, tl)) {
+			if (!found && nc_group_note(t, tl)) fprintf(o, "%s\n\n", nc_group_note(t, tl));
+			nc_help_row(o, c, 52); found = 1;
+		}
 	}
 	return found ? 0 : 1;
 }
@@ -114,6 +156,8 @@ static void nc_help_man(FILE *o)
 		if (*c->help) { fputs(". ", o); nc_roff(o, c->help); }
 		fputs("\n", o);
 	}
+	fputs(".SH COMMAND GROUPS\n", o);
+	for (int i = 0; i < NC_NGROUPNOTES; i++) { fputs(".TP\n.B ", o); nc_roff(o, nc_group_notes[i].group); fputs("\n", o); nc_roff(o, nc_group_notes[i].text); fputs("\n", o); }
 	fputs(".SH TUI\nStart it with \\fBnetman \\-tui\\fR; \\fB?\\fR inside shows the same text:\n.nf\n", o);
 	for (int i = 0; i < NC_NTUIHELP; i++) { nc_roff(o, nc_tui_help[i]); fputs("\n", o); }
 	fputs(".fi\n.SH CONFIGURATION\nSettings come from defaults, \\fI/etc/netman/netman.conf\\fR, \\fI~/.config/netman/netman.conf\\fR and the environment variables "
