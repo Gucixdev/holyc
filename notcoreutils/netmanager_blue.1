@@ -64,8 +64,27 @@ PIN nothing is asked: every PIN or passkey request is answered with PIN and ever
 .SH LIBRARY
 The logic lives in the stb-style single header netmanager_blue.h (define NMB_IMPLEMENTATION in one .c file; functions nmb_status, nmb_wifi_*, nmb_bt_*, nmb_fw; output redirectable via nmb_out/nmb_err, prompt answers via nmb_in). This program is a thin CLI over it.
 .SH NOT YET
-VPN, ethernet configuration, a TUI; wifi forget works with iwd only. WPS, hotspot and the pairing agent are tested against fake wpa_supplicant / iwd / bluez peers (tests/netmanager_blue_test.c), not yet against real hardware.
+Ethernet configuration, a TUI; wifi forget works with iwd only. WPS, hotspot and the pairing agent are tested against fake wpa_supplicant / iwd / bluez peers (tests/netmanager_blue_test.c), not yet against real hardware.
 .SH SEE ALSO
 .BR iwctl (1),
 .BR bluetoothctl (1),
 .BR nft (8)
+.SH VPN
+Header nmb_vpn.h (define NMB_VPN_IMPLEMENTATION; functions nmbv_*; front end nmbv_cmd). Profiles live in /etc/netmanager_blue/vpn/NAME.conf (override with NMBV_CONF_DIR); a file with [Interface] is WireGuard, anything else (or NAME.ovpn) is OpenVPN. Profiles must be owned by root (or the caller) and not group/world writable, because PostUp/PreDown hooks run as shell commands, as in wg-quick. State lives in /run/netmanager_blue/vpn (NMBV_RUN_DIR).
+.TP
+.B nmbv list | up NAME | down NAME | status NAME | logs NAME
+WireGuard is native: link, address, MTU, peers, fwmark, routes and the wg-quick policy rules are set over netlink, no wg(8) or wg-quick. DNS from the profile is swapped into resolv.conf and restored on down. OpenVPN runs as openvpn --daemon with a pidfile and a log; the auth-user-pass file must be mode 0600 and credentials never appear on argv.
+.TP
+.B nmbv ks NAME on|off
+nftables kill switch (table inet nmbv_ks, replaced atomically, survives tunnel flaps). Only the tunnel, loopback, the endpoint and DHCP may leave; ports 53/853 outside the tunnel are dropped (DNS-leak guard). NMBV_KS_LAN=1 also allows LAN ranges.
+.TP
+.B nmbv run NAME cmd...
+Runs cmd in its own network namespace whose only route is the tunnel, with a tunnel-only resolv.conf.
+.TP
+.B nmbv watch NAME | rtt HOST | probe HOST
+Reconnect watchdog; ICMP round trip; path-MTU search (IPv4 only).
+.TP
+.B nmbv providers | relays P | connect P [--fastest] [--via COUNTRY]
+Mullvad (WireGuard, local keypair, device registration, optional multihop) and NordVPN (NordLynx). Secrets are read from files named by NMBV_MULLVAD_ACCOUNT_FILE / NMBV_NORD_TOKEN_FILE (mode 0600) and passed to curl on stdin, never on argv. NMBV_MULLVAD_DNS selects the resolver.
+.PP
+Tested: everything WireGuard and OpenVPN (real handshake and data between two user+network namespaces, policy routing, DNS restore, kill switch, watchdog, run, rtt/MTU) and the provider JSON parsers against saved samples (nmb_vpn_test.c, 134 checks, ASan/UBSan clean). Not tested: the live Mullvad and NordVPN APIs (need accounts), Mullvad multihop, --fastest on a real network, PreUp/PostUp hooks in run mode.
