@@ -10,6 +10,10 @@
  *                                          interface re-created) yields 0, never a huge bogus rate
  *   netman_metrics_fmt_rate / _fmt_bytes   "1.2 MB/s", "340 KiB" for the UI
  *   netman_metrics_find(&m, name)           (netman_metrics must be zero-initialised before the first poll)
+ *   netman_metrics_record(&m, unix_s)       append one TSV line per interface to DIR/IFACE.tsv (DIR = netman_metrics_dir,
+ *                                           default /var/lib/netman/metrics, env NETMAN_METRICS_DIR); columns:
+ *                                           unix_s rx_bytes tx_bytes rx_bps tx_bps rx_err tx_err rx_drop tx_drop oper
+ *                                           a file over 1 MiB is rotated to IFACE.tsv.1 (one generation kept)
  * Unprivileged; not thread-safe.
  */
 #ifndef NETMAN_METRICS_H
@@ -43,6 +47,8 @@ int netman_metrics_poll(netman_metrics *m, long now_ms);
 const netman_ifstat *netman_metrics_find(const netman_metrics *m, const char *name);
 void netman_metrics_fmt_rate(char *buf, size_t n, double bytes_per_s);
 void netman_metrics_fmt_bytes(char *buf, size_t n, uint64_t bytes);
+extern const char *netman_metrics_dir;
+int netman_metrics_record(const netman_metrics *m, long unix_s); /* interfaces written, or -1 when the directory is unusable */
 
 #endif /* NETMAN_METRICS_H */
 
@@ -54,14 +60,50 @@ void netman_metrics_fmt_bytes(char *buf, size_t n, uint64_t bytes);
 #include <dirent.h>
 #include <errno.h>
 #include <net/if.h>
+#ifndef IFF_LOWER_UP
+#define IFF_LOWER_UP 0x10000
+#endif
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <linux/if_link.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
+
+const char *netman_metrics_dir = "/var/lib/netman/metrics";
+
+int netman_metrics_record(const netman_metrics *m, long unix_s)
+{
+	const char *d = getenv("NETMAN_METRICS_DIR");
+	char path[512], old[520];
+	int i, done = 0;
+	struct stat sb;
+
+	if (!d || !*d) d = netman_metrics_dir;
+	if (mkdir(d, 0755) < 0 && errno != EEXIST) return -1;
+	for (i = 0; i < m->n; i++) {
+		const netman_ifstat *s = &m->s[i];
+		FILE *f;
+		int k;
+
+		/* an interface name from the kernel can hold anything but '/' and NUL; refuse the rest so a name never leaves DIR */
+		if (!s->name[0] || strchr(s->name, '/') || s->name[0] == '.') continue;
+		k = snprintf(path, sizeof path, "%s/%s.tsv", d, s->name);
+		if (k < 0 || (size_t)k >= sizeof path) continue;
+		if (stat(path, &sb) == 0 && sb.st_size > (1 << 20) && (size_t)snprintf(old, sizeof old, "%s.1", path) < sizeof old)
+			rename(path, old);
+		f = fopen(path, "a");
+		if (!f) continue;
+		fprintf(f, "%ld\t%llu\t%llu\t%.0f\t%.0f\t%llu\t%llu\t%llu\t%llu\t%s\n", unix_s, (unsigned long long)s->rx_bytes, (unsigned long long)s->tx_bytes,
+			s->rx_bps, s->tx_bps, (unsigned long long)s->rx_err, (unsigned long long)s->tx_err, (unsigned long long)s->rx_drop,
+			(unsigned long long)s->tx_drop, s->oper);
+		if (fclose(f) == 0) done++;
+	}
+	return done;
+}
 
 double netman_metrics_rate(uint64_t prev, uint64_t cur, long dt_ms)
 {

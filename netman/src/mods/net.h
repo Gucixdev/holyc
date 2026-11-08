@@ -893,6 +893,7 @@ static void netman__finalize(netman_lease *l)
 	if (l->lease_s != 0xffffffffu) {
 		if (!l->t1 || l->t1 >= l->lease_s) l->t1 = l->lease_s / 2;
 		if (!l->t2 || l->t2 >= l->lease_s || l->t2 <= l->t1) l->t2 = (uint32_t)((uint64_t)l->lease_s * 7 / 8);
+		if (l->t1 > l->t2) l->t1 = l->t2; /* server T1 above the derived T2 would skip the unicast renew (proved in lean4/Dhcp.lean) */
 	}
 	l->got = netman__now();
 }
