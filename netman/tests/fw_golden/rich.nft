@@ -1,0 +1,52 @@
+table inet netman
+delete table inet netman
+table inet netman {
+ chain c_pre {
+  type filter hook prerouting priority -300; policy accept;
+  udp sport 68 udp dport 67 accept
+  ip saddr 0.0.0.0 accept
+  fib saddr . iif oif missing drop
+ }
+ chain c_in {
+  type filter hook input priority 0; policy drop;
+  iifname "lo" accept
+  ct state { established, related } accept
+  ct state invalid drop
+  udp sport 67 udp dport 68 ip saddr != 192.168.1.1 drop comment "pinned dhcp server"
+  iifname "lo0" accept
+  iifname "eth0" udp dport 5353 accept comment "home mdns"
+  iifname "eth0" icmp type echo-request accept
+  iifname "wl0" icmp type echo-request drop
+  iifname "wl0" icmpv6 type echo-request drop
+  iifname "wl0" icmpv6 type nd-router-advert ip6 saddr != fe80::1 drop comment "ra guard"
+  iifname "wl0" ct state new limit rate over 30/second burst 60 packets drop
+  iifname "usb*" icmpv6 type nd-router-advert ip6 saddr != fe80::1 drop comment "ra guard"
+  iifname "usb*" udp sport 67 udp dport 68 accept
+  iifname "usb*" udp sport 547 udp dport 546 accept
+  iifname "usb*" icmpv6 type { nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+  iifname "usb*" drop comment "untrusted zone"
+  ct state new limit rate over 200/second burst 400 packets drop
+  iifname "eth0" ip saddr 10.0.0.0/8 tcp dport { 22, 80 } limit rate 5/second accept comment "ssh"
+  meta nfproto ipv6 tcp dport 23 log prefix "netman: " drop
+  udp sport 67 udp dport 68 accept comment "dhcp client"
+  udp sport 547 udp dport 546 accept comment "dhcpv6 client"
+  icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+  icmp type echo-request limit rate 5/second accept
+  icmpv6 type echo-request limit rate 5/second accept
+ }
+ chain c_fwd {
+  type filter hook forward priority 0; policy drop;
+  ct state { established, related } accept
+  ct state invalid drop
+  iifname "wl0" oifname "eth0" ct state { established, related, new } accept
+ }
+ chain c_out {
+  type filter hook output priority 0; policy accept;
+  oifname "lo" accept
+  oifname "wl0" tcp dport { 135, 139, 445 } drop comment "no smb on public wifi"
+  oifname "wl0" udp dport { 137, 138, 1900, 5353 } drop comment "no netbios/ssdp/mdns on public wifi"
+  oifname "usb*" tcp dport { 135, 139, 445 } drop comment "no smb on public wifi"
+  oifname "usb*" udp dport { 137, 138, 1900, 5353 } drop comment "no netbios/ssdp/mdns on public wifi"
+  ip daddr 203.0.113.0/24 udp dport 9999 reject
+ }
+}

@@ -1,0 +1,36 @@
+*filter
+:NETMAN - [0:0]
+:NETMAN_OUT - [0:0]
+:NETMAN_FWD - [0:0]
+:NETMAN_LIM - [0:0]
+:NETMAN_LIMZ - [0:0]
+-A NETMAN -i lo -j ACCEPT
+-A NETMAN -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A NETMAN -m conntrack --ctstate INVALID -j DROP
+-A NETMAN -i ap0 -p udp --dport 5353 -j ACCEPT
+-A NETMAN -i ap0 -p icmp --icmp-type echo-request -j ACCEPT
+-A NETMAN -i eth0 -p icmp --icmp-type echo-request -j DROP
+-A NETMAN -i eth0 -m conntrack --ctstate NEW -j NETMAN_LIMZ
+-A NETMAN -m conntrack --ctstate NEW -j NETMAN_LIM
+-A NETMAN_LIM -m limit --limit 200/second --limit-burst 400 -j RETURN
+-A NETMAN_LIM -j DROP
+-A NETMAN -i ap0 -p udp --dport 67 -m comment --comment "share dhcp" -j ACCEPT
+-A NETMAN -i ap0 -p udp --dport 53 -m comment --comment "share dns udp" -j ACCEPT
+-A NETMAN -i ap0 -p tcp --dport 53 -m comment --comment "share dns tcp" -j ACCEPT
+-A NETMAN -p udp --sport 67 --dport 68 -j ACCEPT
+-A NETMAN -p icmp --icmp-type echo-request -m limit --limit 5/second -j ACCEPT
+-A NETMAN -j DROP
+-A NETMAN_FWD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A NETMAN_FWD -m conntrack --ctstate INVALID -j DROP
+-A NETMAN_FWD -i ap0 -o eth0 -j ACCEPT
+-A NETMAN_FWD -j DROP
+-A NETMAN_OUT -o eth0 -p tcp -m multiport --dports 135,139,445 -j DROP
+-A NETMAN_OUT -o eth0 -p udp -m multiport --dports 137,138,1900,5353 -j DROP
+-A NETMAN_LIMZ -m limit --limit 30/second --limit-burst 60 -j RETURN
+-A NETMAN_LIMZ -j DROP
+COMMIT
+*nat
+:NETMAN_POST - [0:0]
+:NETMAN_PRE - [0:0]
+-A NETMAN_POST -o eth0 -j MASQUERADE
+COMMIT

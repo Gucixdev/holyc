@@ -1,0 +1,29 @@
+*filter
+:NETMAN - [0:0]
+:NETMAN_OUT - [0:0]
+:NETMAN_FWD - [0:0]
+:NETMAN_LIM - [0:0]
+:NETMAN_LIMZ - [0:0]
+-A NETMAN -i lo -j ACCEPT
+-A NETMAN -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A NETMAN -m conntrack --ctstate INVALID -j DROP
+-A NETMAN -m conntrack --ctstate NEW -j NETMAN_LIM
+-A NETMAN_LIM -m limit --limit 200/second --limit-burst 400 -j RETURN
+-A NETMAN_LIM -j DROP
+-A NETMAN -p udp --sport 67 --dport 68 -j ACCEPT
+-A NETMAN -p icmp --icmp-type echo-request -m limit --limit 5/second -j ACCEPT
+-A NETMAN -j DROP
+-A NETMAN_FWD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A NETMAN_FWD -m conntrack --ctstate INVALID -j DROP
+-A NETMAN_FWD -j DROP
+-A NETMAN_OUT -o wg0 -m comment --comment "killswitch tunnel" -j ACCEPT
+-A NETMAN_OUT -p udp -m multiport --dports 53,853 -m comment --comment "killswitch dns leak" -j DROP
+-A NETMAN_OUT -p tcp -m multiport --dports 53,853 -m comment --comment "killswitch dns leak" -j DROP
+-A NETMAN_OUT -d 203.0.113.9 -p udp --dport 51820 -m comment --comment "killswitch endpoint" -j ACCEPT
+-A NETMAN_LIMZ -m limit --limit 30/second --limit-burst 60 -j RETURN
+-A NETMAN_LIMZ -j DROP
+-A NETMAN_OUT -o lo -j ACCEPT
+-A NETMAN_OUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+-A NETMAN_OUT -p udp --sport 68 --dport 67 -j ACCEPT
+-A NETMAN_OUT -j DROP
+COMMIT

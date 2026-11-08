@@ -1,0 +1,8 @@
+table arp netman_arp
+delete table arp netman_arp
+table arp netman_arp {
+ chain in {
+  type filter hook input priority 0; policy accept;
+  arp saddr ip 192.168.1.1 arp saddr ether != aa:bb:cc:dd:ee:ff drop comment "pinned gateway"
+ }
+}
