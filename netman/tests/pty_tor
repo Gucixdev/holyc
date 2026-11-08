@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# pty_tor - the Tor tab and the VPN tab's profile types, in the real TUI inside `unshare -Urn` (nothing outside is touched; tor is not run).
+# Checks: the Tor tab exists only with tor.enabled, shows the status rows read-only, 80x24 and 40x12 fit; the VPN tab lists every profile type.
+set -u
+self=$(readlink -f "$0"); cd "$(dirname "$self")" || exit 1
+if [ -z "${NM_PTY_TOR_INNER:-}" ]; then
+	command -v tmux >/dev/null && command -v unshare >/dev/null || { echo "pty_tor: skipped (tmux/unshare missing)"; exit 0; }
+	unshare -Urn true 2>/dev/null || { echo "pty_tor: skipped (no user namespaces)"; exit 0; }
+	NM_PTY_TOR_INNER=1 exec unshare -Urn "$self"
+fi
+ip link set lo up
+work=$(mktemp -d); trap 'tmux -L nmtor kill-server 2>/dev/null; rm -rf "$work"' EXIT
+cc -std=gnu11 -Wall -Wextra -O2 -I../src -I../src/mods -o "$work/nm" ../src/netman.c ../src/config.c ../src/mods/enterprise.c ../src/mods/tether.c ../src/mods/licence.c ../src/mods/wireguard.c ../src/mods/vpnmod.c ../src/mods/openvpn.c ../src/mods/ipsec.c ../src/mods/l2tp.c ../src/mods/openconnect.c ../src/mods/sstp.c ../src/mods/vpnimport.c ../src/mods/tor.c || exit 1
+mkdir -p "$work/conf" "$work/vpn"; chmod 755 "$work"
+for f in swanctl.conf nm-l2tp.nmconnection nm-openconnect.nmconnection client.ovpn wg-quick.conf; do NETMAN_VPN_CONF_DIR="$work/vpn" "$work/nm" vpn import "vpn_samples/$f" >/dev/null 2>&1; done
+printf '[privileges]\nsudo = never\n[wifi]\nenabled = no\n[bluetooth]\nenabled = no\n[net]\nenabled = no\n[tor]\nenabled = yes\nprofile = %s/tor.conf\n' "$work" >"$work/c.conf"
+printf '[privileges]\nsudo = never\n[wifi]\nenabled = no\n[bluetooth]\nenabled = no\n[vpn]\nenabled = no\n[net]\nenabled = yes\n' >"$work/off.conf"
+printf 'exit de 1\n' >"$work/tor.conf"
+T="tmux -L nmtor"
+pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/      | /'; }
+snap() { $T capture-pane -p -t t; }
+has() { local s i; for i in $(seq 1 16); do s=$(snap); grep -qF -- "$1" <<<"$s" && { ok; return; }; sleep 0.25; done; no "$2 (wanted '$1')" "$s"; }
+hasnt() { local s i; for i in $(seq 1 16); do s=$(snap); grep -qF -- "$1" <<<"$s" || { ok; return; }; sleep 0.25; done; no "$2 (did not want '$1')" "$s"; }
+keys() { $T send-keys -t t "$@"; sleep 0.6; }
+start() { $T kill-server 2>/dev/null; $T -u new-session -d -s t -x "$1" -y "$2" "NETMAN_VPN_CONF_DIR=$work/vpn NETMAN_CONFIG=$3 LANG=C.UTF-8 TERM=xterm-256color $work/nm -tui; echo EXIT:\$?; sleep 30"; sleep 2; }
+
+start 100 26 "$work/off.conf"
+has "1 Ethernet" "tabs present"; hasnt "Tor" "no Tor tab when tor.enabled = no"
+start 100 26 "$work/c.conf"
+has "Tor" "the Tor tab exists when tor.enabled = yes"
+keys 2
+has "not running" "status row: not running"; has "transparent" "mode shown"; has "de (strict)" "exit country from the profile shown"; has "socks" "SOCKS settings row"
+has "read-only" "read-only hint"
+start 100 26 "$work/c.conf"
+keys 1
+for t in wireguard openvpn ipsec l2tp openconnect; do has "$t" "VPN tab lists type $t"; done
+for size in "80 24" "40 12"; do
+	set -- $size
+	start "$1" "$2" "$work/c.conf"
+	keys 2
+	s=$(snap); w=$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' <<<"$s")
+	[ "$w" -le "$1" ] && ok || no "no row wider than $1 at $1x$2" "$s"
+	has "Tor" "tab title at $1x$2"; has "q quit" "keybar survives at $1x$2"
+	keys q; has "EXIT:0" "clean exit at $1x$2"
+done
+echo "pty_tor: $pass ok, $fail failed"
+[ "$fail" -eq 0 ]

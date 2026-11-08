@@ -53,6 +53,16 @@
 # killswitch = no
 # The daemon reconnects a tunnel that died or whose handshake went stale.
 # watchdog = yes
+# OpenVPN profiles (NAME.ovpn). no = `vpn up` refuses them.
+# openvpn = yes
+# IPsec / IKEv2 profiles (Type = ipsec, strongSwan swanctl). no = `vpn up` refuses them.
+# ipsec = yes
+# L2TP/IPsec profiles (Type = l2tp, xl2tpd + pppd). no = `vpn up` refuses them.
+# l2tp = yes
+# OpenConnect profiles: AnyConnect, GlobalProtect, Pulse, ... (Type = openconnect). no = `vpn up` refuses them.
+# openconnect = yes
+# SSTP profiles are recognised but not supported (no maintained client): this only changes the message.
+# sstp = yes
 
 [firewall]
 # Firewall management. no = fw apply / confirm / rollback are refused (show, plan, diff and preset still work). Off by default: it changes your rules.
@@ -103,6 +113,34 @@
 # enabled = yes
 # Seconds between the daemon's looks at the links and the Wi-Fi state (it emits the D-Bus signals for whatever changed). (1..3600)
 # refresh_s = 5
+
+[tor]
+# Tor routing (`netman tor ...`, the Tor tab). Off by default: it loads a fail-closed firewall table and runs a tor process. Needs tor installed.
+# enabled = no
+# transparent: nftables sends the routed users' TCP and DNS through Tor and DROPS everything else (no leaks). socks: only prints the SOCKS address; apps that ignore it are not protected. (transparent|socks)
+# mode = transparent
+# Tor SocksPort on 127.0.0.1 (per-app mode). (1..65535)
+# socks_port = 9050
+# Tor TransPort on 127.0.0.1 (transparent mode). (1..65535)
+# trans_port = 9040
+# Tor DNSPort on 127.0.0.1 (transparent mode). (1..65535)
+# dns_port = 5353
+# Tor ControlPort on 127.0.0.1. 0 = a unix socket in tor.dir (default, safer). Cookie authentication either way. (0..65535)
+# control_port = 0
+# Where the generated torrc, data directory, cookie and hidden-service keys live (tmpfs by default).
+# dir = /run/netman/tor
+# Persisted bridges, exit country and hidden services (what `netman tor bridge|exit|hs` edit).
+# profile = /etc/netman/tor.conf
+# Account tor runs as. Its traffic is the only one the firewall lets out.
+# user = tor
+# Numeric uids forced through Tor, comma separated. Empty = everybody but tor's own user.
+# route_uids = ""
+# Interfaces whose forwarded traffic (hotspot, router) is also forced through Tor, e.g. wlan1. Empty = none.
+# route_ifaces = ""
+# obfs4 pluggable transport binary, used when an obfs4 bridge is set.
+# obfs4_bin = /usr/bin/obfs4proxy
+# Snowflake pluggable transport binary, used when a snowflake bridge is set.
+# snowflake_bin = /usr/bin/snowflake-client
 
 [tui]
 # TUI colours. (default|mono|light)

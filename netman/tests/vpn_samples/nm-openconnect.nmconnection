@@ -1,0 +1,9 @@
+[connection]
+id=corp-oc
+type=vpn
+
+[vpn]
+service-type=org.freedesktop.NetworkManager.openconnect
+gateway=vpn.corp.example
+protocol=gp
+username=dave

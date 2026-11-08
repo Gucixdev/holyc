@@ -20,7 +20,7 @@ static const Key keys[NC_N] = {
 	NC_KEYS(X)
 #undef X
 };
-static const char *const sections[] = { "wifi", "bluetooth", "net", "roaming", "vpn", "firewall", "enterprise", "licence", "tether", "wireguard", "metrics", "tui", "privileges", NULL };
+static const char *const sections[] = { "wifi", "bluetooth", "net", "roaming", "vpn", "firewall", "enterprise", "licence", "tether", "wireguard", "nmapi", "tor", "metrics", "tui", "privileges", NULL };
 
 const char *netman_config_section(int k) { return keys[k].sec; }
 const char *netman_config_name(int k) { return keys[k].name; }
@@ -175,6 +175,12 @@ int netman_config_check_value(int k, const char *v, char *norm, size_t nn, char 
 	}
 	if (!strcmp(t, "cmd")) {   /* a command line run without a shell: empty (= none) or an absolute program path first */
 		if (*v && v[0] != '/') { seterr(msg, mn, "%s must be empty or start with an absolute program path (got '%s')", full, v); return -1; }
+		snprintf(norm, nn, "%s", v);
+		return 0;
+	}
+	if (!strcmp(t, "list")) {   /* names, numbers, commas and spaces: uids, interface names, account names */
+		if (strlen(v) >= 96) { seterr(msg, mn, "%s is longer than 95 bytes", full); return -1; }
+		for (const char *q = v; *q; q++) if (!(isalnum((unsigned char)*q) || strchr(",_. -", *q))) { seterr(msg, mn, "%s may hold letters, digits, comma, space and _ . - only (got '%s')", full, v); return -1; }
 		snprintf(norm, nn, "%s", v);
 		return 0;
 	}
@@ -398,7 +404,7 @@ void netman_config_show(const netman_config *c, FILE *o)
 	for (int k = 0; k < NC_N; k++) {
 		char val[300];
 		if (strcmp(cur, keys[k].sec)) { fprintf(o, "%s[%s]\n", *cur ? "\n" : "", keys[k].sec); cur = keys[k].sec; }
-		if (!strcmp(keys[k].type, "url") || !strcmp(keys[k].type, "path") || !strcmp(keys[k].type, "cmd")) snprintf(val, sizeof val, "\"%s\"", c->v[k]);
+		if (!strcmp(keys[k].type, "url") || !strcmp(keys[k].type, "list") || !strcmp(keys[k].type, "path") || !strcmp(keys[k].type, "cmd")) snprintf(val, sizeof val, "\"%s\"", c->v[k]);
 		else snprintf(val, sizeof val, "%s", c->v[k]);
 		fprintf(o, "%-16s = %-48s # %s\n", keys[k].name, val, c->origin[k]);
 	}
@@ -419,7 +425,7 @@ void netman_config_example(FILE *o)
 		if (!strncmp(t, "enum:", 5)) fprintf(o, " (%s)", t + 5);
 		else if (!strncmp(t, "int:", 4)) { long lo = strtol(t + 4, NULL, 10), hi = strtol(strchr(t + 4, ':') + 1, NULL, 10); fprintf(o, " (%ld..%ld)", lo, hi); }
 		fputc('\n', o);
-		fprintf(o, "# %s = %s\n", keys[k].name, !strcmp(t, "url") || !strcmp(t, "path") || !strcmp(t, "cmd") ? (!*keys[k].def ? "\"\"" : keys[k].def) : keys[k].def);
+		fprintf(o, "# %s = %s\n", keys[k].name, !strcmp(t, "url") || !strcmp(t, "list") || !strcmp(t, "path") || !strcmp(t, "cmd") ? (!*keys[k].def ? "\"\"" : keys[k].def) : keys[k].def);
 	}
 }
 

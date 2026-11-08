@@ -1,6 +1,6 @@
 /* netman - network + Bluetooth manager, a NetworkManager/bluez drop-in in plain C.
  *
- * Build (see ./run):  cc -std=gnu11 -O2 -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c src/mods/wireguard.c -o bin/netman
+ * Build (see ./run):  cc -std=gnu11 -O2 -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c src/mods/wireguard.c src/mods/vpnmod.c src/mods/openvpn.c src/mods/ipsec.c src/mods/l2tp.c src/mods/openconnect.c src/mods/sstp.c src/mods/vpnimport.c src/mods/tor.c -o bin/netman
  * One translation unit: the stb-style modules in src/mods/, the command table (cli.h), help (help.c) and the TUI (tui.h) are included here.
  * `netman help` lists every command; the table in cli.h is the single source for dispatch, root decision, help and the man page.
  */
@@ -20,6 +20,7 @@
 #define NETMAN_VPN_IMPLEMENTATION
 #define NETMAN_FW_IMPLEMENTATION
 #include "mods/vpn.h"   /* first: its system includes must precede net.h's IFF_LOWER_UP fallback define */
+#include "mods/tor.h"
 #include "mods/net.h"
 #include "mods/scoring.h"
 #include "mods/roaming.h"

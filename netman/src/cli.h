@@ -21,12 +21,19 @@ static int nc_usage(const nc_cmd *c) { fprintf(stderr, "usage: netman %s %s\n", 
 
 /* ---- config -> module globals ------------------------------------------------------------------------------------- */
 
+static int nc_vpn_type_on(const char *type)
+{
+	static const struct { const char *t; int k; } m[] = { { "openvpn", NC_VPN_OPENVPN }, { "ipsec", NC_VPN_IPSEC }, { "l2tp", NC_VPN_L2TP }, { "openconnect", NC_VPN_OPENCONNECT }, { "sstp", NC_VPN_SSTP } };
+	for (unsigned i = 0; i < sizeof m / sizeof *m; i++) if (!strcmp(type, m[i].t)) return netman_config_bool(&nc_cfg, m[i].k);
+	return 1;
+}
 static char nc_probe_host[160], nc_probe_path[256];
 static void nc_apply(const netman_config *c)
 {
 	const char *b = netman_config_str(c, NC_WIFI_BACKEND), *d = netman_config_str(c, NC_NET_DNS_MODE), *u = netman_config_str(c, NC_ROAM_PROBE_URL);
 	int port = 80;
 	netman_vpn_env();
+	netman_vpn_enabled_cb = nc_vpn_type_on;
 	{ const char *e = getenv("NETMAN_CONF_DIR"); if (e && *e) netman_conf_dir = e; }   /* profile directory (NAME.conf / NAME.ent), default /etc/netman: relocation and tests */
 	netman_lic_dir = netman_config_str(c, NC_LIC_DIR);
 	netman_lic_warn_days = netman_config_int(c, NC_LIC_WARN);
@@ -48,14 +55,14 @@ static int nc_vpn_has_profiles(void)
 	struct dirent *e;
 	int found = 0;
 	if (!d) return errno == EACCES;
-	while (!found && (e = readdir(d))) { const char *dot = strrchr(e->d_name, '.'); found = dot && (!strcmp(dot, ".conf") || !strcmp(dot, ".ovpn")); }
+	while (!found && (e = readdir(d))) { const char *dot = strrchr(e->d_name, '.'); found = dot && (!strcmp(dot, ".conf") || !strcmp(dot, ".ovpn") || !strcmp(dot, ".vpn")); }
 	closedir(d);
 	return found;
 }
 
 static int nc_enabled(const char *module)
 {
-	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED }, { "wireguard", NC_WG_ENABLED }, { "nmapi", NC_NMAPI_ENABLED } };
+	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED }, { "wireguard", NC_WG_ENABLED }, { "nmapi", NC_NMAPI_ENABLED }, { "tor", NC_TOR_ENABLED } };
 	if (!module) return 1;
 	for (unsigned i = 0; i < sizeof t / sizeof *t; i++) if (!strcmp(module, t[i].m)) return netman_config_bool(&nc_cfg, t[i].k);
 	return 1;
@@ -236,6 +243,28 @@ static int h_roam_prefer(const nc_cmd *c, int n, char **a)   /* PROFILE PRIORITY
 }
 
 /* ---- vpn ----------------------------------------------------------------------------------------------------------- */
+
+static void nc_tor_cfg(netman_tor_cfg *o)
+{
+	const netman_config *c = &nc_cfg;
+	netman_tor_defaults(o);
+	snprintf(o->mode, sizeof o->mode, "%s", netman_config_str(c, NC_TOR_MODE)); snprintf(o->dir, sizeof o->dir, "%s", netman_config_str(c, NC_TOR_DIR));
+	snprintf(o->persist, sizeof o->persist, "%s", netman_config_str(c, NC_TOR_PROFILE)); snprintf(o->tor_user, sizeof o->tor_user, "%s", netman_config_str(c, NC_TOR_USER));
+	snprintf(o->route_uids, sizeof o->route_uids, "%s", netman_config_str(c, NC_TOR_UIDS)); snprintf(o->route_ifaces, sizeof o->route_ifaces, "%s", netman_config_str(c, NC_TOR_IFACES));
+	snprintf(o->obfs4_bin, sizeof o->obfs4_bin, "%s", netman_config_str(c, NC_TOR_OBFS4)); snprintf(o->snowflake_bin, sizeof o->snowflake_bin, "%s", netman_config_str(c, NC_TOR_SNOW));
+	o->socks_port = netman_config_int(c, NC_TOR_SOCKS); o->trans_port = netman_config_int(c, NC_TOR_TRANS); o->dns_port = netman_config_int(c, NC_TOR_DNS); o->control_port = netman_config_int(c, NC_TOR_CONTROL);
+	o->out = stdout; o->err = stderr;
+}
+static int h_tor(const nc_cmd *c, int n, char **a)   /* "tor bridge add X" -> {bridge, add, X} */
+{
+	netman_tor_cfg o; char *av[24]; int k = 0;
+	if (!nc_enabled("tor")) { fputs("netman: tor is disabled in config (netman config toggle tor.enabled)\n", stderr); return 3; }
+	nc_tor_cfg(&o);
+	av[k++] = (char *)(strchr(c->name, ' ') + 1);
+	for (int i = 0; i < n && k < 22; i++) av[k++] = a[i];
+	av[k] = NULL;
+	return netman_tor_main(&o, k, av);
+}
 
 static int h_vpn(const nc_cmd *c, int n, char **a)   /* the library's own front end: "vpn up X" -> {vpn, up, X} */
 {
@@ -656,8 +685,15 @@ static const nc_cmd nc_table[] = {
 	{ "net profile apply", "NAME", h_prof_apply, R_YES, "net", "bring a profile up", "" },
 	{ "roam status", "", h_roam_status, R_NO, "roaming", "probe setting and the score of each live interface", "" },
 	{ "roam prefer", "PROFILE PRIORITY", h_roam_prefer, R_YES, "roaming", "set a profile priority (higher wins)", "" },
-	{ "vpn list", "", h_vpn, R_NO, "vpn", "WireGuard and OpenVPN profiles and their state", "" },
-	{ "vpn import", "FILE [NAME]", h_vpn, R_YES, "vpn", "copy a WireGuard / OpenVPN config into the profile dir (/etc/netman/vpn, mode 0600)", "Refuses to overwrite. Directory override: env NETMAN_VPN_CONF_DIR." },
+	{ "tor up", "", h_tor, R_YES, "tor", "start Tor and the fail-closed firewall (transparent mode: all TCP + DNS via Tor, everything else dropped)", "Needs tor installed. Rules go in BEFORE tor starts and stay until `tor down`. Threat model: see the readme; Tor does not anonymise logged-in accounts." },
+	{ "tor down", "", h_tor, R_YES, "tor", "stop Tor, then remove the firewall table", "" },
+	{ "tor status", "", h_tor, R_NO, "tor", "mode, bootstrap %, circuits, exit ip, bridges, hidden services, SOCKS settings", "" },
+	{ "tor newnym", "", h_tor, R_YES, "tor", "new Tor identity: fresh circuits for new connections", "" },
+	{ "tor bridge", "add LINE | clear", h_tor, R_YES, "tor", "set or clear obfs4 / snowflake bridges", "LINE e.g. 'obfs4 1.2.3.4:443 FINGERPRINT cert=... iat-mode=0'." },
+	{ "tor exit", "CC|off", h_tor, R_YES, "tor", "force the exit country (strict)", "" },
+	{ "tor hs", "add NAME PORT HOST:PORT | list | del NAME", h_tor, R_YES, "tor", "onion services: publish a local port as a .onion", "" },
+	{ "vpn list", "", h_vpn, R_NO, "vpn", "VPN profiles (WireGuard, OpenVPN, IPsec/IKEv2, L2TP, OpenConnect) and their state", "" },
+	{ "vpn import", "FILE [NAME]", h_vpn, R_YES, "vpn", "import a VPN profile: WireGuard / OpenVPN / NetworkManager .nmconnection / strongSwan conf / netman .vpn (into /etc/netman/vpn, mode 0600)", "Refuses to overwrite. Converts NetworkManager keyfiles (wireguard, openvpn, strongswan, l2tp, openconnect) and strongSwan swanctl.conf / ipsec.conf; PPTP is refused (insecure). Passwords kept in secret stores are not imported; the note says what was left out. Directory override: env NETMAN_VPN_CONF_DIR." },
 	{ "vpn info", "NAME", h_vpn, R_YES, "vpn", "everything known about one profile: endpoint, handshake, transfer, allowed ips, split or full tunnel, kill switch", "" },
 	{ "vpn up", "NAME [WAIT_S]", h_vpn, R_YES, "vpn", "bring a tunnel up (plus the kill switch if vpn.killswitch)", "" },
 	{ "vpn down", "NAME", h_vpn, R_YES, "vpn", "take a tunnel down", "" },

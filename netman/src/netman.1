@@ -109,11 +109,32 @@ probe setting and the score of each live interface
 .B netman roam prefer PROFILE PRIORITY
 set a profile priority (higher wins)
 .TP
+.B netman tor up
+start Tor and the fail\-closed firewall (transparent mode: all TCP + DNS via Tor, everything else dropped). Needs tor installed. Rules go in BEFORE tor starts and stay until `tor down`. Threat model: see the readme; Tor does not anonymise logged\-in accounts.
+.TP
+.B netman tor down
+stop Tor, then remove the firewall table
+.TP
+.B netman tor status
+mode, bootstrap %, circuits, exit ip, bridges, hidden services, SOCKS settings
+.TP
+.B netman tor newnym
+new Tor identity: fresh circuits for new connections
+.TP
+.B netman tor bridge add LINE | clear
+set or clear obfs4 / snowflake bridges. LINE e.g. 'obfs4 1.2.3.4:443 FINGERPRINT cert=... iat\-mode=0'.
+.TP
+.B netman tor exit CC|off
+force the exit country (strict)
+.TP
+.B netman tor hs add NAME PORT HOST:PORT | list | del NAME
+onion services: publish a local port as a .onion
+.TP
 .B netman vpn list
-WireGuard and OpenVPN profiles and their state
+VPN profiles (WireGuard, OpenVPN, IPsec/IKEv2, L2TP, OpenConnect) and their state
 .TP
 .B netman vpn import FILE [NAME]
-copy a WireGuard / OpenVPN config into the profile dir (/etc/netman/vpn, mode 0600). Refuses to overwrite. Directory override: env NETMAN_VPN_CONF_DIR.
+import a VPN profile: WireGuard / OpenVPN / NetworkManager .nmconnection / strongSwan conf / netman .vpn (into /etc/netman/vpn, mode 0600). Refuses to overwrite. Converts NetworkManager keyfiles (wireguard, openvpn, strongswan, l2tp, openconnect) and strongSwan swanctl.conf / ipsec.conf; PPTP is refused (insecure). Passwords kept in secret stores are not imported; the note says what was left out. Directory override: env NETMAN_VPN_CONF_DIR.
 .TP
 .B netman vpn info NAME
 everything known about one profile: endpoint, handshake, transfer, allowed ips, split or full tunnel, kill switch
@@ -379,6 +400,21 @@ WireGuard / OpenVPN / provider support: the vpn commands, the VPN tab. Default: 
 .B vpn.watchdog
 The daemon reconnects a tunnel that died or whose handshake went stale. Default: yes.
 .TP
+.B vpn.openvpn
+OpenVPN profiles (NAME.ovpn). no = `vpn up` refuses them. Default: yes.
+.TP
+.B vpn.ipsec
+IPsec / IKEv2 profiles (Type = ipsec, strongSwan swanctl). no = `vpn up` refuses them. Default: yes.
+.TP
+.B vpn.l2tp
+L2TP/IPsec profiles (Type = l2tp, xl2tpd + pppd). no = `vpn up` refuses them. Default: yes.
+.TP
+.B vpn.openconnect
+OpenConnect profiles: AnyConnect, GlobalProtect, Pulse, ... (Type = openconnect). no = `vpn up` refuses them. Default: yes.
+.TP
+.B vpn.sstp
+SSTP profiles are recognised but not supported (no maintained client): this only changes the message. Default: yes.
+.TP
 .B firewall.enabled
 Firewall management. no = fw apply / confirm / rollback are refused (show, plan, diff and preset still work). Off by default: it changes your rules. Default: no.
 .TP
@@ -432,6 +468,45 @@ NetworkManager D\-Bus API (org.freedesktop.NetworkManager) served by `netman dae
 .TP
 .B nmapi.refresh_s
 Seconds between the daemon's looks at the links and the Wi\-Fi state (it emits the D\-Bus signals for whatever changed). Default: 5.
+.TP
+.B tor.enabled
+Tor routing (`netman tor ...`, the Tor tab). Off by default: it loads a fail\-closed firewall table and runs a tor process. Needs tor installed. Default: no.
+.TP
+.B tor.mode
+transparent: nftables sends the routed users' TCP and DNS through Tor and DROPS everything else (no leaks). socks: only prints the SOCKS address; apps that ignore it are not protected. Default: transparent.
+.TP
+.B tor.socks_port
+Tor SocksPort on 127.0.0.1 (per\-app mode). Default: 9050.
+.TP
+.B tor.trans_port
+Tor TransPort on 127.0.0.1 (transparent mode). Default: 9040.
+.TP
+.B tor.dns_port
+Tor DNSPort on 127.0.0.1 (transparent mode). Default: 5353.
+.TP
+.B tor.control_port
+Tor ControlPort on 127.0.0.1. 0 = a unix socket in tor.dir (default, safer). Cookie authentication either way. Default: 0.
+.TP
+.B tor.dir
+Where the generated torrc, data directory, cookie and hidden\-service keys live (tmpfs by default). Default: /run/netman/tor.
+.TP
+.B tor.profile
+Persisted bridges, exit country and hidden services (what `netman tor bridge|exit|hs` edit). Default: /etc/netman/tor.conf.
+.TP
+.B tor.user
+Account tor runs as. Its traffic is the only one the firewall lets out. Default: tor.
+.TP
+.B tor.route_uids
+Numeric uids forced through Tor, comma separated. Empty = everybody but tor's own user. Default: .
+.TP
+.B tor.route_ifaces
+Interfaces whose forwarded traffic (hotspot, router) is also forced through Tor, e.g. wlan1. Empty = none. Default: .
+.TP
+.B tor.obfs4_bin
+obfs4 pluggable transport binary, used when an obfs4 bridge is set. Default: /usr/bin/obfs4proxy.
+.TP
+.B tor.snowflake_bin
+Snowflake pluggable transport binary, used when a snowflake bridge is set. Default: /usr/bin/snowflake\-client.
 .TP
 .B tui.theme
 TUI colours. Default: default.

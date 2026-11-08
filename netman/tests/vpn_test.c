@@ -1,6 +1,6 @@
 /* vpn_test.c - tests for vpn.h.
  *
- *   cc -std=gnu11 -O1 -o vpn_test vpn_test.c ../src/mods/wireguard.c && ./vpn_test        pure tests: crypto vectors, parser, fuzz, JSON, providers, DNS files
+ *   cc -std=gnu11 -O1 -o vpn_test vpn_test.c ../src/mods/wireguard.c ../src/mods/vpnmod.c ../src/mods/openvpn.c ../src/mods/ipsec.c ../src/mods/l2tp.c ../src/mods/openconnect.c ../src/mods/sstp.c ../src/mods/vpnimport.c ../src/mods/tor.c && ./vpn_test        pure tests: crypto vectors, parser, fuzz, JSON, providers, DNS files
  *   ./vpn_test ns                                                         + live tests inside `unshare -Urn` (never touches the host network)
  *
  * The live part refuses to run unless it is inside a non-initial user namespace with an empty network namespace (only "lo"),
@@ -21,6 +21,7 @@ static int fails, passes;
 static unsigned long long rs = 88172645463325252ULL;
 static unsigned rnd(void) { rs ^= rs << 13; rs ^= rs >> 7; rs ^= rs << 17; return (unsigned)(rs >> 11); }
 
+static const char *netman_vpn__mstate_ov(const char *n) { return netman_vpn__mstate(n, 2); }
 static void unhex(const char *h, unsigned char *o, int n) { for (int i = 0; i < n; i++) { unsigned v; sscanf(h + 2 * i, "%2x", &v); o[i] = (unsigned char)v; } }
 
 static char *slurp_file(const char *p, size_t *l) { return netman_vpn__slurp(p, l, 1 << 24, 0); }
@@ -360,19 +361,19 @@ static void live_openvpn(void) {
     int a = netman_vpn_up("ovA", 0), b = netman_vpn_up("ovB", 25);
     CHK(a == 0 && b == 0, "openvpn pair started (a=%d b=%d)", a, b);
     if (a || b) { netman_vpn_out = NULL; netman_vpn_logs(a ? "ovA" : "ovB", 12); netman_vpn_out = dn; }
-    int con = 0; for (int i = 0; i < 100 && !con; i++) { con = !strcmp(netman_vpn__ovpn_state("ovA"), "connected") && !strcmp(netman_vpn__ovpn_state("ovB"), "connected"); if (!con) usleep(200000); }
-    CHK(con, "openvpn static-key pair reaches 'Initialization Sequence Completed' (A=%s B=%s)", netman_vpn__ovpn_state("ovA"), netman_vpn__ovpn_state("ovB"));
+    int con = 0; for (int i = 0; i < 100 && !con; i++) { con = !strcmp(netman_vpn__mstate_ov("ovA"), "connected") && !strcmp(netman_vpn__mstate_ov("ovB"), "connected"); if (!con) usleep(200000); }
+    CHK(con, "openvpn static-key pair reaches 'Initialization Sequence Completed' (A=%s B=%s)", netman_vpn__mstate_ov("ovA"), netman_vpn__mstate_ov("ovB"));
     char buf[4096]; sh("ip -o addr show", buf, sizeof buf);
     OK(strstr(buf, "10.9.0.1") || strstr(buf, "10.9.0.2"), "openvpn created its tun device");
     netman_vpn_out = NULL; netman_vpn_status("ovA"); netman_vpn_list(); netman_vpn_out = dn;
     OK(netman_vpn_down("ovA") == 0 && netman_vpn_down("ovB") == 0, "openvpn stopped via pidfile (cmdline verified)");
-    OK(!strcmp(netman_vpn__ovpn_state("ovA"), "down"), "state is down afterwards");
+    OK(!strcmp(netman_vpn__mstate_ov("ovA"), "down"), "state is down afterwards");
     char pf[600]; snprintf(pf, sizeof pf, "%s/ovC.pid", RUND); char me[32]; snprintf(me, sizeof me, "%d\n", (int)getpid()); netman_vpn__spit(pf, me, strlen(me), 0600);
-    OK(!netman_vpn__ovpn_pid("ovC", NULL), "pidfile of an unrelated live process is not trusted");
+    OK(!netman_vm_pid_alive(pf, "openvpn", NULL), "pidfile of an unrelated live process is not trusted");
     wfile("ovP.conf", "client\ndev tun\nremote 127.0.0.1 1194\nauth-user-pass ovP.auth\n", 0600);
     wfile("ovP.auth", "user\nhunter2\n", 0644);
     FILE *se = netman_vpn_err; netman_vpn_err = dn; OK(netman_vpn_up("ovP", 0) != 0, "auth file readable by others is refused (and no openvpn started)"); netman_vpn_err = se;
-    OK(!netman_vpn__ovpn_pid("ovP", NULL), "nothing was started");
+    snprintf(pf, sizeof pf, "%s/ovP.pid", RUND); OK(!netman_vm_pid_alive(pf, "openvpn", NULL), "nothing was started");
     wfile("ovQ.conf", "client\ndev tun\nremote 127.0.0.1 1194\nauth-user-pass\n", 0600);
     netman_vpn_err = dn; OK(netman_vpn_up("ovQ", 0) != 0, "interactive auth-user-pass without NAME.auth is refused"); netman_vpn_err = se;
     netman_vpn_out = save; fclose(dn);

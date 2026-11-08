@@ -19,7 +19,7 @@ for Wi-Fi and bluez for Bluetooth, plus own netlink/DHCP/DNS, WireGuard/OpenVPN,
     src/config.c/.h     settings file + env (NC_KEYS table); src/netman.conf.example is documented and kept in sync by a test
     src/priv.h          when to re-run through sudo
     src/tui.h           the terminal UI
-    src/mods/           stb-style libraries: wifi.h btth.h dbus.h net.h roaming.h scoring.h metrics.h vpn.h firewall.h wireguard.h (+ wireguard.c, enterprise.c, tether.c, licence.c: plain .c, not stb) (+ empty mesh/ssh/onion_route)
+    src/mods/           stb-style libraries: wifi.h btth.h dbus.h net.h roaming.h scoring.h metrics.h vpn.h firewall.h wireguard.h (+ wireguard.c, enterprise.c, tether.c, licence.c: plain .c, not stb) (+ vpnmod/openvpn/ipsec/l2tp/openconnect/sstp/vpnimport/tor .c: the VPN client modules, profile import, Tor; empty mesh/ssh stubs)
     src/daemon.c, daemonless.c   placeholders for the future daemon (it must respect the same config)
 
 ## use
@@ -71,13 +71,41 @@ Tabs Wi-Fi | Ethernet/IP | Bluetooth | VPN | Enterprise (read-only, only with en
   password is reported with a retry, backend errors appear in the modal); 802.1X asks identity then password; OPEN asks for confirmation; a hidden row asks for the SSID.
 - Ethernet/IP: per-interface state, speed, live rx/tx, addresses, gateway (refreshes every second). VPN: profiles with state, enter = up/down.
 
+## VPN types, import, Tor
+
+`netman vpn up NAME` picks the client from the profile in `/etc/netman/vpn` (root-owned, 0600): `NAME.conf` WireGuard (native, no wg-quick),
+`NAME.ovpn` OpenVPN, `NAME.vpn` everything else, a `Key = value` file whose `Type =` selects the module (each is its own .c/.h in `src/mods`).
+Every type gets the kill switch (`vpn killswitch`, `vpn.killswitch`), PreUp/PostUp/PreDown/PostDown hooks and a config toggle
+(`netman config toggle vpn.ipsec` ...). Secrets never go on a command line: root-only files or the client's stdin.
+
+    Type = ipsec        strongSwan: writes swanctl.conf, drives `swanctl --load-all/--initiate/--terminate`. Auth = eap | psk | cert
+    Type = l2tp         xl2tpd + pppd (+ a swanctl transport SA when PSK is set; a PSK profile without swanctl is refused, never plain L2TP)
+    Type = openconnect  the `openconnect` binary, Protocol = anyconnect|gp|nc|pulse|f5|fortinet|array, password via --passwd-on-stdin, Routes = split tunnel
+    Type = sstp         recognised, NOT supported (no maintained client); `up` says so
+
+Common keys: `Server`, `Username`, `Password`, `Routes` (empty = full tunnel), `Cert`/`Key`/`CA`; see `netman vpn info NAME` for what a profile resolved to.
+PPTP is deliberately not implemented: its MS-CHAPv2/MPPE encryption is broken (an import of a PPTP profile is refused with that reason).
+charon-cmd is not driven (it prompts on a terminal); swanctl is.
+
+`netman vpn import FILE [NAME]` takes a WireGuard wg-quick `.conf`, an OpenVPN `.ovpn`, a NetworkManager `.nmconnection` keyfile
+(`wireguard`, and `vpn` with openvpn / strongswan / l2tp / openconnect), a strongSwan `swanctl.conf` or `ipsec.conf`, or a native `.vpn`. What could not be
+carried over (passwords in NM's secret agent or ipsec.secrets, unknown options) is printed as `note:`.
+
+`netman tor up|down|status|newnym|bridge add|clear|exit CC|off|hs add|list|del` (`tor.enabled = yes`, off by default; Tor tab in the TUI): manages a `tor`
+process from a generated torrc in `/run/netman/tor` (SocksPort, TransPort, DNSPort, control socket + cookie auth, bridges obfs4/snowflake, ExitNodes/StrictNodes,
+IsolateDestAddr). `tor.mode = transparent` loads nft table `inet netman_tor` BEFORE starting tor: TCP of the routed uids goes to the TransPort, DNS to the DNSPort,
+everything else (UDP/QUIC, ICMP, IPv6) is dropped, and it stays so if tor dies (fail closed) until `tor down`. `mode = socks` only prints the SOCKS address.
+Threat model, honestly: Tor hides your network location from the sites you visit and the sites from your ISP. It does not anonymise you if you log in to accounts,
+reuse identities, open downloaded files, or use apps that put your identity in the payload; transparent routing does not stop browser fingerprinting (use Tor Browser)
+and a global observer of both ends can still correlate. Local services on 127.0.0.1 other than Tor's ports are blocked while it is up.
+
 ## tests (`tests/`)
 
     cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c src/mods/enterprise.c src/mods/tether.c src/mods/licence.c src/mods/wireguard.c && /tmp/nm_logic   76 checks (parsers, width, render, modals)
     tests/pty                                    the real binary in tmux against fake iwd / wpa_supplicant / bluez (tests/fakes.c): 105 checks
     tests/cli_test                               help, man sync, config, module gating, exit codes (41)
     cc -std=gnu11 -Isrc -o /tmp/nm_priv tests/priv_test.c; cc ... tests/config_test.c src/config.c [src/netman.conf.example]   15 / 77
-    tests/pty_ent (Enterprise tab, 80x24 and 40x12), tests/pty_vpn (real WireGuard in unshare -Urn, drives the VPN tab), tests/wifi_bt_test.c (75), net_test (+ `selftest` under unshare -Urn), vpn_test (+ live WireGuard peer edits under ns), fw_test, net_score_test (unshare -Urn)
+    tests/vpnmod_test.c (VPN module goldens, fake swanctl/openconnect, import samples in tests/vpn_samples, xl2tpd parses the config), tests/tor_test.c (torrc/nft goldens, fake control server, nft rules loaded in `unshare -Urn`: redirect, leak dropped, fail closed), tests/pty_tor (Tor tab + VPN types, 80x24 and 40x12), tests/pty_ent (Enterprise tab, 80x24 and 40x12), tests/pty_vpn (real WireGuard in unshare -Urn, drives the VPN tab), tests/wifi_bt_test.c (75), net_test (+ `selftest` under unshare -Urn), vpn_test (+ live WireGuard peer edits under ns), fw_test, net_score_test (unshare -Urn)
 
-Not tested: real iwd / wpa_supplicant / bluez and real hardware, real networks, a real sudo prompt, vpn up/down as root from the TUI, the DHCP lease-cache
+Not tested: real tor (not installed here: bootstrap, circuits, bridges, hidden services), a live strongSwan / L2TP / OpenConnect connection (binaries absent or no server: config and argv only), real iwd / wpa_supplicant / bluez and real hardware, real networks, a real sudo prompt, vpn up/down as root from the TUI, the DHCP lease-cache
 key used by the details pane (a guess: the SSID), the future daemon.

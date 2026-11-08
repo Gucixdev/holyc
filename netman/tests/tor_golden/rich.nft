@@ -1,0 +1,39 @@
+table inet netman_tor
+delete table inet netman_tor
+table inet netman_tor {
+	chain nat_out {
+		type nat hook output priority -100; policy accept;
+		meta skuid 108 return
+		meta skuid != { 1000, 1001 } return
+		udp dport 53 redirect to :5353
+		tcp dport 53 redirect to :5353
+		ip daddr 127.0.0.0/8 return
+		ip6 daddr ::1 return
+		meta l4proto tcp tcp flags & (syn | ack) == syn redirect to :9040
+	}
+	chain filter_out {
+		type filter hook output priority 0; policy accept;
+		meta skuid 108 accept
+		meta skuid != { 1000, 1001 } accept
+		ip daddr 127.0.0.1 tcp dport { 9040, 9050, 5353 } accept
+		ip daddr 127.0.0.1 udp dport 5353 accept
+		ip saddr 127.0.0.1 tcp sport { 9040, 9050 } accept
+		ip saddr 127.0.0.1 udp sport 5353 accept
+		counter drop
+	}
+	chain nat_pre {
+		type nat hook prerouting priority -100; policy accept;
+		iifname { "wlan1" } udp dport 53 redirect to :5353
+		iifname { "wlan1" } tcp dport 53 redirect to :5353
+		iifname { "wlan1" } meta l4proto tcp tcp flags & (syn | ack) == syn redirect to :9040
+	}
+	chain filter_fwd {
+		type filter hook forward priority 0; policy accept;
+		iifname { "wlan1" } counter drop
+	}
+	chain filter_in {
+		type filter hook input priority 0; policy accept;
+		iifname { "wlan1" } tcp dport { 9040, 9050 } accept
+		iifname { "wlan1" } udp dport 5353 accept
+	}
+}
