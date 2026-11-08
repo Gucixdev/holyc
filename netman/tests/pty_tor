@@ -10,7 +10,7 @@ if [ -z "${NM_PTY_TOR_INNER:-}" ]; then
 fi
 ip link set lo up
 work=$(mktemp -d); trap 'tmux -L nmtor kill-server 2>/dev/null; rm -rf "$work"' EXIT
-cc -std=gnu11 -Wall -Wextra -O2 -I../src -I../src/mods -o "$work/nm" ../src/netman.c ../src/config.c ../src/mods/enterprise/enterprise.c ../src/mods/enterprise/tether.c ../src/mods/enterprise/licence.c ../src/mods/wireguard.c ../src/mods/vpnmod.c ../src/mods/openvpn.c ../src/mods/ipsec.c ../src/mods/l2tp.c ../src/mods/openconnect.c ../src/mods/sstp.c ../src/mods/vpnimport.c ../src/mods/tor.c || exit 1
+cc -std=gnu11 -Wall -Wextra -O2 -I../src -I../src/mods -o "$work/nm" ../src/netman.c ../src/config.c ../src/mods/enterprise/enterprise.c ../src/mods/enterprise/tether.c ../src/mods/enterprise/licence.c ../src/mods/wireguard.c ../src/mods/vpnmod.c ../src/mods/openvpn.c ../src/mods/ipsec.c ../src/mods/l2tp.c ../src/mods/openconnect.c ../src/mods/sstp.c ../src/mods/vpnimport.c ../src/mods/tor.c ../src/mods/ssh.c ../src/mods/mesh.c ../src/mods/bonding.c ../src/mods/tunnel.c || exit 1
 mkdir -p "$work/conf" "$work/vpn"; chmod 755 "$work"
 for f in swanctl.conf nm-l2tp.nmconnection nm-openconnect.nmconnection client.ovpn wg-quick.conf; do NETMAN_VPN_CONF_DIR="$work/vpn" "$work/nm" vpn import "vpn_samples/$f" >/dev/null 2>&1; done
 printf '[privileges]\nsudo = never\n[wifi]\nenabled = no\n[bluetooth]\nenabled = no\n[net]\nenabled = no\n[tor]\nenabled = yes\nprofile = %s/tor.conf\n' "$work" >"$work/c.conf"

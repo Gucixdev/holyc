@@ -46,7 +46,7 @@ typedef struct {
 
 typedef struct { char key[96]; signed char v[8]; int n; } nm_hist;   /* last signal readings of one network */
 
-enum { NM_WIFI, NM_ETH, NM_BT, NM_VPN, NM_ENT, NM_TOR, NM_NTAB };
+enum { NM_WIFI, NM_ETH, NM_BT, NM_VPN, NM_ENT, NM_TOR, NM_SSH, NM_MESH, NM_BOND, NM_TUN, NM_NTAB };
 enum { NM_NORMAL, NM_FILTER, NM_PROMPT, NM_CONFIRM, NM_HELP, NM_WPS, NM_INFO };
 enum { NM_K_UP = 0x101, NM_K_DOWN, NM_K_RIGHT, NM_K_LEFT, NM_K_BTAB, NM_K_PGUP, NM_K_PGDN, NM_K_HOME, NM_K_END, NM_K_TAB = 9, NM_K_ENTER = 13, NM_K_ESC = 27, NM_K_BS = 127 };
 enum { NM_SORT_SIGNAL, NM_SORT_NAME, NM_SORT_SECURED, NM_SORT_OPEN, NM_NSORT };
@@ -321,14 +321,14 @@ void nm_theme_make(nm_theme *t, int unicode, const char *name)
 }
 
 /* the Tor tab shows its status as read-only rows in the same list as the Enterprise tab */
-static int nm__entlike(const nm_ui *u) { return u->tab == NM_ENT || u->tab == NM_TOR; }
+static int nm__entlike(const nm_ui *u) { return u->tab >= NM_ENT; }   /* Enterprise, Tor, SSH, Mesh, Bond, Tunnel share the row list */
 void nm_ui_init(nm_ui *u, int w, int h)
 {
 	memset(u, 0, sizeof *u);
 	u->w = w < 20 ? 20 : w;
 	u->h = h < 6 ? 6 : h;
 	for (int i = 0; i < NM_NTAB; i++) u->en[i] = 1;
-	u->en[NM_ENT] = 0; u->en[NM_TOR] = 0;                      /* the Enterprise tab exists only when enterprise.enabled (nc_tui) */
+	u->en[NM_ENT] = 0; u->en[NM_TOR] = 0; u->en[NM_SSH] = 0; u->en[NM_MESH] = 0; u->en[NM_BOND] = 0; u->en[NM_TUN] = 0;                      /* the Enterprise tab exists only when enterprise.enabled (nc_tui) */
 	u->rssi_good = -55; u->rssi_ok = -65; u->rssi_weak = -75;
 	u->hdr.score = -1; u->ks = -1;
 }
@@ -433,7 +433,7 @@ static int nm__tabs(const nm_ui *u, int *out) { int n = 0; for (int i = 0; i < N
 
 static const char *nm__tabname(int i, int shortn)
 {
-	static const char *full[] = { "Wi-Fi", "Ethernet/IP", "Bluetooth", "VPN", "Enterprise", "Tor" }, *sh[] = { "Wi-Fi", "Eth", "BT", "VPN", "Ent", "Tor" };
+	static const char *full[] = { "Wi-Fi", "Ethernet/IP", "Bluetooth", "VPN", "Enterprise", "Tor", "SSH", "Mesh", "Bond", "Tunnel" }, *sh[] = { "Wi-Fi", "Eth", "BT", "VPN", "Ent", "Tor", "SSH", "Mesh", "Bond", "Tun" };
 	return shortn ? sh[i] : full[i];
 }
 
@@ -776,7 +776,7 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 		} else if (i == 0 && n == 0) {
 			nm__row_raw(&r, t->dim);
 			if (u->tab == NM_VPN && u->loaded[NM_VPN] && !u->filter[0]) nm__row_fmt(&r, -1, "  no VPN profiles in %s", u->vpndir);
-			else if (nm__entlike(u) && u->loaded[u->tab] && !u->filter[0]) nm__row_add(&r, u->tab == NM_TOR ? "  tor: no status (netman tor status)" : "  no bonds, bridges, vlans, uplinks or licences (netman ent save ...)", -1);
+			else if (nm__entlike(u) && u->loaded[u->tab] && !u->filter[0]) nm__row_add(&r, u->tab == NM_TOR ? "  tor: no status (netman tor status)" : u->tab == NM_SSH ? "  no ssh profiles (netman ssh save NAME host=...)" : u->tab == NM_MESH ? "  no mesh profiles (netman mesh save NAME kind=...)" : u->tab == NM_BOND ? "  no bonds (netman bond add NAME SLAVE...)" : u->tab == NM_TUN ? "  no tunnels (netman tunnel save NAME kind=...)" : "  no bonds, bridges, vlans, uplinks or licences (netman ent save ...)", -1);
 			else nm__row_add(&r, u->filter[0] || u->secf ? "  nothing matches the filter" : u->loaded[u->tab] ? "  nothing found (r to refresh)" : "  loading...", -1);
 		} else if (n == 0 && i <= 3 && u->tab == NM_VPN && u->loaded[NM_VPN] && !u->filter[0]) {
 			static const char *const hint[] = { "", "  import one:  netman vpn import FILE   (WireGuard .conf / OpenVPN .ovpn)", "  or copy it there yourself (root-owned, mode 0600)", "  other directory: env NETMAN_VPN_CONF_DIR" };
@@ -1086,30 +1086,54 @@ static void nm__ent_dev_row(nm_ui *u, const char *kind, const char *name, const 
 	}
 }
 
-/* Tor tab: the lines of `netman tor status` as rows (key / first word / rest). Read-only: netman tor up|down|newnym change things. */
-static void nm__tor_refresh(nm_ui *u)
+/* Tor / SSH / Mesh / Bond / Tunnel tabs: each mod prints rows "key state rest" (its `status`); they become list rows. Read-only: the CLI changes things. */
+static void nm__status_rows(nm_ui *u, const char *kind, char *buf)
 {
-	netman_tor_cfg c; char *buf = NULL, *sv = NULL; size_t bl = 0;
-	FILE *m = open_memstream(&buf, &bl);
-	nc_tor_cfg(&c);
+	char *sv = NULL;
 	u->nent = 0;
-	if (m) { c.out = m; c.err = m; netman_tor_status(&c); fclose(m); }
-	if (buf) {
+	if (buf)
 		for (char *ln = strtok_r(buf, "\n", &sv); ln; ln = strtok_r(NULL, "\n", &sv)) {
 			char key[40]; size_t k = strcspn(ln, " ");
 			if (k >= sizeof key) k = sizeof key - 1;
 			memcpy(key, ln, k); key[k] = 0;
 			const char *rest = ln + k; while (*rest == ' ') rest++;
 			char st[12]; size_t w = strcspn(rest, " "); if (w >= sizeof st) w = sizeof st - 1; memcpy(st, rest, w); st[w] = 0;
-			nm__ent_add(u, "tor", key, st, !strcmp(key, "tor") && strcmp(st, "running") ? 1 : 0, "", "%s", rest);
+			int lvl = !strcmp(st, "down") || !strcmp(st, "degraded") || !strcmp(st, "connecting") ? 1 : 0;
+			if (!strcmp(kind, "tor")) lvl = !strcmp(key, "tor") && strcmp(st, "running") ? 1 : 0;
+			nm__ent_add(u, kind, key, st, lvl, "", "%s", rest);
 		}
-		free(buf);
-	}
+}
+static void nm__tor_refresh(nm_ui *u)
+{
+	netman_tor_cfg c; char *buf = NULL; size_t bl = 0;
+	FILE *m = open_memstream(&buf, &bl);
+	nc_tor_cfg(&c);
+	if (m) { c.out = m; c.err = m; netman_tor_status(&c); fclose(m); }
+	nm__status_rows(u, "tor", buf);
+	free(buf);
 	u->loaded[NM_TOR] = 1;
+}
+static void nm__mod_refresh(nm_ui *u)
+{
+	char *buf = NULL; size_t bl = 0;
+	FILE *m = open_memstream(&buf, &bl);
+	const char *kind = u->tab == NM_SSH ? "ssh" : u->tab == NM_MESH ? "mesh" : u->tab == NM_BOND ? "bond" : "tunnel";
+	nc_mod_globals();
+	if (m) {
+		if (u->tab == NM_SSH) { netman_ssh_cfg c; nc_ssh_cfg(&c); netman_ssh_status(&c, m); }
+		else if (u->tab == NM_MESH) netman_mesh_status(m);
+		else if (u->tab == NM_BOND) netman_bond_status(m);
+		else netman_tunnel_status(m);
+		fclose(m);
+	}
+	nm__status_rows(u, kind, buf);
+	free(buf);
+	u->loaded[u->tab] = 1;
 }
 static void nm__ent_refresh(nm_ui *u)
 {
 	if (u->tab == NM_TOR) { nm__tor_refresh(u); return; }
+	if (u->tab >= NM_SSH) { nm__mod_refresh(u); return; }
 	char names[64][64];
 	int k = netman_ent_list(names, 64);
 	netman_if t[NETMAN_MAXIF];
@@ -2217,7 +2241,7 @@ static int nc_tui(void)
 	utf = !strcmp(uni, "yes") || (!strcmp(uni, "auto") && loc && (strcasestr(loc, "utf-8") || strcasestr(loc, "utf8")));
 	nm_theme_make(&nm__theme, utf, th);
 	nm_ui_init(&nm__ui, 80, 24);
-	nm__ui.en[NM_WIFI] = nc_enabled("wifi"); nm__ui.en[NM_ETH] = nc_enabled("net"); nm__ui.en[NM_BT] = nc_enabled("bluetooth"); nm__ui.en[NM_VPN] = nc_enabled("vpn"); nm__ui.en[NM_ENT] = nc_enabled("enterprise"); nm__ui.en[NM_TOR] = nc_enabled("tor");
+	nm__ui.en[NM_WIFI] = nc_enabled("wifi"); nm__ui.en[NM_ETH] = nc_enabled("net"); nm__ui.en[NM_BT] = nc_enabled("bluetooth"); nm__ui.en[NM_VPN] = nc_enabled("vpn"); nm__ui.en[NM_ENT] = nc_enabled("enterprise"); nm__ui.en[NM_TOR] = nc_enabled("tor"); nm__ui.en[NM_SSH] = nc_enabled("ssh"); nm__ui.en[NM_MESH] = nc_enabled("mesh"); nm__ui.en[NM_BOND] = nc_enabled("bonding"); nm__ui.en[NM_TUN] = nc_enabled("tunnel");
 	nm__ui.rssi_good = netman_config_int(&nc_cfg, NC_WIFI_RSSI_GOOD); nm__ui.rssi_ok = netman_config_int(&nc_cfg, NC_WIFI_RSSI_OK); nm__ui.rssi_weak = netman_config_int(&nc_cfg, NC_WIFI_RSSI_WEAK);
 	for (int i = 0; i < NM_NTAB; i++) if (nm__ui.en[i]) { if (!ntab) nm__ui.tab = i; ntab++; }
 	tcgetattr(0, &nm__saved);

@@ -142,6 +142,44 @@
 # Snowflake pluggable transport binary, used when a snowflake bridge is set.
 # snowflake_bin = /usr/bin/snowflake-client
 
+[ssh]
+# SSH profiles and tunnels (`netman ssh ...`, the SSH tab). Off by default. Runs your ssh binary; host key checking is never turned off.
+# enabled = no
+# Profiles NAME.ssh (host, user, key, jump hosts, forwards, keepalive, reconnect).
+# dir = /etc/netman/ssh
+# Pid, state, log and ControlMaster sockets of running connections.
+# state_dir = /run/netman/ssh
+# known_hosts file netman uses (UserKnownHostsFile). Fill it with `netman ssh trust NAME SHA256:FINGERPRINT`.
+# known_hosts = /etc/netman/ssh/known_hosts
+# Absolute path of the ssh client. Empty = ssh from PATH.
+# ssh_bin = ""
+# Absolute path of ssh-keyscan, used by `ssh hostkey`. Empty = from PATH.
+# keyscan_bin = ""
+# Absolute path of ssh-keygen, used for fingerprints (-lf). Empty = from PATH.
+# keygen_bin = ""
+
+[mesh]
+# Mesh networks (`netman mesh ...`, the Mesh tab): batman-adv and a WireGuard full mesh. Off by default: it creates links.
+# enabled = no
+# Profiles NAME.mesh, peer lists NAME.peers and private keys NAME.key (mode 0600).
+# dir = /etc/netman/mesh
+# Absolute path of ip (iproute2), needed for batman-adv only; the WireGuard mesh uses netlink. Empty = from PATH.
+# ip_bin = ""
+# Absolute path of batctl, optional: tuning and `mesh neighbors` for batman-adv. Empty = from PATH.
+# batctl_bin = ""
+
+[bonding]
+# Link bonding (`netman bond ...`, the Bond tab). Off by default: it creates links. Same code as the enterprise bond profiles.
+# enabled = no
+
+[tunnel]
+# GRE / gretap / ipip / sit / VXLAN / Geneve / L2TPv3 tunnels (`netman tunnel ...`, the Tunnel tab). Off by default: it creates links.
+# enabled = no
+# Tunnel profiles NAME.tun.
+# dir = /etc/netman/tunnel
+# Absolute path of ip (iproute2), used for L2TPv3 only; the other kinds use netlink. Empty = from PATH.
+# ip_bin = ""
+
 [tui]
 # TUI colours. (default|mono|light)
 # theme = default

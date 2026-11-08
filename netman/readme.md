@@ -19,7 +19,7 @@ for Wi-Fi and bluez for Bluetooth, plus own netlink/DHCP/DNS, WireGuard/OpenVPN,
     src/config.c/.h     settings file + env (NC_KEYS table); src/netman.conf.example is documented and kept in sync by a test
     src/priv.h          when to re-run through sudo
     src/tui.h           the terminal UI
-    src/mods/           stb-style libraries: wifi.h btth.h dbus.h net.h roaming.h scoring.h metrics.h vpn.h firewall.h wireguard.h (+ wireguard.c, enterprise.c, tether.c, licence.c: plain .c, not stb) (+ vpnmod/openvpn/ipsec/l2tp/openconnect/sstp/vpnimport/tor .c: the VPN client modules, profile import, Tor; empty mesh/ssh stubs)
+    src/mods/           stb-style libraries: wifi.h btth.h dbus.h net.h roaming.h scoring.h metrics.h vpn.h firewall.h wireguard.h (+ wireguard.c, enterprise.c, tether.c, licence.c: plain .c, not stb) (+ vpnmod/openvpn/ipsec/l2tp/openconnect/sstp/vpnimport/tor .c: the VPN client modules, profile import, Tor; + ssh.c mesh.c bonding.c tunnel.c: the optional network mods below, each off by default, shared helpers in modkit.h; + enterprise/: the enterprise mods)
     src/daemon.c, daemonless.c   placeholders for the future daemon (it must respect the same config)
 
 ## use
@@ -99,6 +99,17 @@ Threat model, honestly: Tor hides your network location from the sites you visit
 reuse identities, open downloaded files, or use apps that put your identity in the payload; transparent routing does not stop browser fingerprinting (use Tor Browser)
 and a global observer of both ends can still correlate. Local services on 127.0.0.1 other than Tor's ports are blocked while it is up.
 
+## mods (all off by default; each is one `.c` with all the logic, core only wires config, CLI rows, help and a TUI tab)
+
+| mod | switch | CLI | what it does | files |
+|---|---|---|---|---|
+| ssh | `ssh.enabled` | `netman ssh ...` | profiles (host, user, key, jump hosts, `-L/-R/-D`, keepalive, ControlMaster, `ssh -w`), supervised background connection with reconnect, host keys only through `hostkey`/`trust` (host key checking is never turned off) | `ssh.h/.c`, `tests/ssh_test.c` |
+| mesh | `mesh.enabled` | `netman mesh ...` | batman-adv (`ip` + optional `batctl`) and a WireGuard full mesh generated from one peer list (reuses `wireguard.c`) | `mesh.h/.c`, `tests/mesh_test.c` |
+| bonding | `bonding.enabled` | `netman bond ...` | link bonding, the same code and `.ent` profiles as the enterprise bond (one implementation) | `bonding.h/.c`, `tests/bonding_test.c` |
+| tunnel | `tunnel.enabled` | `netman tunnel ...` | GRE, gretap, ipip, sit, VXLAN, Geneve, L2TPv3 with keys and automatic MTU | `tunnel.h/.c`, `tests/tunnel_test.c` |
+
+Each has a tab in the TUI (only when enabled, read-only: the CLI changes things). Details and what is untested: `docs/ssh-mesh-bond-tunnel.md`.
+
 ## tests (`tests/`)
 
     cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c src/mods/wireguard.c && /tmp/nm_logic   76 checks (parsers, width, render, modals)
@@ -106,6 +117,8 @@ and a global observer of both ends can still correlate. Local services on 127.0.
     tests/cli_test                               help, man sync, config, module gating, exit codes (41)
     cc -std=gnu11 -Isrc -o /tmp/nm_priv tests/priv_test.c; cc ... tests/config_test.c src/config.c [src/netman.conf.example]   15 / 77
     tests/vpnmod_test.c (VPN module goldens, fake swanctl/openconnect, import samples in tests/vpn_samples, xl2tpd parses the config), tests/tor_test.c (torrc/nft goldens, fake control server, nft rules loaded in `unshare -Urn`: redirect, leak dropped, fail closed), tests/pty_tor (Tor tab + VPN types, 80x24 and 40x12), tests/pty_ent (Enterprise tab, 80x24 and 40x12), tests/pty_vpn (real WireGuard in unshare -Urn, drives the VPN tab), tests/wifi_bt_test.c (75), net_test (+ `selftest` under unshare -Urn), vpn_test (+ live WireGuard peer edits under ns), fw_test, net_score_test (unshare -Urn)
+
+    tests/ssh_test.c, mesh_test.c, bonding_test.c, tunnel_test.c (fake ssh / ssh-keyscan / ip / batctl, real netlink in `unshare -Urn`), tests/pty_mods (the four tabs in the real TUI)
 
 Not tested: real tor (not installed here: bootstrap, circuits, bridges, hidden services), a live strongSwan / L2TP / OpenConnect connection (binaries absent or no server: config and argv only), real iwd / wpa_supplicant / bluez and real hardware, real networks, a real sudo prompt, vpn up/down as root from the TUI, the DHCP lease-cache
 key used by the details pane (a guess: the SSID), the future daemon.

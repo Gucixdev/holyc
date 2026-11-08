@@ -12,7 +12,7 @@ if [ ! -x bin/netman ] || [ -n "$(find src -type f \( -name '*.[ch]' \) -newer b
 	fi
 	mkdir -p bin
 	echo "netman: building bin/netman with $cc ..." >&2
-	"$cc" -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c src/mods/wireguard.c src/mods/vpnmod.c src/mods/openvpn.c src/mods/ipsec.c src/mods/l2tp.c src/mods/openconnect.c src/mods/sstp.c src/mods/vpnimport.c src/mods/tor.c -o bin/netman.tmp || { rm -f bin/netman.tmp; echo "netman: the build failed (see above)" >&2; exit 1; }
+	"$cc" -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c src/mods/wireguard.c src/mods/vpnmod.c src/mods/openvpn.c src/mods/ipsec.c src/mods/l2tp.c src/mods/openconnect.c src/mods/sstp.c src/mods/vpnimport.c src/mods/tor.c src/mods/ssh.c src/mods/mesh.c src/mods/bonding.c src/mods/tunnel.c -o bin/netman.tmp || { rm -f bin/netman.tmp; echo "netman: the build failed (see above)" >&2; exit 1; }
 	mv bin/netman.tmp bin/netman
 fi
 exec bin/netman -tui

@@ -20,7 +20,7 @@ static const Key keys[NC_N] = {
 	NC_KEYS(X)
 #undef X
 };
-static const char *const sections[] = { "wifi", "bluetooth", "net", "roaming", "vpn", "firewall", "enterprise", "licence", "tether", "wireguard", "nmapi", "tor", "metrics", "tui", "privileges", NULL };
+static const char *const sections[] = { "wifi", "bluetooth", "net", "roaming", "vpn", "firewall", "enterprise", "licence", "tether", "wireguard", "nmapi", "tor", "ssh", "mesh", "bonding", "tunnel", "metrics", "tui", "privileges", NULL };
 
 const char *netman_config_section(int k) { return keys[k].sec; }
 const char *netman_config_name(int k) { return keys[k].name; }

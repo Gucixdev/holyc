@@ -75,6 +75,21 @@
 	X(TOR_IFACES, "tor", "route_ifaces", "list", "", "Interfaces whose forwarded traffic (hotspot, router) is also forced through Tor, e.g. wlan1. Empty = none.") \
 	X(TOR_OBFS4, "tor", "obfs4_bin", "cmd", "/usr/bin/obfs4proxy", "obfs4 pluggable transport binary, used when an obfs4 bridge is set.") \
 	X(TOR_SNOW, "tor", "snowflake_bin", "cmd", "/usr/bin/snowflake-client", "Snowflake pluggable transport binary, used when a snowflake bridge is set.") \
+	X(SSH_ENABLED, "ssh", "enabled", "bool", "no", "SSH profiles and tunnels (`netman ssh ...`, the SSH tab). Off by default. Runs your ssh binary; host key checking is never turned off.") \
+	X(SSH_DIR, "ssh", "dir", "path", "/etc/netman/ssh", "Profiles NAME.ssh (host, user, key, jump hosts, forwards, keepalive, reconnect).") \
+	X(SSH_STATE, "ssh", "state_dir", "path", "/run/netman/ssh", "Pid, state, log and ControlMaster sockets of running connections.") \
+	X(SSH_KNOWN, "ssh", "known_hosts", "path", "/etc/netman/ssh/known_hosts", "known_hosts file netman uses (UserKnownHostsFile). Fill it with `netman ssh trust NAME SHA256:FINGERPRINT`.") \
+	X(SSH_BIN, "ssh", "ssh_bin", "cmd", "", "Absolute path of the ssh client. Empty = ssh from PATH.") \
+	X(SSH_KEYSCAN, "ssh", "keyscan_bin", "cmd", "", "Absolute path of ssh-keyscan, used by `ssh hostkey`. Empty = from PATH.") \
+	X(SSH_KEYGEN, "ssh", "keygen_bin", "cmd", "", "Absolute path of ssh-keygen, used for fingerprints (-lf). Empty = from PATH.") \
+	X(MESH_ENABLED, "mesh", "enabled", "bool", "no", "Mesh networks (`netman mesh ...`, the Mesh tab): batman-adv and a WireGuard full mesh. Off by default: it creates links.") \
+	X(MESH_DIR, "mesh", "dir", "path", "/etc/netman/mesh", "Profiles NAME.mesh, peer lists NAME.peers and private keys NAME.key (mode 0600).") \
+	X(MESH_IP, "mesh", "ip_bin", "cmd", "", "Absolute path of ip (iproute2), needed for batman-adv only; the WireGuard mesh uses netlink. Empty = from PATH.") \
+	X(MESH_BATCTL, "mesh", "batctl_bin", "cmd", "", "Absolute path of batctl, optional: tuning and `mesh neighbors` for batman-adv. Empty = from PATH.") \
+	X(BOND_ENABLED, "bonding", "enabled", "bool", "no", "Link bonding (`netman bond ...`, the Bond tab). Off by default: it creates links. Same code as the enterprise bond profiles.") \
+	X(TUN_ENABLED, "tunnel", "enabled", "bool", "no", "GRE / gretap / ipip / sit / VXLAN / Geneve / L2TPv3 tunnels (`netman tunnel ...`, the Tunnel tab). Off by default: it creates links.") \
+	X(TUN_DIR, "tunnel", "dir", "path", "/etc/netman/tunnel", "Tunnel profiles NAME.tun.") \
+	X(TUN_IP, "tunnel", "ip_bin", "cmd", "", "Absolute path of ip (iproute2), used for L2TPv3 only; the other kinds use netlink. Empty = from PATH.") \
 	X(TUI_THEME, "tui", "theme", "enum:default|mono|light", "default", "TUI colours.") \
 	X(TUI_UNICODE, "tui", "unicode", "enum:auto|yes|no", "auto", "Box drawing and glyphs. auto = by locale; no = plain ASCII.") \
 	X(PRIV_SUDO, "privileges", "sudo", "enum:auto|never|always", "auto", "When netman re-runs itself through sudo: auto = only when the command needs root, never, always.")

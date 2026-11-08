@@ -111,10 +111,10 @@ int netman_mesh_nodes_parse(const char *text, netman_mesh_node *n, int max, char
 	int cnt = 0;
 	if (!c) return -1;
 	for (ln = strtok_r(c, "\n", &sv); ln; ln = strtok_r(NULL, "\n", &sv)) {
-		char *p = ent_trim(ln), nm[40], pub[64], ep[96], ad[64], extra[8];
+		char *p = ent_trim(ln), nm[32], pub[48], ep[80], ad[46], extra[8];
 		unsigned char k[32];
 		if (!*p || *p == '#') continue;
-		if (sscanf(p, "%39s %63s %95s %63s %7s", nm, pub, ep, ad, extra) != 4) { snprintf(err, en, "peer line needs: name public-key endpoint|- address (got '%.60s')", p); free(c); return -1; }
+		if (sscanf(p, "%31s %47s %79s %45s %7s", nm, pub, ep, ad, extra) != 4) { snprintf(err, en, "peer line needs: name public-key endpoint|- address (got '%.60s')", p); free(c); return -1; }
 		if (cnt >= max) { snprintf(err, en, "more than %d nodes", max); free(c); return -1; }
 		if (!mk_name_ok(nm) || strlen(nm) > 31) { snprintf(err, en, "bad node name '%s'", nm); free(c); return -1; }
 		if (netman_vpn_b64_decode32(pub, k)) { snprintf(err, en, "node %s: public key is not a 32-byte base64 key", nm); free(c); return -1; }

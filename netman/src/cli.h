@@ -62,7 +62,7 @@ static int nc_vpn_has_profiles(void)
 
 static int nc_enabled(const char *module)
 {
-	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED }, { "wireguard", NC_WG_ENABLED }, { "nmapi", NC_NMAPI_ENABLED }, { "tor", NC_TOR_ENABLED } };
+	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED }, { "wireguard", NC_WG_ENABLED }, { "nmapi", NC_NMAPI_ENABLED }, { "tor", NC_TOR_ENABLED }, { "ssh", NC_SSH_ENABLED }, { "mesh", NC_MESH_ENABLED }, { "bonding", NC_BOND_ENABLED }, { "tunnel", NC_TUN_ENABLED } };
 	if (!module) return 1;
 	for (unsigned i = 0; i < sizeof t / sizeof *t; i++) if (!strcmp(module, t[i].m)) return netman_config_bool(&nc_cfg, t[i].k);
 	return 1;
@@ -264,6 +264,67 @@ static int h_tor(const nc_cmd *c, int n, char **a)   /* "tor bridge add X" -> {b
 	for (int i = 0; i < n && k < 22; i++) av[k++] = a[i];
 	av[k] = NULL;
 	return netman_tor_main(&o, k, av);
+}
+
+/* ssh / mesh / bond / tunnel: the mods own all logic; "ssh up X" -> {up, X}. Disabled in config = refuse with the hint. */
+static int nc_modoff(const char *m)
+{
+	if (nc_enabled(m)) return 0;
+	fprintf(stderr, "netman: %s is disabled in config (netman config toggle %s.enabled)\n", !strcmp(m, "bonding") ? "bond" : m, m);
+	return 1;
+}
+static int nc_modargv(const nc_cmd *c, int n, char **a, char **av)
+{
+	int k = 0;
+	av[k++] = (char *)(strchr(c->name, ' ') + 1);
+	for (int i = 0; i < n && k < 30; i++) av[k++] = a[i];
+	av[k] = NULL;
+	return k;
+}
+static void nc_ssh_cfg(netman_ssh_cfg *o)
+{
+	netman_ssh_cfg_defaults(o);
+	snprintf(o->dir, sizeof o->dir, "%s", netman_config_str(&nc_cfg, NC_SSH_DIR)); snprintf(o->state, sizeof o->state, "%s", netman_config_str(&nc_cfg, NC_SSH_STATE));
+	snprintf(o->known, sizeof o->known, "%s", netman_config_str(&nc_cfg, NC_SSH_KNOWN)); if (*netman_config_str(&nc_cfg, NC_SSH_BIN)) snprintf(o->bin, sizeof o->bin, "%s", netman_config_str(&nc_cfg, NC_SSH_BIN));
+	if (*netman_config_str(&nc_cfg, NC_SSH_KEYSCAN)) snprintf(o->keyscan, sizeof o->keyscan, "%s", netman_config_str(&nc_cfg, NC_SSH_KEYSCAN)); if (*netman_config_str(&nc_cfg, NC_SSH_KEYGEN)) snprintf(o->keygen, sizeof o->keygen, "%s", netman_config_str(&nc_cfg, NC_SSH_KEYGEN));
+}
+static void nc_mod_globals(void)   /* the mods that keep their paths in globals; empty bin keys keep the mod's default (PATH lookup) */
+{
+	netman_mesh_dir = netman_config_str(&nc_cfg, NC_MESH_DIR); netman_tunnel_dir = netman_config_str(&nc_cfg, NC_TUN_DIR);
+	if (*netman_config_str(&nc_cfg, NC_MESH_IP)) netman_mesh_ip = netman_config_str(&nc_cfg, NC_MESH_IP);
+	if (*netman_config_str(&nc_cfg, NC_MESH_BATCTL)) netman_mesh_batctl = netman_config_str(&nc_cfg, NC_MESH_BATCTL);
+	if (*netman_config_str(&nc_cfg, NC_TUN_IP)) netman_tunnel_ip = netman_config_str(&nc_cfg, NC_TUN_IP);
+}
+static int h_ssh(const nc_cmd *c, int n, char **a)
+{
+	netman_ssh_cfg o; char *av[32]; int k;
+	if (nc_modoff("ssh")) return 3;
+	nc_ssh_cfg(&o);
+	k = nc_modargv(c, n, a, av);
+	return netman_ssh_main(&o, stdout, stderr, k, av);
+}
+static int h_mesh(const nc_cmd *c, int n, char **a)
+{
+	char *av[32]; int k;
+	if (nc_modoff("mesh")) return 3;
+	nc_mod_globals();
+	k = nc_modargv(c, n, a, av);
+	return netman_mesh_main(stdout, stderr, k, av);
+}
+static int h_bond(const nc_cmd *c, int n, char **a)
+{
+	char *av[32]; int k;
+	if (nc_modoff("bonding")) return 3;
+	k = nc_modargv(c, n, a, av);
+	return netman_bond_main(stdout, stderr, k, av);
+}
+static int h_tunnel(const nc_cmd *c, int n, char **a)
+{
+	char *av[32]; int k;
+	if (nc_modoff("tunnel")) return 3;
+	nc_mod_globals();
+	k = nc_modargv(c, n, a, av);
+	return netman_tunnel_main(stdout, stderr, k, av);
 }
 
 static int h_vpn(const nc_cmd *c, int n, char **a)   /* the library's own front end: "vpn up X" -> {vpn, up, X} */
@@ -693,6 +754,44 @@ static const nc_cmd nc_table[] = {
 	{ "tor exit", "CC|off", h_tor, R_YES, "tor", "force the exit country (strict)", "" },
 	{ "tor hs", "add NAME PORT HOST:PORT | list | del NAME", h_tor, R_YES, "tor", "onion services: publish a local port as a .onion", "" },
 	{ "vpn list", "", h_vpn, R_NO, "vpn", "VPN profiles (WireGuard, OpenVPN, IPsec/IKEv2, L2TP, OpenConnect) and their state", "" },
+	{ "ssh status", "", h_ssh, R_NO, "ssh", "SSH profiles and connections: state, user@host:port, reconnects", "Rows: NAME up|connecting|down user@host:port. The same list is the SSH tab." },
+	{ "ssh save", "NAME host=H [user=U key=PATH jump=J1,J2 port=N forward=L:... keepalive=N control=yes reconnect=yes tun=L:R strict=yes|accept-new]", h_ssh, R_YES, "ssh", "create or change an SSH profile", "Forwards: forward=L:8080:db:5432 (local), R:9000:localhost:22 (remote), D:1080 (SOCKS); repeat forward= up to 8 times. strict accepts only yes or accept-new: netman never turns host key checking off, and a profile that asks for it is refused. Stored as NAME.ssh." },
+	{ "ssh show", "NAME", h_ssh, R_NO, "ssh", "print a profile", "" },
+	{ "ssh argv", "NAME", h_ssh, R_NO, "ssh", "print the exact ssh command line a profile runs (nothing is started)", "" },
+	{ "ssh up", "NAME", h_ssh, R_YES, "ssh", "start the connection in the background; it reconnects with backoff when it drops", "A supervisor keeps ssh -N running, logs to the state dir, and assigns tun_addr once an ssh -w device exists." },
+	{ "ssh down", "NAME", h_ssh, R_YES, "ssh", "stop the connection and its supervisor", "" },
+	{ "ssh apply", "", h_ssh, R_YES, "ssh", "start every profile with auto = yes", "" },
+	{ "ssh hostkey", "NAME", h_ssh, R_NO, "ssh", "fetch and show the host key fingerprint (ssh-keyscan + ssh-keygen -lf)", "Compare it with what the server's admin gave you, then `ssh trust`." },
+	{ "ssh trust", "NAME SHA256:FP [HOST]", h_ssh, R_YES, "ssh", "store the host key only if its fingerprint equals FP", "Safer than accept-new: the key goes into the known_hosts file only when the fingerprint you typed matches what the host presents." },
+	{ "ssh check", "NAME", h_ssh, R_NO, "ssh", "is the ControlMaster alive (ssh -O check)", "" },
+	{ "ssh exec", "NAME COMMAND...", h_ssh, R_NO, "ssh", "run a command over the profile's ControlMaster", "" },
+	{ "ssh del", "NAME", h_ssh, R_YES, "ssh", "delete a profile (stop it first)", "" },
+	{ "mesh status", "", h_mesh, R_NO, "mesh", "mesh profiles: state, kind, device, peers handshaked/total", "The same list is the Mesh tab." },
+	{ "mesh save", "NAME kind=batman ifaces=A,B | kind=wg self=NODE [k=v...]", h_mesh, R_YES, "mesh", "create or change a mesh profile", "batman: ifaces orig_interval gw_mode hop_penalty mtu addr. wg: self port prefix keepalive key addr. Stored as NAME.mesh." },
+	{ "mesh show", "NAME", h_mesh, R_NO, "mesh", "print a profile", "" },
+	{ "mesh init", "NAME", h_mesh, R_YES, "mesh", "generate this node's WireGuard private key (mode 0600) and print the public key; never overwrites", "" },
+	{ "mesh node", "NAME add NODE PUBKEY ENDPOINT|- ADDRESS | del NODE | list", h_mesh, R_YES, "mesh", "edit the WireGuard mesh peer list", "One list for every node. ENDPOINT - means the node is not reachable directly (it must connect to you)." },
+	{ "mesh gen", "NAME [NODE]", h_mesh, R_NO, "mesh", "print the wg-quick config of a node (default: this one)", "Every other node becomes a peer with AllowedIPs = its mesh address only. The private key is filled in only for this node." },
+	{ "mesh up", "NAME", h_mesh, R_YES, "mesh", "bring the mesh up (batman: ip link add type batadv; wg: netlink, no wg binary)", "" },
+	{ "mesh down", "NAME", h_mesh, R_YES, "mesh", "remove the mesh device", "" },
+	{ "mesh apply", "", h_mesh, R_YES, "mesh", "bring up every mesh profile with auto = yes", "" },
+	{ "mesh neighbors", "NAME", h_mesh, R_NO, "mesh", "batman-adv neighbours (needs batctl)", "" },
+	{ "mesh del", "NAME", h_mesh, R_YES, "mesh", "delete a profile (the peer list and key file are kept)", "" },
+	{ "bond status", "", h_bond, R_NO, "bonding", "bonds: state, mode, slaves up/total, active slave", "The same list is the Bond tab." },
+	{ "bond modes", "", h_bond, R_NO, "bonding", "the bonding modes and what each needs from the switch", "" },
+	{ "bond show", "NAME", h_bond, R_NO, "bonding", "live state and profile of a bond", "" },
+	{ "bond add", "NAME [KEY=VALUE...] SLAVE...", h_bond, R_YES, "bonding", "create a bond and enslave interfaces", "e.g. `bond add bond0 mode=802.3ad miimon=100 eth0 eth1`. Shares the code and NAME.ent profiles of `ent save NAME bond`." },
+	{ "bond del", "NAME", h_bond, R_YES, "bonding", "delete the bond", "" },
+	{ "bond slave", "add|del NAME IFACE", h_bond, R_YES, "bonding", "add or remove one slave of a bond", "" },
+	{ "bond apply", "", h_bond, R_YES, "bonding", "re-create every saved bond", "" },
+	{ "tunnel status", "", h_tunnel, R_NO, "tunnel", "tunnels: state, kind, local>remote, mtu, rx/tx", "The same list is the Tunnel tab." },
+	{ "tunnel save", "NAME kind=gre|gretap|ipip|sit|vxlan|geneve|l2tp local=A remote=B [k=v...]", h_tunnel, R_YES, "tunnel", "create or change a tunnel profile", "Keys: link addr key ttl mtu auto vni port group, l2tp: tunnel_id peer_tunnel_id session_id peer_session_id encap lport rport. mtu = auto subtracts the encapsulation overhead from the underlay MTU. Stored as NAME.tun." },
+	{ "tunnel show", "NAME", h_tunnel, R_NO, "tunnel", "print a profile", "" },
+	{ "tunnel mtu", "NAME", h_tunnel, R_NO, "tunnel", "show the underlay MTU, the overhead and the tunnel MTU `auto` picks", "" },
+	{ "tunnel up", "NAME", h_tunnel, R_YES, "tunnel", "create the tunnel device, set mtu and address, bring it up", "" },
+	{ "tunnel down", "NAME", h_tunnel, R_YES, "tunnel", "delete the tunnel device", "" },
+	{ "tunnel apply", "", h_tunnel, R_YES, "tunnel", "bring up every tunnel with auto = yes", "" },
+	{ "tunnel del", "NAME", h_tunnel, R_YES, "tunnel", "delete a profile", "" },
 	{ "vpn import", "FILE [NAME]", h_vpn, R_YES, "vpn", "import a VPN profile: WireGuard / OpenVPN / NetworkManager .nmconnection / strongSwan conf / netman .vpn (into /etc/netman/vpn, mode 0600)", "Refuses to overwrite. Converts NetworkManager keyfiles (wireguard, openvpn, strongswan, l2tp, openconnect) and strongSwan swanctl.conf / ipsec.conf; PPTP is refused (insecure). Passwords kept in secret stores are not imported; the note says what was left out. Directory override: env NETMAN_VPN_CONF_DIR." },
 	{ "vpn info", "NAME", h_vpn, R_YES, "vpn", "everything known about one profile: endpoint, handshake, transfer, allowed ips, split or full tunnel, kill switch", "" },
 	{ "vpn up", "NAME [WAIT_S]", h_vpn, R_YES, "vpn", "bring a tunnel up (plus the kill switch if vpn.killswitch)", "" },
