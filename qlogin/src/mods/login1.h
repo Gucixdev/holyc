@@ -79,7 +79,7 @@ const char *l1_bus_name(void);
 
 static struct {
 	l1_config cfg;
-	char run[200], vtfile[200], devdir[200], name[80];
+	char run[160], vtfile[200], devdir[200], name[80];
 	l1_session sess[L1_MAXSESS]; int nsess;
 	l1_inhibit inh[L1_MAXINH]; int ninh;
 	unsigned next_id;

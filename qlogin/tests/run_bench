@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Speed numbers: qlogind method latency (10k GetSession on a private bus) and qlogin's time to the first prompt (-t, private tmux, fake PAM).
+set -eu
+cd "$(dirname "$(readlink -f "$0")")"
+mkdir -p ../bin
+nice -n 19 gcc -std=gnu11 -O2 -Wall -Wextra -I../src/mods ../src/qlogind.c -o ../bin/qlogind_fast
+nice -n 19 gcc -std=gnu11 -O2 -Wall -Wextra -I../src/mods ../src/qlogin.c -lpam -o ../bin/qlogin_fast
+nice -n 19 gcc -std=gnu11 -O2 -Wall -Wextra bench.c -o ../bin/bench
+T=$(mktemp -d /tmp/qlogin-bench.XXXXXX); mkdir -p "$T/run" "$T/pam"
+printf 'auth required pam_permit.so\naccount required pam_permit.so\nsession required pam_permit.so\n' > "$T/pam/qlogin"
+out=$(mktemp); dbus-daemon --session --print-address --fork --print-pid > "$out"
+addr=$(sed -n 1p "$out"); bpid=$(sed -n 2p "$out"); rm -f "$out"; SOCK=qlb-$$; qpid=
+cleanup() { tmux -L $SOCK kill-server 2>/dev/null || true; [ -n "$qpid" ] && kill "$qpid" 2>/dev/null || true; kill "$bpid" 2>/dev/null || true; rm -rf "$T"; }
+trap cleanup EXIT
+DBUS_SYSTEM_BUS_ADDRESS="$addr" QLOGIND_RUN="$T/run" QLOGIND_VTFILE="$T/vt" QLOGIND_DEVDIR="$T/run" ../bin/qlogind_fast 2>/dev/null & qpid=$!
+for _ in $(seq 50); do busctl --address="$addr" status org.freedesktop.login1 >/dev/null 2>&1 && break; sleep 0.1; done
+QT_BUS="$addr" ../bin/bench
+for i in 1 2 3 4 5; do
+  tmux -L $SOCK new-session -d -x 80 -y 24 -s q "PAM_CONFIG=$T/pam ../bin/qlogin_fast -t; sleep 5"
+  for _ in $(seq 30); do tmux -L $SOCK capture-pane -p -t q | grep -q 'first prompt' && break; sleep 0.1; done
+  echo "qlogin -t run $i: $(tmux -L $SOCK capture-pane -p -t q | grep -o 'first prompt after [0-9]* us')"
+  tmux -L $SOCK kill-server
+done

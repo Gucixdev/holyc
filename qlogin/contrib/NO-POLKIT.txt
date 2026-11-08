@@ -1,0 +1,3 @@
+There is no polkit. qlogind authorizes by the caller's uid alone (root, or a user that has a local session), obtained from the bus daemon's
+GetConnectionCredentials. Consequences: no interactive "challenge" answers; CanPowerOff/CanSuspend report "yes" or "no" only;
+desktops that expect polkit prompts for other users' sessions will just get an access-denied error.

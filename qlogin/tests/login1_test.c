@@ -151,6 +151,7 @@ int main(void)
 	CHECK(!strcmp(id1, "c1") && !ex && fifo1 >= 0);
 	sess_path(id1, p1, sizeof p1);
 	CHECK(find(&A, "SessionNew", 1000) != NULL);
+	CHECK(find(&A, "UserNew", 200) != NULL);
 	CHECK(prop_bool(&A, p1, SESS, "Active", &bv) == 0 && bv == 1);
 	CHECK(prop_str(&A, p1, SESS, "Type", str, sizeof str) == 0 && !strcmp(str, "tty"));
 	CHECK(prop_str(&A, p1, SESS, "State", str, sizeof str) == 0 && !strcmp(str, "active"));
@@ -262,6 +263,105 @@ int main(void)
 		CHECK(prop_str(&A, ROOT, MGR, "BlockInhibited", str, sizeof str) == 0 && !*str);
 	}
 
+
+	/* the rest of the Manager/Session/Seat/User surface */
+	{
+		char actlog[256];
+		snprintf(actlog, sizeof actlog, "%s/qlogind/actions.log", run);
+		static const char *const cans[] = { "CanPowerOff", "CanReboot", "CanHalt", "CanSuspend", "CanHibernate", "CanHybridSleep", "CanSuspendThenHibernate" };
+		static const char *const acts[] = { "Reboot", "Halt", "Hibernate", "HybridSleep", "SuspendThenHibernate" };
+		static const char *const mprops[] = { "NAutoVTs", "KillUserProcesses", "IdleHint", "IdleSinceHint", "IdleSinceHintMonotonic", "BlockWeakInhibited",
+			"UserStopDelayUSec", "HandlePowerKey", "HandleSuspendKey", "HandleHibernateKey", "HandleLidSwitch", "HandleLidSwitchExternalPower",
+			"HandleLidSwitchDocked", "PreparingForShutdown", "PreparingForSleep", "InhibitorsMax", "NCurrentInhibitors", "SessionsMax", "NCurrentSessions" };
+		static const char *const sprops[] = { "User", "Name", "VTNr", "Seat", "TTY", "Display", "Remote", "RemoteHost", "RemoteUser", "Service", "Desktop",
+			"Scope", "Leader", "Class", "IdleSinceHint", "IdleSinceHintMonotonic", "CanIdle", "CanLock", "LockedHint" };
+		int ok = 1;
+		for (unsigned i = 0; i < sizeof cans / sizeof *cans; i++) {
+			int rc = call(&A, &r, ROOT, MGR, cans[i], NULL, NULL);
+			if (rc != 0) { ok = 0; if (rc == 1) qd_msg_free(&r); continue; }
+			qd_rd rd = { r.body, 0, r.blen, 0 }; const char *v = qd_r_str(&rd);
+			if (strcmp(v, "yes") && strcmp(v, "no") && strcmp(v, "na") && strcmp(v, "challenge")) ok = 0;
+			qd_msg_free(&r);
+		}
+		CHECK(ok);
+		ok = 1;
+		for (unsigned i = 0; i < sizeof mprops / sizeof *mprops; i++) {
+			qd_buf q = {0};
+			qd_put_str(&q, MGR); qd_put_str(&q, mprops[i]);
+			int rc = call(&A, &r, ROOT, "org.freedesktop.DBus.Properties", "Get", "ss", &q);
+			free(q.b);
+			if (rc != 0) { ok = 0; fprintf(stderr, "  Manager property %s: rc %d\n", mprops[i], rc); if (rc == 1) qd_msg_free(&r); } else qd_msg_free(&r);
+		}
+		CHECK(ok);
+		ok = 1;
+		for (unsigned i = 0; i < sizeof sprops / sizeof *sprops; i++) {
+			qd_buf q = {0};
+			qd_put_str(&q, SESS); qd_put_str(&q, sprops[i]);
+			int rc = call(&A, &r, p1, "org.freedesktop.DBus.Properties", "Get", "ss", &q);
+			free(q.b);
+			if (rc != 0) { ok = 0; fprintf(stderr, "  Session property %s: rc %d\n", sprops[i], rc); if (rc == 1) qd_msg_free(&r); } else qd_msg_free(&r);
+		}
+		CHECK(ok);
+		CHECK(prop_bool(&A, p1, SESS, "LockedHint", &bv) == 0 && bv == 1);   /* set above */
+		CHECK(prop_str(&A, ROOT "/seat/seat0", LOGIN ".Seat", "Id", str, sizeof str) == 0 && !strcmp(str, "seat0"));
+		CHECK(call(&A, &r, ROOT "/seat/seat0", "org.freedesktop.DBus.Properties", "Get", "ss", (b.n = 0, qd_put_str(&b, LOGIN ".Seat"), qd_put_str(&b, "Sessions"), &b)) == 0); qd_msg_free(&r);
+		CHECK(call(&A, &r, ROOT "/seat/seat0", "org.freedesktop.DBus.Properties", "Get", "ss", (b.n = 0, qd_put_str(&b, LOGIN ".Seat"), qd_put_str(&b, "ActiveSession"), &b)) == 0); qd_msg_free(&r);
+
+		/* GetSeat / GetUserByPID */
+		CHECK(call(&A, &r, ROOT, MGR, "GetSeat", "s", (b.n = 0, qd_put_str(&b, "seat0"), &b)) == 0);
+		{ qd_rd rd = { r.body, 0, r.blen, 0 }; CHECK(!strcmp(qd_r_str(&rd), ROOT "/seat/seat0")); } qd_msg_free(&r);
+		CHECK(err_is(&A, ROOT, MGR, "GetSeat", "s", (b.n = 0, qd_put_str(&b, "seat9"), &b), LOGIN ".NoSuchSeat"));
+		char upath[100];
+		CHECK(call(&A, &r, ROOT, MGR, "GetUser", "u", (b.n = 0, qd_put_u32(&b, getuid()), &b)) == 0);
+		{ qd_rd rd = { r.body, 0, r.blen, 0 }; snprintf(upath, sizeof upath, "%s", qd_r_str(&rd)); } qd_msg_free(&r);
+		CHECK(call(&A, &r, ROOT, MGR, "GetUserByPID", "u", (b.n = 0, qd_put_u32(&b, getpid()), &b)) == 0);
+		{ qd_rd rd = { r.body, 0, r.blen, 0 }; CHECK(!strcmp(qd_r_str(&rd), upath)); } qd_msg_free(&r);
+		CHECK(err_is(&A, ROOT, MGR, "GetUserByPID", "u", (b.n = 0, qd_put_u32(&b, 1), &b), LOGIN ".NoSuchUser"));
+		CHECK(err_is(&A, ROOT, MGR, "GetUser", "u", (b.n = 0, qd_put_u32(&b, 4000000), &b), LOGIN ".NoSuchUser"));
+
+		/* lock / unlock, per session and for all */
+		forget();
+		CHECK(call(&A, &r, ROOT, MGR, "LockSession", "s", (b.n = 0, qd_put_str(&b, id1), &b)) == 0); qd_msg_free(&r);
+		{ seen_t *x = find(&A, "Lock", 500); CHECK(x && !strcmp(x->path, p1)); }
+		forget();
+		CHECK(call(&A, &r, ROOT, MGR, "UnlockSession", "s", (b.n = 0, qd_put_str(&b, id1), &b)) == 0); qd_msg_free(&r);
+		{ seen_t *x = find(&A, "Unlock", 500); CHECK(x && !strcmp(x->path, p1)); }
+		forget();
+		CHECK(call(&A, &r, ROOT, MGR, "LockSessions", NULL, NULL) == 0); qd_msg_free(&r);
+		{ seen_t *x = find(&A, "Lock", 500); CHECK(x != NULL); }
+		forget();
+		CHECK(call(&A, &r, ROOT, MGR, "UnlockSessions", NULL, NULL) == 0); qd_msg_free(&r);
+		{ seen_t *x = find(&A, "Unlock", 500); CHECK(x != NULL); }
+		forget();
+		CHECK(call(&A, &r, p1, SESS, "Unlock", NULL, NULL) == 0); qd_msg_free(&r);
+		{ seen_t *x = find(&A, "Unlock", 500); CHECK(x && !strcmp(x->path, p1)); }
+		CHECK(err_is(&A, ROOT, MGR, "LockSession", "s", (b.n = 0, qd_put_str(&b, "zz"), &b), LOGIN ".NoSuchSession"));
+
+		/* Session.Activate (mock VT switch), then back */
+		CHECK(call(&A, &r, p2, SESS, "Activate", NULL, NULL) == 0); qd_msg_free(&r);
+		usleep(900000);
+		CHECK(prop_bool(&A, p2, SESS, "Active", &bv) == 0 && bv == 1);
+		CHECK(call(&A, &r, p1, SESS, "Activate", NULL, NULL) == 0); qd_msg_free(&r);
+		usleep(900000);
+		CHECK(prop_bool(&A, p1, SESS, "Active", &bv) == 0 && bv == 1);
+
+		/* remaining power actions: dry run, one at a time */
+		forget();
+		for (unsigned i = 0; i < sizeof acts / sizeof *acts; i++) {
+			char want[64];
+			CHECK(call(&A, &r, ROOT, MGR, acts[i], "b", (b.n = 0, qd_put_u32(&b, 0), &b)) == 0); qd_msg_free(&r);
+			usleep(400000);
+			snprintf(want, sizeof want, "DRYRUN %s", acts[i]);
+			CHECK(file_has(actlog, want));
+		}
+		{ seen_t *x = find(&A, "PrepareForSleep", 500); CHECK(x != NULL); }
+
+		/* KillSession: signal the leader of c2 (a forked child, never ourselves) */
+		CHECK(err_is(&A, ROOT, MGR, "KillSession", "ssi", (b.n = 0, qd_put_str(&b, id2), qd_put_str(&b, "bogus"), qd_put_u32(&b, 10), &b), "org.freedesktop.DBus.Error.InvalidArgs"));
+		CHECK(call(&A, &r, ROOT, MGR, "KillSession", "ssi", (b.n = 0, qd_put_str(&b, id2), qd_put_str(&b, "leader"), qd_put_u32(&b, SIGUSR1), &b)) == 0); qd_msg_free(&r);
+		{ int st = 0; CHECK(waitpid(kid, &st, 0) == kid && WIFSIGNALED(st) && WTERMSIG(st) == SIGUSR1); }
+	}
+
 	/* release + fifo semantics */
 	forget();
 	CHECK(call(&A, &r, ROOT, MGR, "ReleaseSession", "s", (b.n = 0, qd_put_str(&b, id2), &b)) == 0); qd_msg_free(&r);
@@ -273,6 +373,7 @@ int main(void)
 	CHECK(err_is(&A, ROOT, MGR, "GetSession", "s", (b.n = 0, qd_put_str(&b, id1), &b), LOGIN ".NoSuchSession"));
 	snprintf(str, sizeof str, "%s/user/%u", run, (unsigned)getuid()); { struct stat st; CHECK(stat(str, &st) != 0); }   /* empty runtime dir removed with the last session */
 	close(fifo2);
+	CHECK(find(&A, "UserRemoved", 1500) != NULL);
 	free(b.b);
 	qd_close(&A);
 	printf("login1_test: %d checks, %d failed\n", checks, fails);

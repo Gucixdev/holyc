@@ -1,0 +1,4 @@
+#!/bin/sh
+# /etc/sv/qlogin-tty2/run (EXAMPLE, not installed): qlogin replaces the getty+login pair, so it needs the tty as stdin
+exec 0</dev/tty2 1>/dev/tty2 2>&1
+exec /usr/bin/qlogin

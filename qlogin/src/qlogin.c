@@ -2,14 +2,6 @@
  * Build: cc -std=gnu11 -O2 -Isrc/mods src/qlogin.c -lpam -o bin/qlogin
  */
 #define _GNU_SOURCE
-#include <errno.h>
-#include <fcntl.h>
-#include <signal.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 #define QDBUS_IMPLEMENTATION
 #include "mods/qdbus.h"
 #define QLOGIN_IMPLEMENTATION

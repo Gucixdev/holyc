@@ -16,6 +16,14 @@ int qlogin_main(int argc, char **argv);
 #ifndef QLOGIN_IMPLEMENTATION_DONE
 #define QLOGIN_IMPLEMENTATION_DONE
 #include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include <dirent.h>
 #include <grp.h>
 #include <lastlog.h>

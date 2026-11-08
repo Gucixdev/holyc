@@ -14,8 +14,22 @@ Design: `docs/design.md`. Man pages: `src/qlogin.1`, `src/qlogind.8`. Run everyt
 ## Tested (automatically, `./run`, all green)
 
 - `tests/run_qdbus`: marshalling, SCM_RIGHTS fd passing, Hello on a private bus (ASAN/UBSAN).
-- `tests/run_login1`: qlogind vs a fake client on a private `dbus-daemon`, 93 checks, plus a cross-check with real sd-bus (`busctl`: introspection, properties, ListSeats). Sessions, state files, GetSessionByPID, inhibitors (delay/block), power actions in dry-run, TakeControl/TakeDevice with a real passed fd, Pause/ResumeDevice, controller leaving the bus, session end by closing the fifo.
+- `tests/run_login1`: qlogind vs a fake client on a private `dbus-daemon`, 139 checks, plus a cross-check with real sd-bus (`busctl`: introspection, properties, ListSeats). Every row of docs/login1-surface.md except SeatNew/SeatRemoved: sessions, state files, GetSessionByPID/GetUserByPID, all Can* and power actions in dry-run, Lock/Unlock signals, Activate, KillSession (on a forked child), all Manager/Session properties, inhibitors (delay/block), TakeControl/TakeDevice with a real passed fd, Pause/ResumeDevice, controller leaving the bus, session end by closing the fifo.
 - `tests/run_qlogin`: qlogin inside a private tmux with a fake PAM stack (pam_exec check, `PAM_CONFIG`): prompt, `-t`, wrong passwords with growing lockout, no echo, Ctrl-C, Ctrl-D, session picker, the session really running with XDG_SESSION_ID/XDG_RUNTIME_DIR from qlogind, wtmp/lastlog written, session released afterwards.
+
+## Speed (`tests/run_bench`, -O2, this laptop, private session bus used as the fake system bus)
+
+- qlogind: 10000 GetSession calls, one client: 291 ms total, mean 29 us, p50 28 us, p99 64 us, about 34000 calls/s. This is a full round trip through dbus-daemon (client, daemon, qlogind, daemon, client), so most of it is the bus.
+- qlogin `-t`: 44-50 us from `main()` to the first prompt (5 runs). Excludes exec and dynamic linking (libpam, libc); the binary uses plain escape sequences, no ncurses, no locale init.
+
+## Trying it for real without installing anything
+
+Examples only, in `contrib/` (PAM stack, D-Bus policy, dinit/runit/systemd units, `NO-POLKIT.txt`); nothing is installed by this project.
+
+- Do not do this on a machine that runs systemd-logind or elogind: both want the bus name org.freedesktop.login1.
+- Safest: a VM (or a systemd-less container) with a user and a root console. Copy the two binaries, `contrib/pam.d/qlogin` (to /etc/pam.d/), and the D-Bus policy there, start a system bus, then `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket qlogind &`.
+- Then on a spare VT in that VM, as root: `openvt -c 3 -s -- /usr/bin/qlogin` (or `qlogin </dev/tty3 >/dev/tty3`), log in, and check `busctl call org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager ListSessions`.
+- Without a VM, the test mode (`PAM_CONFIG=<dir> qlogin` against a private `dbus-daemon`, see `tests/run_qlogin`) is the only supported way.
 
 ## NOT tested / not implemented (honest list)
 

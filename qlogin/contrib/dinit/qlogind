@@ -1,0 +1,6 @@
+# /etc/dinit.d/qlogind (EXAMPLE, not installed)
+type = process
+command = /usr/bin/qlogind
+env-file = /etc/qlogind.env      # contains: DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+depends-on = dbus
+restart = true

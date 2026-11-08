@@ -1,0 +1,8 @@
+# /etc/pam.d/qlogin (EXAMPLE, not installed). Modeled on a typical "login" stack; adapt to your distribution's include names.
+auth       requisite    pam_nologin.so
+auth       include      system-local-login
+account    include      system-local-login
+password   include      system-local-login
+session    include      system-local-login
+# qlogin registers the session itself through CreateSession, so do NOT add pam_systemd.so / pam_elogind.so here:
+# it would register a second session for the same login.
