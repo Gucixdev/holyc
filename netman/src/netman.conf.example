@@ -1,0 +1,83 @@
+# netman.conf - the settings file of netman. Copy to /etc/netman/netman.conf (system) or ~/.config/netman/netman.conf (you; wins).
+# Every key is shown with its default, commented out. Uncomment and change what you want, or use:
+#     netman config set wifi.backend iwd        netman config toggle vpn.killswitch        netman config show        netman config check
+# Environment variables override the files: NETMAN_<SECTION>_<KEY>, e.g. NETMAN_WIFI_BACKEND=wpa.
+# Booleans: yes|no (true/false/on/off/1/0 are accepted). A value with '#' in it must be "quoted".
+
+[wifi]
+# Wi-Fi support: the wifi commands, the Wi-Fi tab. no = skipped everywhere (CLI says 'wifi disabled in config').
+# enabled = yes
+# Which daemon to talk to. auto = wpa_supplicant if its control socket exists for the interface, else iwd. (auto|iwd|wpa)
+# backend = auto
+# The daemon joins known networks by itself (per-network switch: wifi known autoconnect SSID on|off).
+# autoconnect = yes
+# dBm at or above which a signal is 'good' (green in the TUI, 4 quality steps). (-120..0)
+# rssi_good = -55
+# dBm at or above which a signal is 'ok'. Must be lower than rssi_good. (-120..0)
+# rssi_ok = -65
+# dBm at or above which a signal is 'weak' (below it: bad). Must be lower than rssi_ok. (-120..0)
+# rssi_weak = -75
+
+[bluetooth]
+# Bluetooth support: the bt commands, the Bluetooth tab.
+# enabled = yes
+# Register netman's own pairing agent (PIN / passkey / confirmation prompts). no = rely on another agent such as your desktop's.
+# agent = yes
+
+[net]
+# Ethernet / IP management: the net and roam commands, the Ethernet/IP tab.
+# enabled = yes
+# Built-in DHCPv4 client. no = `net dhcp` is refused and dhcp profiles are not applied (static profiles only).
+# dhcp = yes
+# Where DNS servers go: resolved = systemd-resolved, resolvconf = write /etc/resolv.conf, auto = resolved when it runs. (auto|resolved|resolvconf)
+# dns_mode = auto
+# Lease cache and the per-machine MAC secret.
+# state_dir = /var/lib/netman
+
+[roaming]
+# Autoconnect policy and the `roam` commands.
+# enabled = yes
+# Check connectivity after a network comes up (needs probe_url); a captive portal or no internet counts as a failure.
+# probe = yes
+# Plain-http URL fetched by the probe: 204 = internet, any other answer = captive portal. Empty = no probing.
+# probe_url = http://connectivitycheck.gstatic.com/generate_204
+# Use a stable random (locally administered) MAC per profile instead of the hardware address.
+# random_mac = no
+# A network scoring below this (0..100: signal, gateway RTT, loss, captive portal) is dropped for another candidate. (0..100)
+# score_threshold = 20
+
+[vpn]
+# WireGuard / OpenVPN / provider support: the vpn commands, the VPN tab.
+# enabled = yes
+# `vpn up` also turns the nftables kill switch on (traffic only through the tunnel).
+# killswitch = no
+# The daemon reconnects a tunnel that died or whose handshake went stale.
+# watchdog = yes
+
+[firewall]
+# Firewall management. no = fw apply / confirm / rollback are refused (show, plan, diff and preset still work). Off by default: it changes your rules.
+# enabled = no
+# Ruleset `fw plan` and `fw apply` start from when you name no preset. (workstation|lockdown)
+# preset = workstation
+# fw apply rolls back by itself unless you run `fw confirm` within this many seconds. 0 = apply for good at once. (0..3600)
+# confirm_s = 30
+# Zone of interfaces that have none: trusted = accept all, home, public (stealth + limits), untrusted (nothing in). (trusted|home|public|untrusted)
+# default_zone = public
+
+[metrics]
+# Interface counters and rates: the metrics commands, the rates in the TUI.
+# enabled = yes
+# Where `metrics record` appends one TSV file per interface (rotated at 1 MiB).
+# dir = /var/lib/netman/metrics
+# Seconds between samples for `metrics watch` and `metrics record --loop`. (1..3600)
+# interval_s = 5
+
+[tui]
+# TUI colours. (default|mono|light)
+# theme = default
+# Box drawing and glyphs. auto = by locale; no = plain ASCII. (auto|yes|no)
+# unicode = auto
+
+[privileges]
+# When netman re-runs itself through sudo: auto = only when the command needs root, never, always. (auto|never|always)
+# sudo = auto

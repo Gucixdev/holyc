@@ -10,32 +10,23 @@
 
 static int fails, checks;
 #define CHECK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %s:%d  %s\n      ", __FILE__, __LINE__, #c); printf(__VA_ARGS__); printf("\n"); } } while (0)
-static int need(const char *mode, int tui, int wpa, int ok, unsigned euid, int n, ...)
-{
-	char *av[8] = { "netman" };
-	va_list ap;
-	va_start(ap, n);
-	for (int i = 0; i < n; i++) av[1 + i] = va_arg(ap, char *);
-	va_end(ap);
-	if (mode) setenv("NM_SUDO", mode, 1); else unsetenv("NM_SUDO");
-	return nm_priv_needed(n + 1, av, tui, wpa, ok, euid);
-}
+#define N(root, mode, wpa, ok, euid) nm_priv_needed(root, mode, wpa, ok, euid)
 
 int main(void)
 {
 	/* auto */
-	CHECK(!need(NULL, 0, 0, 0, 1000, 0), "status: no root");
-	CHECK(!need(NULL, 0, 0, 0, 1000, 1, "help"), "help: no root");
-	CHECK(!need(NULL, 0, 0, 0, 1000, 2, "bt", "pair"), "bluetooth never needs root");
-	CHECK(!need(NULL, 0, 0, 0, 1000, 2, "wifi", "connect"), "iwd: group access is enough");
-	CHECK(need(NULL, 0, 1, 0, 1000, 2, "wifi", "list") == 1, "wpa_supplicant with a root-only socket needs root");
-	CHECK(!need(NULL, 0, 1, 1, 1000, 2, "wifi", "list"), "wpa_supplicant with a socket we can open (netdev group): no root");
-	CHECK(need(NULL, 1, 1, 0, 1000, 0) == 1 && !need(NULL, 1, 0, 0, 1000, 0) && !need(NULL, 1, 1, 1, 1000, 0), "tui follows the wifi backend");
-	CHECK(need(NULL, 0, 0, 0, 1000, 1, "fw") == 1, "fw needs root");
-	CHECK(!need(NULL, 1, 1, 0, 0, 0) && !need(NULL, 0, 0, 0, 0, 1, "fw"), "already root: never");
+	CHECK(!N(NM_ROOT_NO, NULL, 0, 0, 1000), "NO: no root");
+	CHECK(!N(NM_ROOT_NO, "auto", 1, 0, 1000), "NO stays NO whatever the backend");
+	CHECK(!N(NM_ROOT_WPA, NULL, 0, 0, 1000), "iwd: group access is enough");
+	CHECK(N(NM_ROOT_WPA, NULL, 1, 0, 1000) == 1, "wpa_supplicant with a root-only socket needs root");
+	CHECK(!N(NM_ROOT_WPA, NULL, 1, 1, 1000), "wpa_supplicant with a socket we can open (netdev group): no root");
+	CHECK(N(NM_ROOT_YES, NULL, 0, 0, 1000) == 1 && N(NM_ROOT_YES, "auto", 0, 1, 1000) == 1, "YES always needs root");
+	CHECK(!N(NM_ROOT_YES, NULL, 0, 0, 0) && !N(NM_ROOT_WPA, NULL, 1, 0, 0), "already root: never");
 	/* override */
-	CHECK(!need("never", 1, 1, 0, 1000, 1, "fw") , "NM_SUDO=never");
-	CHECK(need("always", 0, 0, 0, 1000, 1, "fw") == 1 && need("always", 1, 0, 0, 1000, 0) == 1 && !need("always", 0, 0, 0, 1000, 0) && !need("always", 0, 0, 0, 0, 1, "fw"), "NM_SUDO=always (not for status/help or root)");
+	CHECK(!N(NM_ROOT_YES, "never", 1, 0, 1000), "privileges.sudo=never");
+	CHECK(N(NM_ROOT_NO, "always", 0, 0, 1000) == 1 && N(NM_ROOT_WPA, "always", 0, 0, 1000) == 1, "privileges.sudo=always");
+	CHECK(!N(NM_ROOT_NEVER, "always", 0, 0, 1000) && !N(NM_ROOT_NEVER, NULL, 0, 0, 1000), "NEVER (help, status, config) is never escalated");
+	CHECK(!N(NM_ROOT_YES, "always", 0, 0, 0), "always + already root: no");
 
 	/* escalate: a recording fake sudo; the child process execs it, the parent reads what it was given */
 	{

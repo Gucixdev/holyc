@@ -1,0 +1,314 @@
+.TH NETMAN 1 "" "netman" "User Commands"
+.SH NAME
+netman \- network and Bluetooth manager, a NetworkManager and bluez drop-in
+.SH SYNOPSIS
+.B netman
+[\fICOMMAND\fR [\fIARGS\fR]]
+.br
+.B netman \-tui
+.SH DESCRIPTION
+Without a command netman prints the status of interfaces, Wi\-Fi, Bluetooth and VPN.
+Commands that need root re\-run themselves through sudo (config key privileges.sudo).
+A module switched off in the config file is skipped with a message such as \(lqwifi disabled in config\(rq.
+This page is generated from the command table (\fBnetman help \-\-man\fR).
+.SH COMMANDS
+.TP
+.B netman status
+interfaces, Wi\-Fi, Bluetooth and VPN at a glance (the default)
+.TP
+.B netman wifi list
+scan and list visible networks (hidden ones as <hidden> + BSSID). Security is shown as OPEN, WEP, WPA, WPA2, WPA3 or 802.1X; the signal as dBm and percent.
+.TP
+.B netman wifi scan
+the same list as TSV for scripts. Columns: FLAG KNOWN SEC DBM PCT BSSID CHAN BAND NBSS HIDDEN NAME. Names are escaped (\exNN for control bytes).
+.TP
+.B netman wifi info [SSID]
+details of a network (default: the connected one). SSID, BSSIDs, security, channel and band, signal, rates, known/autoconnect, last connected.
+.TP
+.B netman wifi connect SSID [PASSPHRASE] | \-\-eap SSID IDENTITY PASSWORD
+join a network; 802.1X with \-\-eap. Without a passphrase a known or open network is joined. A wrong passphrase is reported as such.
+.TP
+.B netman wifi disconnect
+leave the current network
+.TP
+.B netman wifi forget SSID
+remove a saved network (iwd only)
+.TP
+.B netman wifi wps pbc|pin [PIN]|cancel
+WPS push\-button or PIN
+.TP
+.B netman wifi hotspot start SSID [PASSPHRASE] | stop
+share a connection as an access point
+.TP
+.B netman wifi known [autoconnect SSID on|off]
+saved networks, and their autoconnect switch
+.TP
+.B netman bt list
+known and discovered devices
+.TP
+.B netman bt scan [SECONDS]
+discover devices, then list
+.TP
+.B netman bt info NAME_OR_MAC
+details of a device: class, RSSI, battery, profiles
+.TP
+.B netman bt connect NAME_OR_MAC
+connect a paired device
+.TP
+.B netman bt disconnect NAME_OR_MAC
+disconnect a device
+.TP
+.B netman bt pair NAME_OR_MAC [\-\-pin PIN]
+pair a device (\-\-pin answers every prompt)
+.TP
+.B netman bt trust NAME_OR_MAC
+trust a device
+.TP
+.B netman bt remove NAME_OR_MAC
+forget a device
+.TP
+.B netman bt power on|off
+switch the adapter
+.TP
+.B netman bt agent [SECONDS]
+run the pairing agent (PIN/passkey prompts on this terminal)
+.TP
+.B netman net list
+interfaces with addresses, gateways, routes
+.TP
+.B netman net show IFACE
+one interface with link speed and live rx/tx rate
+.TP
+.B netman net up IFACE
+set the link up
+.TP
+.B netman net down IFACE
+set the link down
+.TP
+.B netman net set IFACE ADDR/LEN [GATEWAY]
+static address (and default gateway)
+.TP
+.B netman net dhcp IFACE
+get a lease with the built\-in DHCP client and apply it. Needs net.dhcp = yes.
+.TP
+.B netman net dns IFACE NS... | IFACE clear
+set or clear DNS servers. Where they go is config net.dns_mode.
+.TP
+.B netman net profile list
+saved profiles (/etc/netman/NAME.conf)
+.TP
+.B netman net profile save NAME IFACE dhcp|ADDR/LEN [GATEWAY [DNS...]]
+create or replace a profile
+.TP
+.B netman net profile apply NAME
+bring a profile up
+.TP
+.B netman roam status
+probe setting and the score of each live interface
+.TP
+.B netman roam prefer PROFILE PRIORITY
+set a profile priority (higher wins)
+.TP
+.B netman vpn list
+WireGuard and OpenVPN profiles and their state
+.TP
+.B netman vpn up NAME [WAIT_S]
+bring a tunnel up (plus the kill switch if vpn.killswitch)
+.TP
+.B netman vpn down NAME
+take a tunnel down
+.TP
+.B netman vpn status [NAME]
+tunnel state, handshake, transfer
+.TP
+.B netman vpn run NAME COMMAND...
+run one command through the tunnel in its own namespace
+.TP
+.B netman vpn killswitch NAME on|off
+nftables kill switch for a tunnel
+.TP
+.B netman vpn providers
+supported providers (Mullvad, NordVPN)
+.TP
+.B netman vpn relays PROVIDER [COUNTRY]
+list a provider's relays (fetches with curl)
+.TP
+.B netman vpn connect PROVIDER PROFILE [COUNTRY [CITY]] [\-\-fastest] [\-\-via COUNTRY]
+write a profile for a provider relay
+.TP
+.B netman fw show
+the ruleset netman owns, as loaded
+.TP
+.B netman fw plan [PRESET]
+print the ruleset that would be applied
+.TP
+.B netman fw apply [PRESET]
+apply atomically; rolls back unless confirmed. Needs firewall.enabled = yes. firewall.confirm_s sets the window.
+.TP
+.B netman fw diff [PRESET]
+compare the plan with what was last applied
+.TP
+.B netman fw confirm
+keep the applied rules
+.TP
+.B netman fw rollback
+restore the previous rules now
+.TP
+.B netman fw preset workstation|lockdown
+set the default preset (config firewall.preset)
+.TP
+.B netman metrics show
+per\-interface rates and totals
+.TP
+.B netman metrics record
+append one sample per interface to metrics.dir
+.TP
+.B netman metrics watch [COUNT]
+print rates every metrics.interval_s seconds
+.TP
+.B netman config show
+every setting with its value and where it came from
+.TP
+.B netman config check
+validate the config files and environment. Errors are FILE:LINE with a did\-you\-mean for unknown keys.
+.TP
+.B netman config set SECTION.KEY VALUE
+edit the user config file (atomic, comments kept)
+.TP
+.B netman config toggle SECTION.KEY
+flip a yes/no setting
+.TP
+.B netman config example
+print the documented example config
+.TP
+.B netman help [TOPIC]
+this list, or the help for one command or group
+.TP
+.B netman \-tui
+the terminal UI (also \-\-tui, \-t); ? inside shows help
+.SH TUI
+Start it with \fBnetman \-tui\fR; \fB?\fR inside shows the same text:
+.nf
+GENERAL
+  tab / shift\-tab, h l, 1\-4   switch tab (tabs of modules disabled in config are hidden)
+  j k, arrows, PgUp PgDn      move;  g G  first / last
+  /                           filter by name
+  r                           refresh / rescan
+  ?                           this help;  q  quit
+WI\-FI
+  enter    connect: known networks join at once; others ask for the passphrase
+           (masked; tab shows/hides it); open networks ask for confirmation;
+           802.1X asks identity then password; a wrong password says so and offers a retry
+  i        details: BSSIDs, security, channel/band, signal, rates, IP/gateway/DNS/lease, link speed, rx/tx
+  s        cycle sort: signal / name / secured first / open first;  o  all / only open / only secured
+  d x a    disconnect / forget / toggle autoconnect;  w  WPS;  H  hotspot
+  Signal is dBm and percent (green good, yellow ok, red weak); a lock marks security,
+  OPEN networks get a warning colour. Without Unicode: [*] and open.
+BLUETOOTH
+  enter conn/disc   p pair   t trust   x remove   s scan   o power   i details
+ETHERNET / IP
+  addresses, gateway, DNS, lease, link speed and live rx/tx per interface;  i  details
+VPN
+  enter up / down the selected profile;  r  refresh
+.fi
+.SH CONFIGURATION
+Settings come from defaults, \fI/etc/netman/netman.conf\fR, \fI~/.config/netman/netman.conf\fR and the environment variables \fBNETMAN_\fISECTION\fB_\fIKEY\fR, later ones win. \fBnetman config show\fR lists every value and where it came from; \fBnetman config check\fR validates; \fBnetman config set\fR and \fBtoggle\fR edit the user file.
+.TP
+.B wifi.enabled
+Wi\-Fi support: the wifi commands, the Wi\-Fi tab. no = skipped everywhere (CLI says 'wifi disabled in config'). Default: yes.
+.TP
+.B wifi.backend
+Which daemon to talk to. auto = wpa_supplicant if its control socket exists for the interface, else iwd. Default: auto.
+.TP
+.B wifi.autoconnect
+The daemon joins known networks by itself (per\-network switch: wifi known autoconnect SSID on|off). Default: yes.
+.TP
+.B wifi.rssi_good
+dBm at or above which a signal is 'good' (green in the TUI, 4 quality steps). Default: \-55.
+.TP
+.B wifi.rssi_ok
+dBm at or above which a signal is 'ok'. Must be lower than rssi_good. Default: \-65.
+.TP
+.B wifi.rssi_weak
+dBm at or above which a signal is 'weak' (below it: bad). Must be lower than rssi_ok. Default: \-75.
+.TP
+.B bluetooth.enabled
+Bluetooth support: the bt commands, the Bluetooth tab. Default: yes.
+.TP
+.B bluetooth.agent
+Register netman's own pairing agent (PIN / passkey / confirmation prompts). no = rely on another agent such as your desktop's. Default: yes.
+.TP
+.B net.enabled
+Ethernet / IP management: the net and roam commands, the Ethernet/IP tab. Default: yes.
+.TP
+.B net.dhcp
+Built\-in DHCPv4 client. no = `net dhcp` is refused and dhcp profiles are not applied (static profiles only). Default: yes.
+.TP
+.B net.dns_mode
+Where DNS servers go: resolved = systemd\-resolved, resolvconf = write /etc/resolv.conf, auto = resolved when it runs. Default: auto.
+.TP
+.B net.state_dir
+Lease cache and the per\-machine MAC secret. Default: /var/lib/netman.
+.TP
+.B roaming.enabled
+Autoconnect policy and the `roam` commands. Default: yes.
+.TP
+.B roaming.probe
+Check connectivity after a network comes up (needs probe_url); a captive portal or no internet counts as a failure. Default: yes.
+.TP
+.B roaming.probe_url
+Plain\-http URL fetched by the probe: 204 = internet, any other answer = captive portal. Empty = no probing. Default: http://connectivitycheck.gstatic.com/generate_204.
+.TP
+.B roaming.random_mac
+Use a stable random (locally administered) MAC per profile instead of the hardware address. Default: no.
+.TP
+.B roaming.score_threshold
+A network scoring below this (0..100: signal, gateway RTT, loss, captive portal) is dropped for another candidate. Default: 20.
+.TP
+.B vpn.enabled
+WireGuard / OpenVPN / provider support: the vpn commands, the VPN tab. Default: yes.
+.TP
+.B vpn.killswitch
+`vpn up` also turns the nftables kill switch on (traffic only through the tunnel). Default: no.
+.TP
+.B vpn.watchdog
+The daemon reconnects a tunnel that died or whose handshake went stale. Default: yes.
+.TP
+.B firewall.enabled
+Firewall management. no = fw apply / confirm / rollback are refused (show, plan, diff and preset still work). Off by default: it changes your rules. Default: no.
+.TP
+.B firewall.preset
+Ruleset `fw plan` and `fw apply` start from when you name no preset. Default: workstation.
+.TP
+.B firewall.confirm_s
+fw apply rolls back by itself unless you run `fw confirm` within this many seconds. 0 = apply for good at once. Default: 30.
+.TP
+.B firewall.default_zone
+Zone of interfaces that have none: trusted = accept all, home, public (stealth + limits), untrusted (nothing in). Default: public.
+.TP
+.B metrics.enabled
+Interface counters and rates: the metrics commands, the rates in the TUI. Default: yes.
+.TP
+.B metrics.dir
+Where `metrics record` appends one TSV file per interface (rotated at 1 MiB). Default: /var/lib/netman/metrics.
+.TP
+.B metrics.interval_s
+Seconds between samples for `metrics watch` and `metrics record \-\-loop`. Default: 5.
+.TP
+.B tui.theme
+TUI colours. Default: default.
+.TP
+.B tui.unicode
+Box drawing and glyphs. auto = by locale; no = plain ASCII. Default: auto.
+.TP
+.B privileges.sudo
+When netman re\-runs itself through sudo: auto = only when the command needs root, never, always. Default: auto.
+.SH FILES
+.I /etc/netman/netman.conf
+.br
+.I ~/.config/netman/netman.conf
+.br
+.I /etc/netman/NAME.conf
+(network profiles)
+.SH SEE ALSO
+netman.conf.example

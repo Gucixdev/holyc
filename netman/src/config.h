@@ -1,0 +1,93 @@
+/* config.h - netman.conf: THE settings file. Plain key=value, # comments, [sections]. Implementation: config.c (no module dependencies).
+ *
+ * Files, later wins:  /etc/netman/netman.conf, then $XDG_CONFIG_HOME/netman/netman.conf (default ~/.config/netman/netman.conf; under sudo
+ * the invoking user's, via SUDO_USER). NETMAN_CONFIG=FILE reads only that file (it must exist). Environment variables NETMAN_<SECTION>_<KEY>
+ * (upper case, e.g. NETMAN_WIFI_BACKEND, NETMAN_METRICS_DIR) override the files; NETMAN_SUDO and NM_SUDO are old names of NETMAN_PRIVILEGES_SUDO.
+ *
+ * The keys are defined ONCE, in NC_KEYS below (section, name, type, default, documentation). Everything else is generated from that
+ * table: the enum, validation, `netman config show/set/toggle`, `netman config example` and the shipped src/netman.conf.example
+ * (a test keeps the file in sync). A key can be written as `[wifi]` + `backend = iwd` or at the top as `wifi.backend = iwd`.
+ *
+ * Strict: an unknown key or section (with a "did you mean"), a bad value, a duplicate key in one file, a NUL byte or a line over 1023
+ * bytes is an error "FILE:LINE: message". Types: bool (yes|no|true|false|on|off|1|0, stored as yes/no), enum:a|b|c, int:LO:HI, path
+ * (absolute, ~/ allowed), url (http://HOST[:PORT]/PATH or empty).
+ */
+#ifndef NETMAN_CONFIG_H
+#define NETMAN_CONFIG_H
+#include <stddef.h>
+#include <stdio.h>
+
+/* X(ID, section, name, type, default, documentation) */
+#define NC_KEYS(X) \
+	X(WIFI_ENABLED, "wifi", "enabled", "bool", "yes", "Wi-Fi support: the wifi commands, the Wi-Fi tab. no = skipped everywhere (CLI says 'wifi disabled in config').") \
+	X(WIFI_BACKEND, "wifi", "backend", "enum:auto|iwd|wpa", "auto", "Which daemon to talk to. auto = wpa_supplicant if its control socket exists for the interface, else iwd.") \
+	X(WIFI_AUTOCONNECT, "wifi", "autoconnect", "bool", "yes", "The daemon joins known networks by itself (per-network switch: wifi known autoconnect SSID on|off).") \
+	X(WIFI_RSSI_GOOD, "wifi", "rssi_good", "int:-120:0", "-55", "dBm at or above which a signal is 'good' (green in the TUI, 4 quality steps).") \
+	X(WIFI_RSSI_OK, "wifi", "rssi_ok", "int:-120:0", "-65", "dBm at or above which a signal is 'ok'. Must be lower than rssi_good.") \
+	X(WIFI_RSSI_WEAK, "wifi", "rssi_weak", "int:-120:0", "-75", "dBm at or above which a signal is 'weak' (below it: bad). Must be lower than rssi_ok.") \
+	X(BT_ENABLED, "bluetooth", "enabled", "bool", "yes", "Bluetooth support: the bt commands, the Bluetooth tab.") \
+	X(BT_AGENT, "bluetooth", "agent", "bool", "yes", "Register netman's own pairing agent (PIN / passkey / confirmation prompts). no = rely on another agent such as your desktop's.") \
+	X(NET_ENABLED, "net", "enabled", "bool", "yes", "Ethernet / IP management: the net and roam commands, the Ethernet/IP tab.") \
+	X(NET_DHCP, "net", "dhcp", "bool", "yes", "Built-in DHCPv4 client. no = `net dhcp` is refused and dhcp profiles are not applied (static profiles only).") \
+	X(NET_DNS_MODE, "net", "dns_mode", "enum:auto|resolved|resolvconf", "auto", "Where DNS servers go: resolved = systemd-resolved, resolvconf = write /etc/resolv.conf, auto = resolved when it runs.") \
+	X(NET_STATE_DIR, "net", "state_dir", "path", "/var/lib/netman", "Lease cache and the per-machine MAC secret.") \
+	X(ROAM_ENABLED, "roaming", "enabled", "bool", "yes", "Autoconnect policy and the `roam` commands.") \
+	X(ROAM_PROBE, "roaming", "probe", "bool", "yes", "Check connectivity after a network comes up (needs probe_url); a captive portal or no internet counts as a failure.") \
+	X(ROAM_PROBE_URL, "roaming", "probe_url", "url", "http://connectivitycheck.gstatic.com/generate_204", "Plain-http URL fetched by the probe: 204 = internet, any other answer = captive portal. Empty = no probing.") \
+	X(ROAM_RANDOM_MAC, "roaming", "random_mac", "bool", "no", "Use a stable random (locally administered) MAC per profile instead of the hardware address.") \
+	X(ROAM_SCORE, "roaming", "score_threshold", "int:0:100", "20", "A network scoring below this (0..100: signal, gateway RTT, loss, captive portal) is dropped for another candidate.") \
+	X(VPN_ENABLED, "vpn", "enabled", "bool", "yes", "WireGuard / OpenVPN / provider support: the vpn commands, the VPN tab.") \
+	X(VPN_KILLSWITCH, "vpn", "killswitch", "bool", "no", "`vpn up` also turns the nftables kill switch on (traffic only through the tunnel).") \
+	X(VPN_WATCHDOG, "vpn", "watchdog", "bool", "yes", "The daemon reconnects a tunnel that died or whose handshake went stale.") \
+	X(FW_ENABLED, "firewall", "enabled", "bool", "no", "Firewall management. no = fw apply / confirm / rollback are refused (show, plan, diff and preset still work). Off by default: it changes your rules.") \
+	X(FW_PRESET, "firewall", "preset", "enum:workstation|lockdown", "workstation", "Ruleset `fw plan` and `fw apply` start from when you name no preset.") \
+	X(FW_CONFIRM, "firewall", "confirm_s", "int:0:3600", "30", "fw apply rolls back by itself unless you run `fw confirm` within this many seconds. 0 = apply for good at once.") \
+	X(FW_ZONE, "firewall", "default_zone", "enum:trusted|home|public|untrusted", "public", "Zone of interfaces that have none: trusted = accept all, home, public (stealth + limits), untrusted (nothing in).") \
+	X(METRICS_ENABLED, "metrics", "enabled", "bool", "yes", "Interface counters and rates: the metrics commands, the rates in the TUI.") \
+	X(METRICS_DIR, "metrics", "dir", "path", "/var/lib/netman/metrics", "Where `metrics record` appends one TSV file per interface (rotated at 1 MiB).") \
+	X(METRICS_INTERVAL, "metrics", "interval_s", "int:1:3600", "5", "Seconds between samples for `metrics watch` and `metrics record --loop`.") \
+	X(TUI_THEME, "tui", "theme", "enum:default|mono|light", "default", "TUI colours.") \
+	X(TUI_UNICODE, "tui", "unicode", "enum:auto|yes|no", "auto", "Box drawing and glyphs. auto = by locale; no = plain ASCII.") \
+	X(PRIV_SUDO, "privileges", "sudo", "enum:auto|never|always", "auto", "When netman re-runs itself through sudo: auto = only when the command needs root, never, always.")
+
+enum {
+#define X(id, sec, name, type, def, doc) NC_##id,
+	NC_KEYS(X)
+#undef X
+	NC_N
+};
+
+typedef struct {
+	char v[NC_N][256];        /* normalised value of each key (bools are "yes"/"no") */
+	char origin[NC_N][160];   /* where it came from: "default", "FILE:LINE", "env NAME", "set" */
+} netman_config;
+
+void netman_config_defaults(netman_config *c);
+const char *netman_config_section(int k);
+const char *netman_config_name(int k);          /* bare key name */
+const char *netman_config_type(int k);
+const char *netman_config_default(int k);
+const char *netman_config_doc(int k);
+void netman_config_fullname(int k, char *out, size_t n);   /* "wifi.backend" */
+int netman_config_find(const char *dotted);     /* index or -1 */
+int netman_config_suggest(const char *name, char *out, size_t n);   /* closest known "sec.key" (or section); 1 if one is close enough */
+
+const char *netman_config_str(const netman_config *c, int k);
+int netman_config_bool(const netman_config *c, int k);
+int netman_config_int(const netman_config *c, int k);
+
+/* check VALUE for key K; norm gets the stored form (yes/no, ~ expanded). 0 ok, -1 + reason in msg */
+int netman_config_check_value(int k, const char *value, char *norm, size_t nn, char *msg, size_t mn);
+/* parse TEXT (len bytes) as one file called FNAME; 0 or -1 with "FNAME:LINE: message" in err. On error c may be half-updated. */
+int netman_config_parse(netman_config *c, const char *text, size_t len, const char *fname, char *err, size_t errsz);
+int netman_config_load_file(netman_config *c, const char *path, int must_exist, char *err, size_t errsz);
+int netman_config_env(netman_config *c, char *err, size_t errsz);              /* NETMAN_* overrides */
+int netman_config_load(netman_config *c, char *err, size_t errsz);             /* defaults + files + env */
+void netman_config_show(const netman_config *c, FILE *o);                      /* "sec.key = value   # origin" lines, re-parseable */
+void netman_config_example(FILE *o);                                           /* the documented example file (generated from NC_KEYS) */
+const char *netman_config_user_path(char *buf, size_t n);                      /* the file `config set` edits by default */
+/* edit PATH atomically (mkstemp + rename in the same directory), comments and layout kept; the result is re-parsed before it replaces the file */
+int netman_config_set_file(const char *path, const char *dotted, const char *value, char *err, size_t errsz);
+int netman_config_toggle_file(const char *path, const char *dotted, char *err, size_t errsz);   /* bool keys: flips the effective value */
+int netman_config_split_url(const char *url, char *host, size_t hn, int *port, char *path, size_t pn);   /* roaming.probe_url pieces; 0 ok */
+#endif
