@@ -15,7 +15,7 @@ CFLAGS  ?= -O2
 CSTD     = -std=gnu11 -D_GNU_SOURCE -U_FORTIFY_SOURCE   # hardened glibc headers clash with base.h
 OUT     ?= bin
 PREFIX  ?= /usr/local
-INC      = -Ideps
+INC      = -Ideps -Ideps/utils -Ideps/libutil -Ideps/singlefile/abstract
 
 TOOLS   := cloc colorado dv fzf gtop man netcat notts scenario shot snip sudo tgates tree wlcb xcb
 
