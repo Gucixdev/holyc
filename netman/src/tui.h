@@ -47,7 +47,7 @@ typedef struct {
 typedef struct { char key[96]; signed char v[8]; int n; } nm_hist;   /* last signal readings of one network */
 
 enum { NM_WIFI, NM_ETH, NM_BT, NM_VPN, NM_ENT, NM_TOR, NM_SSH, NM_MESH, NM_BOND, NM_TUN, NM_NTAB };
-enum { NM_NORMAL, NM_FILTER, NM_PROMPT, NM_CONFIRM, NM_HELP, NM_WPS, NM_INFO };
+enum { NM_NORMAL, NM_FILTER, NM_PROMPT, NM_CONFIRM, NM_HELP, NM_WPS, NM_INFO, NM_SETTINGS };
 enum { NM_K_UP = 0x101, NM_K_DOWN, NM_K_RIGHT, NM_K_LEFT, NM_K_BTAB, NM_K_PGUP, NM_K_PGDN, NM_K_HOME, NM_K_END, NM_K_TAB = 9, NM_K_ENTER = 13, NM_K_ESC = 27, NM_K_BS = 127 };
 enum { NM_SORT_SIGNAL, NM_SORT_NAME, NM_SORT_SECURED, NM_SORT_OPEN, NM_NSORT };
 
@@ -449,7 +449,7 @@ static void nm__keybar(const nm_ui *u, const nm_theme *t, nm__Row *r)
 	static const nm__Key vpn[] = { { "enter", "up/down" }, { "K", "killsw" }, { "i", "info" }, { "I", "all" }, { "r", "refresh" }, { "/", "filter" } };
 	static const nm__Key ent[] = { { "i", "info" }, { "I", "all" }, { "r", "refresh" }, { "/", "filter" } };
 	const nm__Key *k = u->tab == NM_WIFI ? wifi : u->tab == NM_BT ? bt : u->tab == NM_ETH ? eth : nm__entlike(u) ? ent : vpn;
-	int n = u->tab == NM_WIFI ? 12 : u->tab == NM_BT ? 9 : u->tab == NM_ETH ? 4 : nm__entlike(u) ? 4 : 6, fixed = 14;
+	int n = u->tab == NM_WIFI ? 12 : u->tab == NM_BT ? 9 : u->tab == NM_ETH ? 4 : nm__entlike(u) ? 4 : 6, fixed = 26;
 	if (u->mode == NM_HELP || u->mode == NM_INFO) { nm__kb(r, t, "j/k", "scroll"); nm__kb(r, t, "esc", "close"); return; }
 	if (u->mode == NM_PROMPT) { nm__kb(r, t, "enter", "ok"); if (u->masked) nm__kb(r, t, "tab", "show/hide"); nm__kb(r, t, "esc", "cancel"); return; }
 	if (u->mode == NM_CONFIRM) { nm__kb(r, t, "y", "yes"); nm__kb(r, t, "n", "no"); return; }
@@ -458,7 +458,7 @@ static void nm__keybar(const nm_ui *u, const nm_theme *t, nm__Row *r)
 		if (r->col + need + fixed > r->w) break;
 		nm__kb(r, t, k[i].k, k[i].l);
 	}
-	nm__kb(r, t, "?", "help"); nm__kb(r, t, "q", "quit");
+	nm__kb(r, t, "S", "settings"); nm__kb(r, t, "?", "help"); nm__kb(r, t, "q", "quit");
 }
 
 /* ---- modal: a bordered box centred over the list area ------------------------------------------------------------------ */
@@ -571,6 +571,8 @@ static void nm__overlay(const nm_ui *u, const nm_theme *t, FILE *o)
 	}
 }
 
+#include "settings_tui.h"
+
 /* the right-hand part of a Wi-Fi row: tag, dBm, percent, saved flags - fixed width so the columns line up */
 static void nm__wifi_row(const nm_ui *u, const nm_theme *t, nm__Row *r, const nm_net *e, int selected, int lw)
 {
@@ -612,6 +614,7 @@ void nm_ui_render(const nm_ui *u, const nm_theme *t, FILE *o)
 {
 	int idx[NM_MAXNET], n = nm_ui_visible(u, idx, NM_MAXNET), rows = nm__rows(u), w = u->w, h = u->h, tabs[NM_NTAB], nt = nm__tabs(u, tabs);
 	nm__Row r;
+	if (u->mode == NM_SETTINGS) { nm_sset_render(u, t, o); return; }
 	/* row 1: tabs */
 	nm__row_init(&r, w);
 	{
@@ -2032,6 +2035,9 @@ static void nm__big_build(nm_ui *u)
 void nm_ui_key(nm_ui *u, int key)
 {
 	int was = u->mode;
+	if (was == NM_SETTINGS) { nm_sset_key(u, key); return; }
+	if (key == NM_K_MOUSE) return;
+	if (was == NM_NORMAL && key == 'S') { nm__ss_open(u); return; }
 	if (was == NM_NORMAL && key == 'I') { u->big = !u->big; u->bigoff = 0; if (u->big) nm__big_build(u); return; }
 	if (u->big && was == NM_NORMAL) {
 		int inner = nm__rows(u), max = u->ndl - inner > 0 ? u->ndl - inner : 0;
@@ -2163,7 +2169,7 @@ static volatile sig_atomic_t nm__winch;
 
 static void nm__restore(void)
 {
-	static const char off[] = "\x1b[0m\x1b[?25h\x1b[?1049l";
+	static const char off[] = "\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l";
 	if (!nm__raw_on) return;
 	if (write(1, off, sizeof off - 1)) {}
 	tcsetattr(0, TCSAFLUSH, &nm__saved);
@@ -2183,10 +2189,16 @@ static int nm__read_key(void)
 	if (read(0, &c, 1) != 1) return NM_K_ESC;
 	if (c != '[' && c != 'O') return NM_K_ESC;
 	{
-		char seq[8];
+		char seq[24];
 		int k = 0;
-		while (k < 6 && poll(&p, 1, 30) > 0 && read(0, &seq[k], 1) == 1) { k++; if (seq[k - 1] >= 0x40 && seq[k - 1] <= 0x7e) break; }
+		while (k < 20 && poll(&p, 1, 30) > 0 && read(0, &seq[k], 1) == 1) { k++; if (seq[k - 1] >= 0x40 && seq[k - 1] <= 0x7e) break; }
 		if (!k) return NM_K_ESC;
+		if (seq[0] == '<' && (seq[k - 1] == 'M' || seq[k - 1] == 'm')) {   /* SGR mouse: <b;x;yM (press) / m (release); on only while the Settings panel is open */
+			int b = 0, x = 0, y = 0;
+			seq[k] = 0;
+			if (sscanf(seq + 1, "%d;%d;%d", &b, &x, &y) == 3) { nm__mouse.b = b; nm__mouse.x = x; nm__mouse.y = y; nm__mouse.rel = seq[k - 1] == 'm'; return NM_K_MOUSE; }
+			return 0;
+		}
 		switch (seq[k - 1]) {
 		case 'A': return NM_K_UP;
 		case 'B': return NM_K_DOWN;
@@ -2230,16 +2242,36 @@ static void nm__paint(nm_ui *u)
 	free(buf);
 }
 
+static int nm__utf_on;
+/* push the (re)loaded configuration into the running UI: module globals, which tabs exist, signal thresholds, theme */
+static void nm__apply_cfg(nm_ui *u)
+{
+	const netman_config *c = &nm__ss.c;
+	nc_cfg = *c;
+	nc_apply(&nc_cfg);
+	u->en[NM_WIFI] = nc_enabled("wifi"); u->en[NM_ETH] = nc_enabled("net"); u->en[NM_BT] = nc_enabled("bluetooth"); u->en[NM_VPN] = nc_enabled("vpn"); u->en[NM_ENT] = nc_enabled("enterprise");
+	u->en[NM_TOR] = nc_enabled("tor"); u->en[NM_SSH] = nc_enabled("ssh"); u->en[NM_MESH] = nc_enabled("mesh"); u->en[NM_BOND] = nc_enabled("bonding"); u->en[NM_TUN] = nc_enabled("tunnel");
+	u->rssi_good = netman_config_int(c, NC_WIFI_RSSI_GOOD); u->rssi_ok = netman_config_int(c, NC_WIFI_RSSI_OK); u->rssi_weak = netman_config_int(c, NC_WIFI_RSSI_WEAK);
+	{
+		const char *uni = netman_config_str(c, NC_TUI_UNICODE);
+		int utf = !strcmp(uni, "yes") || (!strcmp(uni, "auto") && nm__utf_on);
+		nm_theme_make(&nm__theme, utf, netman_config_str(c, NC_TUI_THEME));
+	}
+	for (int i = 0; i < NM_NTAB; i++) if (!u->en[i]) u->loaded[i] = 0;
+}
+
 static int nc_tui(void)
 {
 	struct termios raw;
 	struct sigaction sa;
 	const char *loc, *uni = netman_config_str(&nc_cfg, NC_TUI_UNICODE), *th = netman_config_str(&nc_cfg, NC_TUI_THEME);
-	int utf, ntab = 0;
+	int utf, utf_auto, ntab = 0;
 	if (!isatty(0) || !isatty(1)) { fputs("netman: the TUI needs a terminal\n", stderr); return 1; }
 	loc = getenv("LC_ALL"); if (!loc || !*loc) loc = getenv("LC_CTYPE"); if (!loc || !*loc) loc = getenv("LANG");
+	utf_auto = loc && (strcasestr(loc, "utf-8") || strcasestr(loc, "utf8"));
 	utf = !strcmp(uni, "yes") || (!strcmp(uni, "auto") && loc && (strcasestr(loc, "utf-8") || strcasestr(loc, "utf8")));
 	nm_theme_make(&nm__theme, utf, th);
+	nm__utf_on = utf_auto;
 	nm_ui_init(&nm__ui, 80, 24);
 	nm__ui.en[NM_WIFI] = nc_enabled("wifi"); nm__ui.en[NM_ETH] = nc_enabled("net"); nm__ui.en[NM_BT] = nc_enabled("bluetooth"); nm__ui.en[NM_VPN] = nc_enabled("vpn"); nm__ui.en[NM_ENT] = nc_enabled("enterprise"); nm__ui.en[NM_TOR] = nc_enabled("tor"); nm__ui.en[NM_SSH] = nc_enabled("ssh"); nm__ui.en[NM_MESH] = nc_enabled("mesh"); nm__ui.en[NM_BOND] = nc_enabled("bonding"); nm__ui.en[NM_TUN] = nc_enabled("tunnel");
 	nm__ui.rssi_good = netman_config_int(&nc_cfg, NC_WIFI_RSSI_GOOD); nm__ui.rssi_ok = netman_config_int(&nc_cfg, NC_WIFI_RSSI_OK); nm__ui.rssi_weak = netman_config_int(&nc_cfg, NC_WIFI_RSSI_WEAK);

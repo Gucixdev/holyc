@@ -132,6 +132,8 @@ void netman_config_example(FILE *o);                                           /
 const char *netman_config_user_path(char *buf, size_t n);                      /* the file `config set` edits by default */
 /* edit PATH atomically (mkstemp + rename in the same directory), comments and layout kept; the result is re-parsed before it replaces the file */
 int netman_config_set_file(const char *path, const char *dotted, const char *value, char *err, size_t errsz);
+/* drop the assignment of DOTTED from PATH (reset to default): 0 removed, 1 it was not set, -1 error */
+int netman_config_unset_file(const char *path, const char *dotted, char *err, size_t errsz);
 int netman_config_toggle_file(const char *path, const char *dotted, char *err, size_t errsz);   /* bool keys: flips the effective value */
 int netman_config_split_url(const char *url, char *host, size_t hn, int *port, char *path, size_t pn);   /* roaming.probe_url pieces; 0 ok */
 #endif

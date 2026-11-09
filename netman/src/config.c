@@ -598,3 +598,74 @@ int netman_config_toggle_file(const char *path, const char *dotted, char *err, s
 	if (netman_config_load(&c, e2, sizeof e2)) { seterr(err, errsz, "%s", e2); return -1; }
 	return netman_config_set_file(path, dotted, netman_config_bool(&c, k) ? "no" : "yes", err, errsz);
 }
+
+/* remove the assignment of DOTTED from PATH (comments, other keys and layout stay; the result is re-parsed before it replaces the file).
+ * 0 removed, 1 the file did not set it (nothing written), -1 error. This is "reset to the default" for the user file. */
+int netman_config_unset_file(const char *path, const char *dotted, char *err, size_t errsz)
+{
+	int k = netman_config_find(dotted);
+	char *text = NULL, cur[32] = "", sug[96];
+	size_t len = 0, cap = 0;
+	FILE *f;
+	Sb out = { 0 };
+	const char *p, *end;
+	int found = 0;
+	if (k < 0) {
+		if (netman_config_suggest(dotted, sug, sizeof sug)) seterr(err, errsz, "unknown key '%s' (did you mean '%s'?)", dotted, sug);
+		else seterr(err, errsz, "unknown key '%s' (see: netman config example)", dotted);
+		return -1;
+	}
+	if (!(f = fopen(path, "r"))) {
+		if (errno == ENOENT) return 1;
+		seterr(err, errsz, "%s: %s", path, strerror(errno));
+		return -1;
+	}
+	for (;;) {
+		size_t r;
+		if (len + 4097 > cap) { cap = cap ? cap * 2 : 8192; if (cap > (1u << 20)) { fclose(f); free(text); seterr(err, errsz, "%s: too large", path); return -1; } text = realloc(text, cap); if (!text) abort(); }
+		r = fread(text + len, 1, cap - len - 1, f);
+		if (!r) break;
+		len += r;
+	}
+	fclose(f);
+	if (!text) return 1;
+	text[len] = 0;
+	p = text; end = text + len;
+	while (p < end) {
+		const char *e = memchr(p, '\n', (size_t)(end - p)), *q = p;
+		size_t ll = e ? (size_t)(e - p) : (size_t)(end - p);
+		char line[1100];
+		int drop = 0;
+		if (ll > 1023) ll = 1023;
+		memcpy(line, p, ll); line[ll] = 0;
+		while (*q == ' ' || *q == '\t') q++;
+		if (*q == '[') {
+			char *r = strchr(line, ']');
+			if (r) { char *s2 = strchr(line, '[') + 1; *r = 0; while (*s2 == ' ') s2++; snprintf(cur, sizeof cur, "%s", s2); for (char *t = cur + strlen(cur); t > cur && t[-1] == ' '; ) *--t = 0; }
+		} else if (*q && *q != '#' && *q != ';') {
+			char *eq = strchr(line, '='), *ks = line, kname[200], full[240];
+			if (eq) {
+				size_t kl;
+				while (*ks == ' ' || *ks == '\t') ks++;
+				kl = (size_t)(eq - ks);
+				while (kl && (ks[kl - 1] == ' ' || ks[kl - 1] == '\t')) kl--;
+				snprintf(kname, sizeof kname, "%.*s", (int)(kl > 199 ? 199 : kl), ks);
+				if (strchr(kname, '.')) snprintf(full, sizeof full, "%s", kname); else snprintf(full, sizeof full, "%s.%s", cur, kname);
+				if (!strcmp(full, dotted)) { drop = 1; found = 1; }
+			}
+		}
+		if (!drop) { sb_add(&out, p, ll); if (e) sb_add(&out, "\n", 1); }
+		p = e ? e + 1 : end;
+	}
+	if (!found) { free(text); free(out.b); return 1; }
+	{
+		netman_config chk;
+		char perr[500];
+		int rc;
+		netman_config_defaults(&chk);
+		if (netman_config_parse(&chk, out.b ? out.b : "", out.n, path, perr, sizeof perr)) { seterr(err, errsz, "refusing to write: the result would not load: %s", perr); free(text); free(out.b); return -1; }
+		rc = write_atomic(path, out.b ? out.b : "", out.n, err, errsz);
+		free(text); free(out.b);
+		return rc;
+	}
+}

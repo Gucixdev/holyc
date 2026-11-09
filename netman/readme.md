@@ -71,6 +71,28 @@ Tabs Wi-Fi | Ethernet/IP | Bluetooth | VPN | Enterprise (read-only, only with en
   password is reported with a retry, backend errors appear in the modal); 802.1X asks identity then password; OPEN asks for confirmation; a hidden row asks for the SSID.
 - Ethernet/IP: per-interface state, speed, live rx/tx, addresses, gateway (refreshes every second). VPN: profiles with state, enter = up/down.
 
+## settings (one schema, three front ends)
+
+`src/settings.c` derives the schema (section, key, kind bool/int/enum/string/path/cmd, default, range/choices, one-line description,
+needs-root and restart-needed flags, tab, hidden-while-the-module-is-off) from the `NC_KEYS` table, so no key is listed twice;
+`tests/settings_test.c` fails when a key has no schema entry. `help config`, the man page and `config show` read the same data.
+
+    netman settings list|get KEY|set KEY VALUE|toggle KEY|reset KEY|check [--json]
+    netman settings --dump-api      JSON: schema + current values + source (default/system/user/env)
+    netman settings schema          desktop's settings.schema pipe format (key|type|extra|apply|default|label)
+    netman settings menu | dmenu | netman settings pick     (NETMAN_MENU overrides the value menu, default dmenu)
+
+Writes go to `~/.config/netman/netman.conf` only (atomic rename, comments kept; a bad value leaves the file unchanged). In the TUI the panel
+is key `S`: tabs, checkboxes, enum cycling, inline editing with validation, `/` search, `d` resets, mouse (click, wheel); changes apply live
+where safe and are flagged "restart needed" otherwise; module tabs appear only while the module is enabled. Works at 80x24 and 40x12.
+
+## architecture: no resident daemon by default
+
+Every command is a one-shot process: it reads the config, does its netlink/D-Bus/socket work and exits. `netman daemon` is optional (autoconnect
+policy, watchdog, the NetworkManager D-Bus API); nothing needs it for status, settings or the TUI. Measured on this machine (release build, one
+process, config in a temp dir): `netman status` peak RSS about 4.6 MiB and first output after about 3 ms (median of 20, it talks netlink);
+`netman settings list` peak RSS about 2.4 MiB (the C runtime alone is 2.3 MiB) and first output after under 1 ms.
+
 ## VPN types, import, Tor
 
 `netman vpn up NAME` picks the client from the profile in `/etc/netman/vpn` (root-owned, 0600): `NAME.conf` WireGuard (native, no wg-quick),
@@ -114,9 +136,11 @@ Each has a tab in the TUI (only when enabled, read-only: the CLI changes things)
 
     cc -std=gnu11 -Wall -Wextra -O2 -Isrc -Isrc/mods -DNETMAN_NO_MAIN -o /tmp/nm_logic tests/logic_test.c src/config.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c src/mods/wireguard.c && /tmp/nm_logic   76 checks (parsers, width, render, modals)
     tests/pty                                    the real binary in tmux against fake iwd / wpa_supplicant / bluez (tests/fakes.c): 105 checks
-    tests/cli_test                               help, man sync, config, module gating, exit codes (41)
+    tests/cli_test                               help, man sync, config, module gating, exit codes (57)
     cc -std=gnu11 -Isrc -o /tmp/nm_priv tests/priv_test.c; cc ... tests/config_test.c src/config.c [src/netman.conf.example]   15 / 77
     tests/vpnmod_test.c (VPN module goldens, fake swanctl/openconnect, import samples in tests/vpn_samples, xl2tpd parses the config), tests/tor_test.c (torrc/nft goldens, fake control server, nft rules loaded in `unshare -Urn`: redirect, leak dropped, fail closed), tests/pty_tor (Tor tab + VPN types, 80x24 and 40x12), tests/pty_ent (Enterprise tab, 80x24 and 40x12), tests/pty_vpn (real WireGuard in unshare -Urn, drives the VPN tab), tests/wifi_bt_test.c (75), net_test (+ `selftest` under unshare -Urn), vpn_test (+ live WireGuard peer edits under ns), fw_test, net_score_test (unshare -Urn)
+
+    tests/settings_test.c (schema consistency: every config key has an entry; 616 checks), tests/settings_cli_test (settings goldens, JSON validity, atomic writes, pick through a fake menu), tests/pty_settings (the S panel in tmux under `unshare -Urn`: keys, mouse, 80x24 and 40x12)
 
     tests/ssh_test.c, mesh_test.c, bonding_test.c, tunnel_test.c (fake ssh / ssh-keyscan / ip / batctl, real netlink in `unshare -Urn`), tests/pty_mods (the four tabs in the real TUI)
 

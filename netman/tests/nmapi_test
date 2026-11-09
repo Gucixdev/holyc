@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# nmapi_test - `netman daemon` (the NetworkManager D-Bus API) against real NM clients, on a private bus. Nothing real is touched:
+#   - a private dbus-daemon (tests/fakes.c) is the "system bus", with a fake iwd on it for the Wi-Fi backend
+#   - everything runs in `unshare -Urn`: own user + network namespace with dummy links eth0 (wired) and wlan0 (marked Wi-Fi by NETMAN_IFACE)
+#   - profiles and state go to a temp dir; the host's NetworkManager, iwd, DNS files and network are never involved
+# Clients: nmapi_raw_test (plain C on dbus.h) always; nmapi_libnm_test (libnm = the library nm-applet/nmcli are built on) when libnm's dev files AND tests/nmapi_libnm_test.c exist (the latter was never committed: skipped cleanly until written).
+set -u
+cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+CC=${CC:-cc}
+common="-std=gnu11 -Wall -Wextra -Wno-unused-function -Wno-format-truncation -O2"
+$CC $common -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c src/mods/wireguard.c src/mods/vpnmod.c src/mods/openvpn.c src/mods/ipsec.c src/mods/l2tp.c src/mods/openconnect.c src/mods/sstp.c src/mods/vpnimport.c src/mods/tor.c src/mods/ssh.c src/mods/mesh.c src/mods/bonding.c src/mods/tunnel.c -o "$work/netman" || exit 1
+$CC $common -Isrc/mods tests/fakes.c -o "$work/fakes" || exit 1
+$CC $common -Isrc/mods tests/nmapi_raw_test.c -o "$work/raw" || exit 1
+libnm=0
+if [ ! -f tests/nmapi_libnm_test.c ]; then echo "nmapi_test: tests/nmapi_libnm_test.c is not written yet, skipping the libnm client (the raw D-Bus client still runs)"
+elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists libnm 2>/dev/null; then
+	# shellcheck disable=SC2046
+	$CC -std=gnu11 -Wall -Wextra -O2 tests/nmapi_libnm_test.c -o "$work/libnm" $(pkg-config --cflags --libs libnm) || exit 1
+	libnm=1
+else echo "nmapi_test: libnm dev files not found, skipping the libnm client"; fi
+command -v unshare >/dev/null && command -v dbus-daemon >/dev/null || { echo "nmapi_test: needs unshare and dbus-daemon"; exit 77; }
+: >"$work/empty.conf"
+printf '[net]\nstate_dir = %s/state\n' "$work" >"$work/netman.conf"
+
+cat >"$work/inner" <<INNER
+#!/usr/bin/env bash
+set -u
+ip link add eth0 type dummy && ip link add wlan0 type dummy || { echo "cannot create dummy links (no user namespaces?)"; exit 77; }
+ip link set lo up; ip link set eth0 up; ip link set wlan0 up
+export NETMAN_IFACE=wlan0 NETMAN_CONF_DIR=$work/profiles NETMAN_CONFIG=$work/netman.conf NMT_BUS="\$DBUS_SYSTEM_BUS_ADDRESS" NETMAN_STATE_DIR=$work/state
+mkdir -p $work/profiles $work/state
+$work/netman daemon --bus "\$DBUS_SYSTEM_BUS_ADDRESS" 2>$work/daemon.log &
+dpid=\$!
+for i in \$(seq 1 50); do grep -q serving $work/daemon.log 2>/dev/null && break; sleep 0.1; done
+grep -q serving $work/daemon.log || { echo "daemon did not start"; cat $work/daemon.log; exit 1; }
+rc=0
+echo "== raw D-Bus client"; $work/raw || rc=1
+if [ $libnm = 1 ]; then echo "== libnm client"; $work/libnm || rc=1; fi
+kill \$dpid; wait \$dpid 2>/dev/null
+echo "== daemon log"; cat $work/daemon.log
+exit \$rc
+INNER
+chmod +x "$work/inner"
+nice -n 19 unshare -Urn "$work/fakes" "$work/log" "$work/inner"
+exit $?

@@ -696,6 +696,44 @@ static int h_cfg_toggle(const nc_cmd *c, int n, char **a)
 	printf("%s toggled  (%s)\n", a[0], path);
 	return 0;
 }
+/* ---- settings (the schema in settings.c: list/get/set/toggle/reset/check, the JSON API, the dmenu helpers) ------------------------ */
+
+static int nc_flag(int *n, char **a, const char *flag)   /* remove FLAG from a[0..n) if present */
+{
+	for (int i = 0; i < *n; i++) if (!strcmp(a[i], flag)) { memmove(a + i, a + i + 1, (size_t)(*n - i - 1) * sizeof *a); (*n)--; return 1; }
+	return 0;
+}
+static int nc_set_rc(int rc, const char *err) { if (rc) fprintf(stderr, "netman: %s\n", err); return rc ? 1 : 0; }
+static int h_set_list(const nc_cmd *c, int n, char **a)
+{
+	int all = nc_flag(&n, a, "--all");
+	if (n > 1) return nc_usage(c);
+	if (nset_list(&nc_cfg, stdout, n ? a[0] : NULL, all)) { fprintf(stderr, "netman: no settings in '%s' (netman settings list --all)\n", n ? a[0] : ""); return 1; }
+	return 0;
+}
+static int h_set_menu(const nc_cmd *c, int n, char **a)
+{
+	int all = nc_flag(&n, a, "--all");
+	if (n > 1) return nc_usage(c);
+	nset_menu(&nc_cfg, stdout, n ? a[0] : NULL, all);
+	return 0;
+}
+static int h_set_get(const nc_cmd *c, int n, char **a) { char e[400] = ""; if (n != 1) return nc_usage(c); return nc_set_rc(nset_get(&nc_cfg, a[0], stdout, e, sizeof e), e); }
+static int h_set_set(const nc_cmd *c, int n, char **a) { char e[600] = "", path[512]; if (n != 2) return nc_usage(c); return nc_set_rc(nset_set(nc_cfg_path(path, sizeof path), a[0], a[1], stdout, e, sizeof e), e); }
+static int h_set_toggle(const nc_cmd *c, int n, char **a) { char e[600] = "", path[512]; if (n != 1) return nc_usage(c); return nc_set_rc(nset_toggle(nc_cfg_path(path, sizeof path), a[0], stdout, e, sizeof e), e); }
+static int h_set_reset(const nc_cmd *c, int n, char **a) { char e[600] = "", path[512]; if (n != 1) return nc_usage(c); return nc_set_rc(nset_reset(nc_cfg_path(path, sizeof path), a[0], stdout, e, sizeof e), e); }
+static int h_set_check(const nc_cmd *c, int n, char **a) { int j = nc_flag(&n, a, "--json"); if (n) return nc_usage(c); return nset_check(stdout, j); }
+static int h_set_schema(const nc_cmd *c, int n, char **a) { (void)c; (void)n; (void)a; nset_schema(stdout); return 0; }
+static int h_set_api(const nc_cmd *c, int n, char **a) { char path[512]; (void)c; (void)n; (void)a; nset_dump_api(&nc_cfg, nc_cfg_path(path, sizeof path), stdout); return 0; }
+static int h_set_pick(const nc_cmd *c, int n, char **a)
+{
+	char e[600] = "", path[512];
+	int ch = nc_flag(&n, a, "--choices");
+	const char *val = NULL;
+	if (n == 2 && !strcmp(a[0], "--value")) { val = a[1]; n = 0; }
+	if (n) return nc_usage(c);
+	return nc_set_rc(nset_pick(&nc_cfg, nc_cfg_path(path, sizeof path), stdin, stdout, ch, val, e, sizeof e), e);
+}
 static int h_fw_preset(const nc_cmd *c, int n, char **a)
 {
 	char *v[2] = { "firewall.preset", NULL };
@@ -835,6 +873,17 @@ static const nc_cmd nc_table[] = {
 	{ "config show", "", h_cfg_show, R_NEV, NULL, "every setting with its value and where it came from", "" },
 	{ "config check", "", h_cfg_check, R_NEV, NULL, "validate the config files and environment", "Errors are FILE:LINE with a did-you-mean for unknown keys." },
 	{ "config set", "SECTION.KEY VALUE", h_cfg_set, R_NEV, NULL, "edit the user config file (atomic, comments kept)", "" },
+	{ "settings", "", h_set_list, R_NEV, NULL, "the settings panel's data as a list: key, value, where it comes from, what it does (= settings list)", "The TUI panel is key S inside `netman -tui`. Everything below works on the same schema (src/settings.c)." },
+	{ "settings list", "[SECTION|TAB] [--all]", h_set_list, R_NEV, NULL, "every setting: key, value, source (default/system/user/env), description", "Settings of a module that is switched off are left out; --all lists them. [restart] = needs a restart of the thing that reads it, [root] = acting on it needs root." },
+	{ "settings get", "KEY", h_set_get, R_NEV, NULL, "print the effective value of one setting", "" },
+	{ "settings set", "KEY VALUE", h_set_set, R_NEV, NULL, "validate and write one setting into the user file (atomic, comments kept)", "Same as config set, plus a note when the change needs a restart or an environment variable overrides it." },
+	{ "settings toggle", "KEY", h_set_toggle, R_NEV, NULL, "flip a yes/no setting", "" },
+	{ "settings reset", "KEY", h_set_reset, R_NEV, NULL, "remove the setting from the user file (back to the system file or the default)", "" },
+	{ "settings check", "[--json]", h_set_check, R_NEV, NULL, "validate the config files and environment; --json for scripts", "Exit 1 with FILE:LINE when something is wrong. Lists the settings an environment variable overrides." },
+	{ "settings schema", "", h_set_schema, R_NEV, NULL, "the schema in the pipe format of desktop's settings.schema (key|type|extra|apply|default|label)", "" },
+	{ "settings --dump-api", "", h_set_api, R_NEV, NULL, "JSON: the whole schema, the current values and where each one comes from", "For a launcher or panel that hosts netman's settings: tabs, then one object per setting with type, range or choices, default, value, source, needs_root, restart, gate and hidden." },
+	{ "settings menu", "[SECTION|TAB] [--all]", h_set_menu, R_NEV, NULL, "dmenu-ready lines: `section.key = value  # description`", "netman settings menu | dmenu -l 20 | netman settings pick" },
+	{ "settings pick", "[--choices] [--value VALUE]", h_set_pick, R_NEV, NULL, "read the chosen menu line on stdin, offer the values in a menu and set the one chosen", "The value menu is $NETMAN_MENU (a shell command, default `dmenu -p \"$NETMAN_MENU_PROMPT\"`); nothing chosen = nothing changed. --choices prints the choices instead; --value V sets V without asking." },
 	{ "daemon", "[--bus ADDRESS]", h_daemon, R_YES, "nmapi", "serve the NetworkManager D-Bus API (drop-in for NM clients)", "Claims org.freedesktop.NetworkManager on the system bus (fails if a NetworkManager owns it) and answers until SIGTERM. --bus selects another bus, e.g. a private dbus-daemon. See docs/nm-api-surface.md for what is implemented." },
 	{ "config toggle", "SECTION.KEY", h_cfg_toggle, R_NEV, NULL, "flip a yes/no setting", "" },
 	{ "config example", "", h_cfg_example, R_NEV, NULL, "print the documented example config", "" },

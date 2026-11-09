@@ -13,6 +13,7 @@ static const char *const nc_tui_help[] = {
 	"  j k, arrows, PgUp PgDn      move;  g G  first / last",
 	"  /                           filter by name",
 	"  r                           refresh / rescan",
+	"  S                           settings panel (see SETTINGS below)",
 	"  i                           details popup for the selected row;  I  toggle the big \"all info\" view",
 	"                              (replaces the list; j k pick another row, PgUp PgDn scroll, esc / I close)",
 	"  ?                           this help;  q  quit",
@@ -44,6 +45,15 @@ static const char *const nc_tui_help[] = {
 	"  read-only status: bonds, bridges, vlans, uplinks (ECMP), tethering (when tether.enabled) and licences",
 	"  (when licence.enabled), from the saved .ent profiles and the live kernel state;  i  details of the selected",
 	"  row;  I  the same plus the raw profile text. Changes are made with  netman ent ... / licence ... / key ...",
+	"SETTINGS (key S: every netman.conf key, same data as `netman settings`)",
+	"  tabs: Modules (the on/off switch of every module) then one tab per area; a module's tab exists only while it is enabled",
+	"  j k move;  h l, tab, 1-9 change tab;  / search all settings;  esc clears the search, then closes;  S or q close",
+	"  enter / space   toggle a yes/no, cycle a choice, edit text and numbers (enter saves, esc cancels, errors show as you type)",
+	"  + -  step a number or cycle a choice backwards;  e  edit any value as text;  d  back to the default (removes the line)",
+	"  mouse: click a tab or a row, click the selected row again to change it, wheel scrolls",
+	"  Each change is saved at once to ~/.config/netman/netman.conf (atomic, comments kept) and applied live, except rows",
+	"  marked \"restart needed\" (a daemon or tor process reads them at start). The right column and the line under the list",
+	"  say where the value comes from (default, system /etc, user, env = an environment variable that overrides the file).",
 	"HEADER (row 2, every tab)",
 	"  wifi / bt status, hostname, default route (iface via gateway), ip (pub = a public address), dns,",
 	"  and the network score 0-100 with its reasons (rtt, loss, dBm). The score is measured in the background",
@@ -59,6 +69,7 @@ static const struct { const char *group, *text; } nc_group_notes[] = {
 	         "team is bonding: the kernel team driver is deprecated, so kind=team maps runner= (activebackup, lacp, loadbalance, broadcast, roundrobin) onto the bonding driver. "
 	         "Tethering share-out uses its own nft table `inet netman_tether` (firewall.h replaces `inet netman`, so the two never clobber each other); an accept there cannot override a drop in another table, so a strict firewall must allow the downstream interface itself. "
 	         "Changing commands need enterprise.enabled = yes." },
+	{ "settings", "the settings schema (src/settings.c) as commands: list, get, set, toggle, reset, check, a JSON API (--dump-api) and dmenu helpers (menu | dmenu | pick). The TUI panel on key S shows the same data. Writes go to ~/.config/netman/netman.conf only, atomically, comments kept." },
 	{ "licence", "licence files NAME.lic with expiry, the expiry check (exit 1 when anything expires soon), and hook-driven renewal. Switched by licence.enabled." },
 	{ "key", "WireGuard key rotation (NAME.key in enterprise.licence_dir). Switched by licence.enabled." },
 	{ "wol", "Wake-on-LAN magic packet. Switched by enterprise.enabled." },
@@ -81,13 +92,26 @@ static void nc_help_row(FILE *o, const nc_cmd *c, int width)
 	else fprintf(o, "  %-*s  %s\n", width, left, c->sum);
 }
 
+static void nc_help_flags(FILE *o, int k)
+{
+	if (nset_restart(k)) fputs("  [restart needed]", o);
+	if (nset_needs_root(k)) fputs("  [acting on it needs root]", o);
+}
+
+/* every setting, grouped by the tab of the settings panel (the schema in settings.c decides the grouping and the flags) */
 static void nc_help_config(FILE *o)
 {
-	fprintf(o, "settings (netman config show; netman config set SECTION.KEY VALUE; files /etc/netman/netman.conf and ~/.config/netman/netman.conf; env NETMAN_SECTION_KEY)\n");
-	for (int k = 0; k < NC_N; k++) {
-		char full[64];
-		netman_config_fullname(k, full, sizeof full);
-		fprintf(o, "  %-24s %-28s default %s\n      %s\n", full, netman_config_type(k), netman_config_default(k), netman_config_doc(k));
+	fprintf(o, "settings (netman settings list|get|set|toggle|reset|check|menu|pick; netman config show; files /etc/netman/netman.conf and ~/.config/netman/netman.conf; env NETMAN_SECTION_KEY)\n");
+	for (int t = 0; t < nset_ntabs(); t++) {
+		fprintf(o, "\n%s\n", nset_tabname(t));
+		for (int k = 0; k < NC_N; k++) {
+			char full[64];
+			if (nset_tab_index(k) != t) continue;
+			netman_config_fullname(k, full, sizeof full);
+			fprintf(o, "  %-24s %-28s default %s\n      %s", full, netman_config_type(k), netman_config_default(k), netman_config_doc(k));
+			nc_help_flags(o, k);
+			fputc('\n', o);
+		}
 	}
 }
 
@@ -110,10 +134,10 @@ static int nc_help_topic(FILE *o, const char *t)
 {
 	int found = 0, tl = (int)strlen(t);
 	if (!strcmp(t, "tui")) { for (int i = 0; i < NC_NTUIHELP; i++) fprintf(o, "%s\n", nc_tui_help[i]); return 0; }
-	if (!strcmp(t, "config") || !strcmp(t, "settings")) { nc_help_config(o); return 0; }
+	if (!strcmp(t, "config")) { nc_help_config(o); return 0; }
 	for (int i = 0; i < NC_NTABLE; i++) {   /* an exact command: full text */
 		const nc_cmd *c = &nc_table[i];
-		if (!strcmp(c->name, t)) {
+		if (!strcmp(c->name, t) && strcmp(t, "settings")) {   /* "settings" is also a group: its rows and the key list below */
 			fprintf(o, "netman %s%s%s\n  %s\n", c->name, *c->args ? " " : "", c->args, c->sum);
 			if (*c->help) fprintf(o, "\n  %s\n", c->help);
 			fprintf(o, "\n  needs root: %s\n", c->root == NM_ROOT_YES ? "yes (re-runs through sudo)" : c->root == NM_ROOT_WPA ? "only with wpa_supplicant when its socket is closed to you" : "no");
@@ -128,6 +152,7 @@ static int nc_help_topic(FILE *o, const char *t)
 			nc_help_row(o, c, 52); found = 1;
 		}
 	}
+	if (found && !strcmp(t, "settings")) { fputc('\n', o); nc_help_config(o); }
 	return found ? 0 : 1;
 }
 
@@ -168,7 +193,10 @@ static void nc_help_man(FILE *o)
 		netman_config_fullname(k, full, sizeof full);
 		fprintf(o, ".TP\n.B %s\n", full);
 		nc_roff(o, netman_config_doc(k));
-		fputs(" Default: ", o); nc_roff(o, netman_config_default(k)); fputs(".\n", o);
+		fputs(" Default: ", o); nc_roff(o, netman_config_default(k)); fputs(".", o);
+		if (nset_restart(k)) fputs(" Restart needed.", o);
+		if (nset_needs_root(k)) fputs(" Acting on it needs root.", o);
+		fputs(" Panel tab: ", o); nc_roff(o, nset_tab(k)); fputs(".\n", o);
 	}
 	fputs(".SH FILES\n.I /etc/netman/netman.conf\n.br\n.I ~/.config/netman/netman.conf\n.br\n.I /etc/netman/NAME.conf\n(network profiles)\n.SH SEE ALSO\nnetman.conf.example\n", o);
 }

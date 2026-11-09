@@ -36,9 +36,11 @@
 #include "mods/enterprise/enterprise.h"
 #include "mods/enterprise/licence.h"
 #include "config.h"
+#include "settings.h"
 #include "priv.h"
 #include "cli.h"
 #include "mods/nmapi.c"
+#include "settings.c"
 #include "daemon.c"
 #include "help.c"
 #include "tui.h"
@@ -62,7 +64,7 @@ int main(int argc, char **argv)
 	}
 	/* configuration: a broken file stops everything except `config` and `help`, which are how you fix it */
 	if (netman_config_load(&nc_cfg, err, sizeof err)) {
-		if (strcmp(c->name, "help") && strncmp(c->name, "config", 6) && strcmp(c->name, "fw preset")) { fprintf(stderr, "netman: %s\n(netman config check, or fix the file)\n", err); return 1; }
+		if (strcmp(c->name, "help") && strncmp(c->name, "config", 6) && strncmp(c->name, "settings", 8) && strcmp(c->name, "fw preset")) { fprintf(stderr, "netman: %s\n(netman config check, or fix the file)\n", err); return 1; }
 		netman_config_defaults(&nc_cfg);
 	}
 	nc_apply(&nc_cfg);
