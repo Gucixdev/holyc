@@ -22,6 +22,7 @@
  * `-w` flag is still accepted (so existing invocations don't hard
  * error) but is a documented no-op here, not silently dropped. */
 #include <ctype.h>
+#include <poll.h>
 #include <fcntl.h>
 #include <locale.h>
 #include <stdio.h>
@@ -779,14 +780,45 @@ keyboard_keymap(void *data, struct wl_keyboard *kb, uint32_t format, int32_t fd,
 static void keyboard_enter(void *d, struct wl_keyboard *k, uint32_t s, struct wl_surface *sf, struct wl_array *keys) {}
 static void keyboard_leave(void *d, struct wl_keyboard *k, uint32_t s, struct wl_surface *sf) {}
 
+/* key repeat: the compositor only sends repeat_info, the client has to do the repeating itself */
+static int rep_rate = 25, rep_delay = 600;   /* keys/s, ms; replaced by repeat_info */
+static int rep_key = -1;
+static struct timespec rep_next;
+
+static void
+rep_arm(long ms)
+{
+	clock_gettime(CLOCK_MONOTONIC, &rep_next);
+	rep_next.tv_sec += ms / 1000;
+	rep_next.tv_nsec += (ms % 1000) * 1000000L;
+	if (rep_next.tv_nsec >= 1000000000L) { rep_next.tv_sec++; rep_next.tv_nsec -= 1000000000L; }
+}
+
+static void do_key(uint32_t key);
+
 static void
 keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, uint32_t time, uint32_t key, uint32_t state)
+{
+	if (state != WL_KEYBOARD_KEY_STATE_PRESSED) {
+		if ((int)key == rep_key)
+			rep_key = -1;
+		return;
+	}
+	do_key(key);
+	if (xkb_state && xkb_keymap_key_repeats(xkb_state_get_keymap(xkb_state), key + 8) && rep_rate > 0) {
+		rep_key = (int)key;
+		rep_arm(rep_delay);
+	}
+}
+
+static void
+do_key(uint32_t key)
 {
 	xkb_keysym_t sym;
 	char buf[8];
 	int n, ctrl, alt, shift;
 
-	if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !xkb_state)
+	if (!xkb_state)
 		return;
 
 	sym = xkb_state_key_get_one_sym(xkb_state, key + 8);
@@ -820,7 +852,7 @@ static void keyboard_modifiers(void *data, struct wl_keyboard *kb, uint32_t seri
 	if (xkb_state)
 		xkb_state_update_mask(xkb_state, dep, lat, lock, 0, 0, group);
 }
-static void keyboard_repeat_info(void *d, struct wl_keyboard *k, int32_t r, int32_t del) {}
+static void keyboard_repeat_info(void *d, struct wl_keyboard *k, int32_t r, int32_t del) { rep_rate = r; rep_delay = del; }
 
 static const struct wl_keyboard_listener keyboard_listener = {
 	.keymap = keyboard_keymap, .enter = keyboard_enter, .leave = keyboard_leave,
@@ -1032,8 +1064,38 @@ dmenu_main(int argc, char *argv[])
 	zwlr_layer_surface_v1_set_keyboard_interactivity(layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
 	wl_surface_commit(surface);
 
-	while (running && wl_display_dispatch(display) >= 0)
-		;
+	while (running) {
+		struct pollfd pfd;
+		int timeout = -1;
+
+		while (wl_display_prepare_read(display) != 0)
+			wl_display_dispatch_pending(display);
+		wl_display_flush(display);
+		if (rep_key >= 0) {
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			timeout = (int)((rep_next.tv_sec - now.tv_sec) * 1000 + (rep_next.tv_nsec - now.tv_nsec) / 1000000L);
+			if (timeout < 0)
+				timeout = 0;
+		}
+		pfd.fd = wl_display_get_fd(display);
+		pfd.events = POLLIN;
+		if (poll(&pfd, 1, timeout) > 0 && (pfd.revents & POLLIN)) {
+			if (wl_display_read_events(display) < 0)
+				break;
+		} else
+			wl_display_cancel_read(display);
+		if (wl_display_dispatch_pending(display) < 0)
+			break;
+		if (rep_key >= 0 && running) {
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			if (now.tv_sec > rep_next.tv_sec || (now.tv_sec == rep_next.tv_sec && now.tv_nsec >= rep_next.tv_nsec)) {
+				do_key((uint32_t)rep_key);
+				rep_arm(rep_rate > 0 ? 1000 / rep_rate : 40);
+			}
+		}
+	}
 
 	cleanup();
 	return 0;
