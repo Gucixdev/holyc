@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# split - take a folder of this repo out into a GitHub repo of its own, with its history: the folder's commits split
+# off (git subtree split, or filter-branch where subtree is missing), checked for identity leaks, then a new repo
+# made through gh create - his bash gh - and the history pushed to it as main. This repo is left as it is.
+#
+#   tools/split FOLDER [NAME] [--public] [-d DESCRIPTION] [--ref REF] [-n]
+#
+#   NAME        the new repo (default: FOLDER); OWNER/NAME for an organisation
+#   --public    public (default: private, as gh create makes it)
+#   --ref REF   the branch or commit to split from (default: the branch checked out here)
+#   -n          stop before the repo is made: the split history waits in a folder, its path printed
+#
+# A shallow clone is deepened first (git fetch --unshallow), since a split needs every commit. The split branch
+# (split/NAME) and the folder with the new repo's clone stay where they are; the script removes nothing. The real gh
+# works too when the bash gh is not on PATH (gh repo create --source --push).
+# Example: tools/split vecindex --public -d "Embedded vector database in C89"
+set -euo pipefail
+
+die() { echo "split: $*" >&2; exit 1; }
+usage() { sed -n '6,12p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+
+folder='' name='' pub=0 desc='' ref='' dry=0
+while [ $# -gt 0 ]; do
+	case $1 in
+		--public) pub=1 ;;
+		-d | --description) [ $# -ge 2 ] || usage; desc=$2; shift ;;
+		--ref) [ $# -ge 2 ] || usage; ref=$2; shift ;;
+		-n | --dry-run) dry=1 ;;
+		-h | --help) usage ;;
+		-?*) die "unknown option $1" ;;
+		*) if [ -z "$folder" ]; then folder=${1%/}; elif [ -z "$name" ]; then name=$1; else usage; fi ;;
+	esac
+	shift
+done
+[ -n "$folder" ] || usage
+name=${name:-$(basename -- "$folder")}
+case ${name#*/} in '' | *[!A-Za-z0-9._-]*) die "'$name' is not a repo name (letters, digits, . _ -)" ;; esac
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repo"
+cd "$top"
+ref=${ref:-$(git branch --show-current)}
+[ -n "$ref" ] || die "no branch checked out: name one with --ref"
+git rev-parse -q --verify "$ref^{commit}" >/dev/null || die "no branch or commit $ref"
+git cat-file -e "$ref:$folder" 2>/dev/null || die "$ref has no folder $folder"
+
+if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+	echo "split: a shallow clone - fetching the whole history first"
+	git fetch -q --unshallow || die "git fetch --unshallow failed (a split needs every commit)"
+fi
+
+branch=split/${name##*/}
+git rev-parse -q --verify "refs/heads/$branch" >/dev/null && die "branch $branch exists already (a split from before?)"
+if git subtree -h >/dev/null 2>&1 || [ $? = 129 ]; then         # -h answers 129 when subtree is there
+	git subtree split -q --prefix="$folder" "$ref" -b "$branch" >/dev/null || die "git subtree split failed"
+else
+	tmp=$(mktemp -d)
+	git clone -q --no-local --no-checkout "$top" "$tmp/r"
+	git -C "$tmp/r" checkout -q -b "$branch" "$(git rev-parse "$ref")"
+	FILTER_BRANCH_SQUELCH_WARNING=1 git -C "$tmp/r" filter-branch -f --subdirectory-filter "$folder" "$branch" >/dev/null 2>&1 \
+		|| die "git filter-branch failed"
+	git fetch -q "$tmp/r" "$branch:$branch"
+fi
+echo "split: $folder at $ref -> branch $branch, $(git rev-list --count "$branch") commits"
+
+# whose names leave with it: one author or committer outside the noreply address stops the push
+leak=$(git log --format='%an <%ae>%n%cn <%ce>' "$branch" | sort -u | grep -v '<[0-9]*+*Gucixdev@users\.noreply\.github\.com>$' || true)
+if [ -n "$leak" ]; then
+	echo "split: these names would be published with the history:" >&2
+	printf '  %s\n' "$leak" >&2
+	die "stopped before anything left: rewrite them first, or split from another ref"
+fi
+
+out=$(mktemp -d)/${name##*/}
+git init -q -b main "$out"
+git -C "$out" fetch -q "$top" "$branch"
+git -C "$out" reset -q --hard FETCH_HEAD
+echo "split: the new repo's clone is $out"
+if [ "$dry" = 1 ]; then echo "split: -n, so no repo was made"; exit 0; fi
+
+ghbin=$(command -v gh) || die "no gh on PATH"
+cd "$out"
+if grep -q 'lazytui' "$ghbin" 2>/dev/null; then                   # his bash gh: gh create, origin and push in one
+	args=("$name" -y)
+	[ "$pub" = 1 ] && args+=(--public)
+	[ -n "$desc" ] && args+=(-d "$desc")
+	gh create "${args[@]}"
+else                                                              # the real gh
+	vis=--private
+	[ "$pub" = 1 ] && vis=--public
+	gh repo create "$name" "$vis" ${desc:+--description "$desc"} --source . --remote origin --push
+fi
+echo "split: done. $folder is still in $(basename -- "$top"); taking it out of there is a separate commit."
