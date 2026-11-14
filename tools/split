@@ -13,7 +13,7 @@
 # A shallow clone is deepened first (git fetch --unshallow), since a split needs every commit. The split branch
 # (split/NAME) and the folder with the new repo's clone stay where they are; the script removes nothing. The real gh
 # works too when the bash gh is not on PATH (gh repo create --source --push).
-# Example: tools/split vecindex --public -d "Embedded vector database in C89"
+# Example: tools/split FOLDER --public -d "short description"
 set -euo pipefail
 
 die() { echo "split: $*" >&2; exit 1; }
