@@ -1,1 +1,0 @@
-tests/window/read-window.gael:3: runtime error: a window's pixels are not kept, so they cannot be read; draw into a canvas to read them

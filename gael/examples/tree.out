@@ -1,3 +1,0 @@
-(Node :n 1 :kids (vec (some (Node :n 2 :kids (vec))) none))
-kid 2
-no kid

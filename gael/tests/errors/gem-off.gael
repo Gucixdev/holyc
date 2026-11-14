@@ -1,4 +1,0 @@
-(enable fsm ecs-a)
-(disable fsm)
-(println "%d" (fsm-make))
-(disable ecs-a)

@@ -1,7 +1,0 @@
-; a typo in a number is reported as one, not as an unknown name
-(println "%f" 1e3)
-(println "%f" .5)
-(println "%d" 12abc)
-(println "%f %d" 1.5 -7)
-(println "%f" 1e-9)
-(println "%f" 5.)

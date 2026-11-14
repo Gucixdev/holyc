@@ -3,7 +3,7 @@
 Lean 4 proofs about base's memory allocators: a Lean model of the arena (`core_arena_alloc.h`, default FLAT backend)
 and of the pool (`core_pool_alloc.h`), theorems about the models, and a differential test that holds the C code to
 them. The parts that skip work for speed - realloc in place, calloc that clears only memory handed out before,
-the pool's lazy init - are proved to give what the plain versions give. The method is the one [vecindex/lean4](../../vecindex/lean4/README.md) uses.
+the pool's lazy init - are proved to give what the plain versions give..
 
 ## Run
 

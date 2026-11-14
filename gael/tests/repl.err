@@ -1,8 +1,0 @@
-<repl>:1:6: error: + works on numbers, not bool
-  (+ 1 true)
-       ^
-<repl>:1:9: error: P is already a type (line 1)
-  (struct P (x : int))
-          ^
-<repl>:1:21: error: a is in this pattern twice
-<repl>:1:2: error: unknown function bad

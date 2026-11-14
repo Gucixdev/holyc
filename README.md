@@ -6,25 +6,18 @@ is a nod, not a claim: this has nothing to do with TempleOS's HolyC language, it
 
 | Directory | What it is | Language, exactly | Origin |
 |---|---|---|---|
-| [`base`](base) | Single-header C library: 107 modules (types, allocators, queues, data structures, math, codecs, crypto, net) | C89 style, one `long long` beyond C89; tests pass with `-std=c89`, `gnu89`, `c99`, `gnu99`, `c11`, `gnu11`, `gnu17`; default `-std=gnu11` | own |
-| [`lazytui`](lazytui) | Terminal UI library on plain ANSI escapes | C99: `-std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE` | own |
+| [`core`](core) | Single-header C library: 107 modules (types, allocators, queues, data structures, math, codecs, crypto, net) | C89 style, one `long long` beyond C89; tests pass with `-std=c89`, `gnu89`, `c99`, `gnu99`, `c11`, `gnu11`, `gnu17`; default `-std=gnu11` | own |
 | [`notcoreutils`](notcoreutils) | `cb cloc colorado dv fzf gtop man netcat sudo tgates tree`, one file each | C11 GNU: `-std=gnu11 -D_GNU_SOURCE` | own |
-| [`vecindex`](vecindex) | Vector database: rotated 4/2/1-bit fast-scan with exact re-scoring, IVF, bit-packed quantizers, BM25 hybrid search; a C API in one library and `vserv`, an epoll server with TLS | C89: `-std=c89 -pedantic`; the sanitizer, crash and server tests `-std=gnu99` | own |
 | [`desktop`](desktop) | Own Wayland desktop: compositor, launcher/menu, bar, settings panel, volume panel in one multi-call binary | C, wlroots 0.20 | built on dwl, dmenu and lemonbar (their licences in `desktop/src/LICENSES`) |
 | [`nnn`](nnn) | File manager | C11: `-std=c11` | fork of [nnn](https://github.com/jarun/nnn) (`debloat` branch) |
 
 The "language" column is what each directory's own Makefile or `run` script passes to the
 compiler, not a claim about what else would compile.
 
-The vector database that lived here as `ragdb/` was its own repository,
-[vecindex](https://github.com/Gucixdev/vecindex), from 2026-10-17 to 2026-11-01 and is back as `vecindex/`, history
-included. The agent layer that grew on top of it is `vecindex/examples/agent_launcher/`, which uses `vecindex/` as a library.
-
 Every directory builds on its own; there is no top-level build. Each has its own README with
 the details, this page is the map. `tools/` holds three repository scripts: `runall` runs every project's tests and
-`lean4/run` and prints one table (`--full` adds the benchmarks and vecindex's whole `./run all`, fuzzing and
-coverage; logs in `.runall/`), `dirprefix` names the files in a folder's subfolders after their folder and rewrites
-what names them (base's headers went through it), `leaninit` starts a project's `lean4/` folder.
+`lean4/run` and prints one table (`--full` adds the benchmarks; logs in `.runall/`), `dirprefix` names the files in a folder's subfolders after their folder and rewrites
+what names them (core's headers went through it), `leaninit` starts a project's `lean4/` folder.
 
 ## Quick start
 
@@ -32,23 +25,18 @@ what names them (base's headers went through it), `leaninit` starts a project's 
 git clone https://github.com/Gucixdev/holyc && cd holyc
 
 # libraries: tests run from a plain `cc`, no dependencies beyond libc, libm and pthreads
-(cd base && make test)            # 130 test programs
-(cd base && make bench)           # 5 benchmarks against malloc / naive loops
-(cd lazytui && make test)         # widgets, layout, solver, fuzzed input
+(cd core && make test)            # 130 test programs
+(cd core && make bench)           # 5 benchmarks against malloc / naive loops
 
 # tools
 (cd notcoreutils && make && make test)   # its tests, fzf's (differential against /usr/bin/fzf when present)
                                          # and gtop's (against the live system); binaries land in bin/
 
-# vector database, and the agent layer built on it
-(cd vecindex && ./run)             # self-tests, sanitizers, kill -9, the server end to end
-(cd vecindex && ./run all DATA)    # all of that, stress, the cross-built tests and every benchmark
-(cd vecindex/examples/agent_launcher && ./run)
 ```
 
 ## What each piece is
 
-### base
+### core
 The single-file library. Include what you need and define `<NAME>_IMPLEMENTATION` in one
 translation unit (stb style). Seven areas, 107 headers, every one with a test:
 
@@ -70,14 +58,8 @@ translation unit (stb style). Seven areas, 107 headers, every one with a test:
 - **util**: paths, virtual filesystem, config, dates, units, UUIDv4, fuzzy match, expression
   tree + formula evaluator + bytecode VM, checked arithmetic, profiler, single-instance lock.
 
-The module-by-module table is in [`base/README.md`](base/README.md). Ported code is credited in
-[`base/THIRD_PARTY.md`](base/THIRD_PARTY.md) with the upstream licence texts.
-
-### lazytui
-Cassowary constraint layout, spring animation, a diff-rendered canvas, widgets (bars, charts,
-lists, trees, pickers, a world map and globe), themes and mouse input. Works on the Linux
-console too (ASCII, 16 colours, no alternate screen). `examples/demo --snapshot W H` prints a
-frame without a terminal. Design notes: [`lazytui/DESIGN.md`](lazytui/DESIGN.md).
+The module-by-module table is in [`core/README.md`](core/README.md). Ported code is credited in
+[`core/THIRD_PARTY.md`](core/THIRD_PARTY.md) with the upstream licence texts.
 
 ### fzf (notcoreutils/fzf.c)
 A from-scratch fzf in C (libc and pthreads only): the FuzzyMatchV2 scoring, extended search
@@ -99,18 +81,6 @@ directly: CPU with per-core frequency and temperature, RAM split into used/zram/
 views (clean and raw), an always-open process tree per program split into user and system, an info panel that explains the selected process or service, multi-select, kill and a command palette. `gtop --snapshot` prints a frame as plain text,
 which the 46 checks in `notcoreutils/tests/gtop` use. It started as a 1:1 port of an earlier Rust/ratatui version; the process tree and the new PROC columns came after.
 
-### vecindex
-A vector database in C89: a TurboQuant-style rotated 4-bit (2-bit, or 1-bit in front of the 4-bit) fast-scan with
-exact re-scoring, IVF with self-tuning and live indexing, rows past RAM in column chunks, BM25 hybrid search, write
-batches, tenants, a journal with background snapshots. It runs inside a program through its C API or behind `vserv`.
-See [`vecindex/README.md`](vecindex/README.md).
-
-### vecindex/examples/agent_launcher
-Notes and memory for LLM agents, on vecindex's store: `vecdb.c` (notes, `[[wikilinks]]`, tags, BM25 + vector hybrid
-search, MCTS over the link graph, embedding servers, a command line), `mem.c` (agent memory: lifetime, tiers, a rule
-engine) and `rerank.c` (a cross-encoder second pass). It includes `../vecindex/src/store.c` directly.
-See [`agent_launcher/README.md`](vecindex/examples/agent_launcher/README.md).
-
 ### The Wayland desktop: desktop, nnn
 The former dwl, dmenu and lemonbar forks live on inside [`desktop`](desktop) (see its docs/hacking.md).
 - **nnn**: an arena allocator to fix an O(n²) `dentfill()`, plus opener scripts that open a GUI
@@ -121,36 +91,30 @@ The former dwl, dmenu and lemonbar forks live on inside [`desktop`](desktop) (se
 Proofs about the C code are written in Lean 4. Every project has a `lean4/` folder at its root whose `run` builds
 the proofs, checks that no theorem rests on an axiom beyond Lean's `propext`, `Classical.choice` and `Quot.sound`,
 and scans the sources for `sorry` and `native_decide`; `tools/leaninit PROJECT` starts one.
-[`vecindex/lean4`](vecindex/lean4/README.md) holds the proofs so far and shows the method: a Lean model of each C
-function, theorems about the model, and a differential test that holds the C code to the model. The other folders
-are empty so far and build on core Lean in seconds; vecindex's needs Mathlib.
+Each folder builds on core Lean in seconds; `core/lean4` is the example of the method: a Lean model of each C
+function, theorems about the model, and a differential test that holds the C code to the model.
 
 ## Requirements
 
 | Piece | Needs |
 |---|---|
-| base, lazytui, notcoreutils | a C compiler (gcc or clang), make, Linux |
-| vecindex | a C compiler and bash; python3 for the server's end-to-end tests; numpy and the compared libraries for `./run compare` |
-| agent_launcher | a C compiler, bash and `vecindex/` (`VECINDEX` points at another copy); python3 with torch only for the optional model servers |
+| core, notcoreutils | a C compiler (gcc or clang), make, Linux |
 | gtop (in notcoreutils) | optional `nvidia-smi`, `intel_gpu_top`, `lsusb` for GPU and TPU info |
 | nnn | ncurses; readline support is off by default (`O_NORL := 1` in its Makefile) |
-| every `lean4/` | elan with `leanprover/lean4:v4.26.0`; vecindex's also Mathlib, TrustLean and AMO-Lean, which lake fetches |
+| every `lean4/` | elan with `leanprover/lean4:v4.26.0` |
 
 The code is developed and tested on Linux (x86-64). Other platforms are not tested.
 
 ## Repository layout and history
 
-This repository is where the pieces are published together. The five forked or standalone
-subtrees (`dwl`, `dmenu`, `lemonbar`, `nnn`, and `gtop` until it moved) keep their own upstream history; `base`,
-`lazytui`, `fzf` and `notcoreutils` start here. fzf and gtop moved into `notcoreutils` as one file each on
-2026-11-06; their old folders are in `trash/`. `vecindex` brought its history back with `git subtree add`;
-`git subtree split --prefix=vecindex` gives the standalone repository's commits again. Issues and patches welcome; run the
+This repository is where the pieces are published together. The forked subtrees (`nnn` and the desktop's dwl, dmenu
+and lemonbar parts) keep their upstream history; `core` and `notcoreutils` start here. Issues and patches welcome; run the
 directory's tests before sending one.
 
 ## Licence
 
-My own code (`base`, `lazytui`, `notcoreutils` with fzf and gtop) is MIT, see
+My own code (`core`, `notcoreutils` with fzf and gtop) is MIT, see
 [`LICENSE`](LICENSE). The forks keep the licences of their upstreams, in each directory:
 `dwl` (GPLv3 with dwm/sway/tinywl notices), `dmenu` (MIT/X), `lemonbar` (MIT), `nnn` (BSD
-2-Clause). Third-party code ported into `base` is listed with its licence in
-[`base/THIRD_PARTY.md`](base/THIRD_PARTY.md).
+2-Clause). Third-party code ported into `core` is listed with its licence in
+[`core/THIRD_PARTY.md`](core/THIRD_PARTY.md).

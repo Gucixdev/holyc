@@ -1,2 +1,0 @@
-; a gem uses only the gems it requires
-(enable ecs-a sneaky)

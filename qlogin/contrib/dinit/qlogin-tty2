@@ -1,7 +1,0 @@
-# /etc/dinit.d/qlogin-tty2 (EXAMPLE, not installed): a greeter on tty2, restarted after every session
-type = process
-command = /usr/bin/qlogin
-inittab-id = 2
-options = starts-on-console
-depends-on = qlogind
-restart = true

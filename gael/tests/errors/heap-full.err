@@ -1,1 +1,0 @@
-tests/errors/heap-full.gael:4: runtime error: out of memory (the heap is full)

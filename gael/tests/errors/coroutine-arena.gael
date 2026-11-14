@@ -1,5 +1,0 @@
-; a coroutine must not pause inside an arena: the arena would have to end while other code runs
-(defn bad () : int
-  (arena (sleep 0.01) 1))
-(coroutine (bad))
-(run-coroutines)

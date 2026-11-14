@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
 # runall - run every check of every project in holyc and print one table: each project's tests, its lean4/run (the
-# proofs, their axiom audit and the differential tests against the C code), and with --full the rest: benchmarks,
-# vecindex's ./run all (stress, bench, real_val, cross builds, compare), its fuzz targets and its coverage.
-# Nothing is installed and nothing interactive starts: dmenu/build and nnn/build (they install to ~/.local/bin) are
-# replaced by plain make, lazytui's demo by its tests.
+# proofs, their axiom audit and the differential tests against the C code), and with --full the rest: benchmarks.
+# Nothing is installed and nothing interactive starts: nnn/build (it installs to ~/.local/bin) is replaced by plain make.
 #
 #   tools/runall                    tests and proofs of every project
-#   tools/runall --full             everything, hours with vecindex's compare data present
-#   tools/runall base vecindex      only these projects (with or without --full)
-#   FUZZ_SECONDS=600 tools/runall --full    each fuzz target for 10 minutes (default 60)
+#   tools/runall --full             everything, including benchmarks
+#   tools/runall core nnn           only these projects (with or without --full)
 #   STEP_TIMEOUT=7200 tools/runall          per-step limit in seconds (default 3600)
 #
 # Each step's output goes to .runall/STAMP/PROJECT-STEP.log, the table also to .runall/STAMP/summary.tsv. Exit 0
 # when every step passed. Needs what the projects need: gcc, clang, make, python3, the X11/Wayland headers for
-# dmenu, dwl and lemonbar, ncurses for nnn, elan for lean4/ (vecindex's lean4 runs lake exe cache get first).
+# the desktop, ncurses for nnn, elan for lean4/.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 root=$PWD
@@ -23,7 +20,6 @@ full=0
 [[ ${1:-} == -h || ${1:-} == --help ]] && { sed -n '2,18s/^# \{0,1\}//p' "$0"; exit 0; }
 want=" $* "
 timeout_s=${STEP_TIMEOUT:-3600}
-fuzz_s=${FUZZ_SECONDS:-60}
 logs=$root/.runall/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$logs"
 export PATH="$HOME/.elan/bin:$PATH"
@@ -51,28 +47,16 @@ step() {
 picked() { [[ $want == "  " || $want == *" $1 "* ]]; }
 
 printf '%-13s %-8s %-7s %7s  %s\n' PROJECT STEP RESULT TIME 'LAST LINE OF THE LOG'
-for proj in lean4 base dmenu dwl gael lazytui lemonbar nnn notcoreutils vecindex; do
+for proj in lean4 core desktop nnn notcoreutils; do
     picked "$proj" || continue
     case $proj in
         lean4)        step lean4 lib ./run ;;  # the shared Lean library every lean4/ builds on
-        base)         step base tests sh tests/run
-                      (( full )) && step base bench make bench ;;
-        dmenu|dwl|lemonbar|nnn)
+        core)         step core tests sh tests/run
+                      (( full )) && step core bench make bench ;;
+        desktop|nnn)
                       step "$proj" build make ;;
         notcoreutils)
                       step "$proj" tests make test ;;
-        gael)         step gael tests ./test
-                      (( full )) && step gael bench ./bench ;;
-        lazytui)      step lazytui tests make test ;;
-        vecindex)     step vecindex mathlib bash -c 'if [[ -d lean4/.lake/packages/mathlib/.lake/build/lib ]]
-                          then echo "Mathlib already built"; else cd lean4 && lake exe cache get; fi'
-                      if (( full )); then   # ./run all runs lean4/run itself
-                          step vecindex all ./run all
-                          step vecindex fuzz tools/fuzz "" "$fuzz_s"
-                          step vecindex cov tools/cov
-                          continue
-                      fi
-                      step vecindex tests ./run ;;
     esac
     [[ -x $root/$proj/lean4/run ]] && step "$proj" lean4 lean4/run
 done

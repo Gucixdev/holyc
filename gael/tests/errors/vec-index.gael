@@ -1,3 +1,0 @@
-(def v (vec 10 20 30))
-(println "%d" (get v 2))
-(println "%d" (get v 3))

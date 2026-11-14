@@ -1,8 +1,0 @@
-tests/errors/fn-values.gael:3:6: error: g is declared (fn (int) string), its value is (fn (int) int)
-tests/errors/fn-values.gael:4:4: error: f: argument 1 is string, it must be int
-tests/errors/fn-values.gael:5:1: error: f takes 1 argument, got 2
-tests/errors/fn-values.gael:6:15: error: n is int, not a function
-tests/errors/fn-values.gael:7:38: error: k is int, not a function
-tests/errors/fn-values.gael:8:2: error: this is int, not a function, so it cannot be called
-tests/errors/fn-values.gael:9:1: error: this fn must return string, its body ends with int
-tests/errors/fn-values.gael:10:10: error: a function type is (fn (parameter types) return type), like (fn (int int) int)

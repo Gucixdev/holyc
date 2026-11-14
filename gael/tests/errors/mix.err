@@ -1,1 +1,0 @@
-tests/errors/mix.gael:1:20: error: +: int and float do not mix; convert one, like (int x) or (float x)

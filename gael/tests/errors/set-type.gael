@@ -1,2 +1,0 @@
-(def hp : int 10)
-(set hp "full")

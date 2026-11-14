@@ -1,2 +1,0 @@
-; fsm excludes legacy
-(enable fsm ecs-a legacy)

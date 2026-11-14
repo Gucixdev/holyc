@@ -1,7 +1,0 @@
-[connection]
-id=old
-type=vpn
-
-[vpn]
-service-type=org.freedesktop.NetworkManager.pptp
-gateway=pptp.example.com

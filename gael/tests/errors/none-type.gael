@@ -1,3 +1,0 @@
-(let ((x none)) x)
-(def count : int none)
-(println "%v" (some (println "x")))

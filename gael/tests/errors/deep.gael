@@ -1,2 +1,0 @@
-(defn down ((n : int)) : int (+ 1 (down (+ n 1))))
-(println "%d" (down 0))

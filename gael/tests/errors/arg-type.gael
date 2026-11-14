@@ -1,2 +1,0 @@
-(defn double ((x : int)) : int (* x 2))
-(println "%d" (double "two"))

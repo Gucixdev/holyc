@@ -1,5 +1,0 @@
-# imported from a NetworkManager connection
-Type = openconnect
-Server = vpn.corp.example
-Protocol = gp
-Username = dave

@@ -1,4 +1,0 @@
-(defn div ((a : int) (b : int)) : int (/ a b))
-(println "before")
-(println "%d" (div 1 0))
-(println "never")

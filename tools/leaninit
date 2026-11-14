@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # leaninit - start a project's lean4/ folder on the shared library in holyc/lean4: Lean 4.26 with the holyc package
-# as its one dependency (core Lean, builds in seconds; add Mathlib to lakefile.lean when a proof needs it, as
-# vecindex does), a root module, a three-line axiom audit, a run that is a list of lib.sh steps, a README.
+# as its one dependency (core Lean, builds in seconds; add Mathlib to lakefile.lean when a proof needs it), a root module, a three-line axiom audit, a run that is a list of lib.sh steps, a README.
 #
 #   tools/leaninit PROJECT [LIB]    PROJECT/lean4 with the library LIB (default: PROJECT, capitalised)
 #
@@ -27,7 +26,7 @@ cat > "$out/lakefile.lean" <<EOF
 import Lake
 open Lake DSL
 
-/- Core Lean only, so a build takes seconds. When a proof needs Mathlib, add it the way vecindex/lean4 does:
+/- Core Lean only, so a build takes seconds. When a proof needs Mathlib, add it to the lakefile:
    require mathlib from git "https://github.com/leanprover-community/mathlib4.git" @ "v4.26.0" -/
 require holyc from "../../lean4"
 

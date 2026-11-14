@@ -1,2 +1,0 @@
-(gem ecs-b :provides (store))
-(defn ecs-b-spawn () : int 2)

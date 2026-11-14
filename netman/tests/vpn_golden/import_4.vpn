@@ -1,6 +1,0 @@
-# imported from a NetworkManager connection
-Type = l2tp
-Server = l2.example.net
-Username = alice
-PSK = sharedsecret
-MTU = 1400

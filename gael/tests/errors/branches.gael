@@ -1,2 +1,0 @@
-(defn pick ((b : bool)) : int
-  (if b 1 2.5))

@@ -1,3 +1,0 @@
-(def w (open-window "pixels" 64 48))
-(draw-clear w 0x102030ff)
-(println "pixel %x" (canvas-pixel w 1 1))

@@ -1,1 +1,0 @@
-tests/errors/coroutine-arena.gael:3: runtime error: a coroutine cannot pause inside an arena: the arena would end out of turn

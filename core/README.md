@@ -200,7 +200,7 @@ bookkeeping and holds the C to it (see `lean4/README.md`).
 ## Not in it
 
 Game-engine pieces (collision shapes, GJK, rigid bodies, particles, camera, ECS), terminal UI
-layers (the terminal UI library is [`../lazytui`](../lazytui)), mesh and model formats, and a
+layers, mesh and model formats, and a
 neural-network header. They were part of an earlier, larger version of this library and were cut
 because they did not have a general use outside a game or a TUI. The ECS lives in the
 `gdtoolbox` repository.

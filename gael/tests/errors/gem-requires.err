@@ -1,1 +1,0 @@
-tests/errors/gems/fsm.gael:1:1: error: gem fsm requires store, and no gem provides it: none is on, and there is no gems/store.gael or gems/store/main.gael

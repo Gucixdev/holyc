@@ -14,5 +14,4 @@ A project takes it with `require holyc from "../../lean4"` in its `lakefile.lean
 adding it) and `. "$(dirname "$0")/../../lean4/lib.sh"` in its `run`; `tools/leaninit` writes both. Core Lean only:
 it builds in seconds and adds no dependency. `lean4/run` checks the library itself the same way.
 
-base/lean4 is the example: its run is a list of steps, its oracle a `step` function. vecindex/lean4 predates this
-package and keeps its own Mathlib-based setup.
+core/lean4 is the example: its run is a list of steps, its oracle a `step` function.

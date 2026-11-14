@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-# Build and run every qlogin test (qdbus wire library, qlogind vs a fake client on a private bus, qlogin in tmux with fake PAM).
-# No arguments. Touches nothing real: private dbus-daemon, mktemp dirs, no /etc, no real logind.
-set -eu
-cd "$(dirname "$(readlink -f "$0")")/tests"
-./run_qdbus
-./run_login1
-./run_qlogin
-echo "qlogin: all test suites green"

@@ -1,9 +1,0 @@
-# imported from an ipsec.conf connection 'roadwarrior'
-Type = ipsec
-Server = gw.example.net
-Auth = eap
-RemoteId = gw.example.net
-Username = erin
-Routes = 10.20.0.0/16
-Proposals = aes256-sha256-modp2048
-EspProposals = aes256gcm16

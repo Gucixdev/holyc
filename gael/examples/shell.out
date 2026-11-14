@@ -1,4 +1,0 @@
-[apple,fig,pear,kiwi]
-(vec "apple" "fig" "pear" "kiwi")
-true true false
-true

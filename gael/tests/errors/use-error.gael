@@ -1,3 +1,0 @@
-; an error in a used file stops everything: nothing runs, not even the files that compiled
-(use "lib/broken.gael")
-(println "main")
