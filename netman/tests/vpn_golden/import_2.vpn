@@ -1,0 +1,6 @@
+# imported from a NetworkManager connection
+Type = ipsec
+Server = vpn.example.org
+Auth = eap
+Username = bob
+VirtualIP = yes

@@ -1,18 +1,26 @@
-# lazytui - C library on plain ANSI escapes. `make` builds liblazytui.a and the demo, `make test` runs the tests.
+# lazytui - C library on plain ANSI escapes.
+#   make            liblazytui.a + examples/demo + examples/TUItemplate
+#   make test       every tests/test_*.c, built with ASAN+UBSAN, run
+#   make install    headers + library under PREFIX (default /usr/local)
 CC ?= cc
 CFLAGS ?= -O2
 CFLAGS += -std=c99 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -Wall -Wextra -Wno-unused-parameter -Iinclude
-SRC = $(wildcard src/*.c src/draw/*.c src/map/*.c src/widgets/*/*.c)    # core | drawing helpers | world-map data | widgets (basic = everyday, extras = fancy), one file per widget
-INC = -Isrc -Isrc/draw -Isrc/map
-OBJ = $(SRC:.c=.o)
-TESTS = $(patsubst tests/%.c,tests/%,$(wildcard tests/test_*.c))
+PREFIX ?= /usr/local
+# every .c under src/ (core/{fx,io}, widgets/<group>/), found recursively
+SRC := $(shell find src -name '*.c' | sort)
+HDR := $(shell find src -name '*.h') include/lazytui.h
+# every private header dir is on the include path, so widgets say #include "internal.h" wherever they live
+INC := $(addprefix -I,$(sort $(dir $(shell find src -name '*.h'))))
+OBJ := $(SRC:.c=.o)
+TESTS := $(patsubst tests/%.c,tests/%,$(wildcard tests/test_*.c))
+SAN := -g -O1 -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer
 
 all: liblazytui.a examples/demo examples/TUItemplate
 
 liblazytui.a: $(OBJ)
 	$(AR) rcs $@ $(OBJ)
 
-src/%.o: src/%.c include/lazytui.h src/internal.h src/appint.h src/places.h $(wildcard src/draw/*.h src/map/*.h)
+src/%.o: src/%.c $(HDR)
 	$(CC) $(CFLAGS) $(INC) -c -o $@ $<
 
 tests/%: tests/%.c liblazytui.a
@@ -24,18 +32,29 @@ examples/demo: examples/demo.c liblazytui.a
 examples/TUItemplate: examples/TUItemplate.c liblazytui.a
 	$(CC) $(CFLAGS) -o $@ $< liblazytui.a -lm
 
-test: $(TESTS)
-	@for t in $(TESTS); do ./$$t || exit 1; done
+# sanitized copy of the library (built once into build/san), then every test linked against it
+SANOBJ := $(patsubst src/%.c,build/san/%.o,$(SRC))
+build/san/%.o: src/%.c $(HDR)
+	@mkdir -p $(dir $@)
+	$(CC) $(SAN) $(CFLAGS) $(INC) -c -o $@ $<
+
+# every test under AddressSanitizer + UBSan (LT_FUZZ=1 for the exhaustive robust run); leak check only for test_robust
+test: $(SANOBJ)
+	@for t in tests/test_*.c; do \
+		echo "== $$t"; \
+		$(CC) $(SAN) $(CFLAGS) -o build/san/t $$t $(SANOBJ) -lm || exit 1; \
+		case $$t in *robust*) l=1;; *) l=0;; esac; \
+		ASAN_OPTIONS=detect_leaks=$$l build/san/t || exit 1; \
+	done
+
+asan: test
+
+install: liblazytui.a
+	install -d $(DESTDIR)$(PREFIX)/include $(DESTDIR)$(PREFIX)/lib
+	install -m 644 include/lazytui.h $(DESTDIR)$(PREFIX)/include/
+	install -m 644 liblazytui.a $(DESTDIR)$(PREFIX)/lib/
 
 clean:
-	rm -f $(OBJ) liblazytui.a $(TESTS) examples/demo examples/TUItemplate
+	rm -rf build; rm -f $(OBJ) liblazytui.a $(TESTS) examples/demo examples/TUItemplate
 
-.PHONY: all test clean
-
-# every test again under AddressSanitizer (LT_FUZZ=1 make asan for the exhaustive run) + UndefinedBehaviorSanitizer (leak checking only for test_robust, which frees all it makes)
-asan:
-	@for t in tests/test_*.c; do \
-		$(CC) -g -O1 -fsanitize=address,undefined,float-cast-overflow -fno-omit-frame-pointer $(CFLAGS) $(INC) -o /tmp/lt_asan $$t $(SRC) -lm || exit 1; \
-		case $$t in *robust*) ASAN_OPTIONS=detect_leaks=1 /tmp/lt_asan || exit 1;; *) ASAN_OPTIONS=detect_leaks=0 /tmp/lt_asan || exit 1;; esac; \
-	done
-.PHONY: asan
+.PHONY: all test asan install clean

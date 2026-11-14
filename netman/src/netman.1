@@ -109,11 +109,146 @@ probe setting and the score of each live interface
 .B netman roam prefer PROFILE PRIORITY
 set a profile priority (higher wins)
 .TP
+.B netman tor up
+start Tor and the fail\-closed firewall (transparent mode: all TCP + DNS via Tor, everything else dropped). Needs tor installed. Rules go in BEFORE tor starts and stay until `tor down`. Threat model: see the readme; Tor does not anonymise logged\-in accounts.
+.TP
+.B netman tor down
+stop Tor, then remove the firewall table
+.TP
+.B netman tor status
+mode, bootstrap %, circuits, exit ip, bridges, hidden services, SOCKS settings
+.TP
+.B netman tor newnym
+new Tor identity: fresh circuits for new connections
+.TP
+.B netman tor bridge add LINE | clear
+set or clear obfs4 / snowflake bridges. LINE e.g. 'obfs4 1.2.3.4:443 FINGERPRINT cert=... iat\-mode=0'.
+.TP
+.B netman tor exit CC|off
+force the exit country (strict)
+.TP
+.B netman tor hs add NAME PORT HOST:PORT | list | del NAME
+onion services: publish a local port as a .onion
+.TP
 .B netman vpn list
-WireGuard and OpenVPN profiles and their state
+VPN profiles (WireGuard, OpenVPN, IPsec/IKEv2, L2TP, OpenConnect) and their state
+.TP
+.B netman ssh status
+SSH profiles and connections: state, user@host:port, reconnects. Rows: NAME up|connecting|down user@host:port. The same list is the SSH tab.
+.TP
+.B netman ssh save NAME host=H [user=U key=PATH jump=J1,J2 port=N forward=L:... keepalive=N control=yes reconnect=yes tun=L:R strict=yes|accept\-new]
+create or change an SSH profile. Forwards: forward=L:8080:db:5432 (local), R:9000:localhost:22 (remote), D:1080 (SOCKS); repeat forward= up to 8 times. strict accepts only yes or accept\-new: netman never turns host key checking off, and a profile that asks for it is refused. Stored as NAME.ssh.
+.TP
+.B netman ssh show NAME
+print a profile
+.TP
+.B netman ssh argv NAME
+print the exact ssh command line a profile runs (nothing is started)
+.TP
+.B netman ssh up NAME
+start the connection in the background; it reconnects with backoff when it drops. A supervisor keeps ssh \-N running, logs to the state dir, and assigns tun_addr once an ssh \-w device exists.
+.TP
+.B netman ssh down NAME
+stop the connection and its supervisor
+.TP
+.B netman ssh apply
+start every profile with auto = yes
+.TP
+.B netman ssh hostkey NAME
+fetch and show the host key fingerprint (ssh\-keyscan + ssh\-keygen \-lf). Compare it with what the server's admin gave you, then `ssh trust`.
+.TP
+.B netman ssh trust NAME SHA256:FP [HOST]
+store the host key only if its fingerprint equals FP. Safer than accept\-new: the key goes into the known_hosts file only when the fingerprint you typed matches what the host presents.
+.TP
+.B netman ssh check NAME
+is the ControlMaster alive (ssh \-O check)
+.TP
+.B netman ssh exec NAME COMMAND...
+run a command over the profile's ControlMaster
+.TP
+.B netman ssh del NAME
+delete a profile (stop it first)
+.TP
+.B netman mesh status
+mesh profiles: state, kind, device, peers handshaked/total. The same list is the Mesh tab.
+.TP
+.B netman mesh save NAME kind=batman ifaces=A,B | kind=wg self=NODE [k=v...]
+create or change a mesh profile. batman: ifaces orig_interval gw_mode hop_penalty mtu addr. wg: self port prefix keepalive key addr. Stored as NAME.mesh.
+.TP
+.B netman mesh show NAME
+print a profile
+.TP
+.B netman mesh init NAME
+generate this node's WireGuard private key (mode 0600) and print the public key; never overwrites
+.TP
+.B netman mesh node NAME add NODE PUBKEY ENDPOINT|\- ADDRESS | del NODE | list
+edit the WireGuard mesh peer list. One list for every node. ENDPOINT \- means the node is not reachable directly (it must connect to you).
+.TP
+.B netman mesh gen NAME [NODE]
+print the wg\-quick config of a node (default: this one). Every other node becomes a peer with AllowedIPs = its mesh address only. The private key is filled in only for this node.
+.TP
+.B netman mesh up NAME
+bring the mesh up (batman: ip link add type batadv; wg: netlink, no wg binary)
+.TP
+.B netman mesh down NAME
+remove the mesh device
+.TP
+.B netman mesh apply
+bring up every mesh profile with auto = yes
+.TP
+.B netman mesh neighbors NAME
+batman\-adv neighbours (needs batctl)
+.TP
+.B netman mesh del NAME
+delete a profile (the peer list and key file are kept)
+.TP
+.B netman bond status
+bonds: state, mode, slaves up/total, active slave. The same list is the Bond tab.
+.TP
+.B netman bond modes
+the bonding modes and what each needs from the switch
+.TP
+.B netman bond show NAME
+live state and profile of a bond
+.TP
+.B netman bond add NAME [KEY=VALUE...] SLAVE...
+create a bond and enslave interfaces. e.g. `bond add bond0 mode=802.3ad miimon=100 eth0 eth1`. Shares the code and NAME.ent profiles of `ent save NAME bond`.
+.TP
+.B netman bond del NAME
+delete the bond
+.TP
+.B netman bond slave add|del NAME IFACE
+add or remove one slave of a bond
+.TP
+.B netman bond apply
+re\-create every saved bond
+.TP
+.B netman tunnel status
+tunnels: state, kind, local>remote, mtu, rx/tx. The same list is the Tunnel tab.
+.TP
+.B netman tunnel save NAME kind=gre|gretap|ipip|sit|vxlan|geneve|l2tp local=A remote=B [k=v...]
+create or change a tunnel profile. Keys: link addr key ttl mtu auto vni port group, l2tp: tunnel_id peer_tunnel_id session_id peer_session_id encap lport rport. mtu = auto subtracts the encapsulation overhead from the underlay MTU. Stored as NAME.tun.
+.TP
+.B netman tunnel show NAME
+print a profile
+.TP
+.B netman tunnel mtu NAME
+show the underlay MTU, the overhead and the tunnel MTU `auto` picks
+.TP
+.B netman tunnel up NAME
+create the tunnel device, set mtu and address, bring it up
+.TP
+.B netman tunnel down NAME
+delete the tunnel device
+.TP
+.B netman tunnel apply
+bring up every tunnel with auto = yes
+.TP
+.B netman tunnel del NAME
+delete a profile
 .TP
 .B netman vpn import FILE [NAME]
-copy a WireGuard / OpenVPN config into the profile dir (/etc/netman/vpn, mode 0600). Refuses to overwrite. Directory override: env NETMAN_VPN_CONF_DIR.
+import a VPN profile: WireGuard / OpenVPN / NetworkManager .nmconnection / strongSwan conf / netman .vpn (into /etc/netman/vpn, mode 0600). Refuses to overwrite. Converts NetworkManager keyfiles (wireguard, openvpn, strongswan, l2tp, openconnect) and strongSwan swanctl.conf / ipsec.conf; PPTP is refused (insecure). Passwords kept in secret stores are not imported; the note says what was left out. Directory override: env NETMAN_VPN_CONF_DIR.
 .TP
 .B netman vpn info NAME
 everything known about one profile: endpoint, handshake, transfer, allowed ips, split or full tunnel, kill switch
@@ -241,6 +376,39 @@ validate the config files and environment. Errors are FILE:LINE with a did\-you\
 .B netman config set SECTION.KEY VALUE
 edit the user config file (atomic, comments kept)
 .TP
+.B netman settings
+the settings panel's data as a list: key, value, where it comes from, what it does (= settings list). The TUI panel is key S inside `netman \-tui`. Everything below works on the same schema (src/settings.c).
+.TP
+.B netman settings list [SECTION|TAB] [\-\-all]
+every setting: key, value, source (default/system/user/env), description. Settings of a module that is switched off are left out; \-\-all lists them. [restart] = needs a restart of the thing that reads it, [root] = acting on it needs root.
+.TP
+.B netman settings get KEY
+print the effective value of one setting
+.TP
+.B netman settings set KEY VALUE
+validate and write one setting into the user file (atomic, comments kept). Same as config set, plus a note when the change needs a restart or an environment variable overrides it.
+.TP
+.B netman settings toggle KEY
+flip a yes/no setting
+.TP
+.B netman settings reset KEY
+remove the setting from the user file (back to the system file or the default)
+.TP
+.B netman settings check [\-\-json]
+validate the config files and environment; \-\-json for scripts. Exit 1 with FILE:LINE when something is wrong. Lists the settings an environment variable overrides.
+.TP
+.B netman settings schema
+the schema in the pipe format of desktop's settings.schema (key|type|extra|apply|default|label)
+.TP
+.B netman settings \-\-dump\-api
+JSON: the whole schema, the current values and where each one comes from. For a launcher or panel that hosts netman's settings: tabs, then one object per setting with type, range or choices, default, value, source, needs_root, restart, gate and hidden.
+.TP
+.B netman settings menu [SECTION|TAB] [\-\-all]
+dmenu\-ready lines: `section.key = value  # description`. netman settings menu | dmenu \-l 20 | netman settings pick
+.TP
+.B netman settings pick [\-\-choices] [\-\-value VALUE]
+read the chosen menu line on stdin, offer the values in a menu and set the one chosen. The value menu is $NETMAN_MENU (a shell command, default `dmenu \-p "$NETMAN_MENU_PROMPT"`); nothing chosen = nothing changed. \-\-choices prints the choices instead; \-\-value V sets V without asking.
+.TP
 .B netman daemon [\-\-bus ADDRESS]
 serve the NetworkManager D\-Bus API (drop\-in for NM clients). Claims org.freedesktop.NetworkManager on the system bus (fails if a NetworkManager owns it) and answers until SIGTERM. \-\-bus selects another bus, e.g. a private dbus\-daemon. See docs/nm\-api\-surface.md for what is implemented.
 .TP
@@ -259,6 +427,9 @@ the terminal UI (also \-\-tui, \-t); ? inside shows help
 .TP
 .B ent
 enterprise networking: bonding/teaming, bridges with STP and vlan filtering, vlans and QinQ, macvlan/ipvlan, veth, routes, rules and tables, ECMP with failover, link settings, IPv6 prefix delegation, USB/Bluetooth tethering, wired 802.1X. Profiles are NAME.ent files ("key = value", same syntax as net profiles) in the netman config directory. team is bonding: the kernel team driver is deprecated, so kind=team maps runner= (activebackup, lacp, loadbalance, broadcast, roundrobin) onto the bonding driver. Tethering share\-out uses its own nft table `inet netman_tether` (firewall.h replaces `inet netman`, so the two never clobber each other); an accept there cannot override a drop in another table, so a strict firewall must allow the downstream interface itself. Changing commands need enterprise.enabled = yes.
+.TP
+.B settings
+the settings schema (src/settings.c) as commands: list, get, set, toggle, reset, check, a JSON API (\-\-dump\-api) and dmenu helpers (menu | dmenu | pick). The TUI panel on key S shows the same data. Writes go to ~/.config/netman/netman.conf only, atomically, comments kept.
 .TP
 .B licence
 licence files NAME.lic with expiry, the expiry check (exit 1 when anything expires soon), and hook\-driven renewal. Switched by licence.enabled.
@@ -279,6 +450,7 @@ GENERAL
   j k, arrows, PgUp PgDn      move;  g G  first / last
   /                           filter by name
   r                           refresh / rescan
+  S                           settings panel (see SETTINGS below)
   i                           details popup for the selected row;  I  toggle the big "all info" view
                               (replaces the list; j k pick another row, PgUp PgDn scroll, esc / I close)
   ?                           this help;  q  quit
@@ -310,6 +482,15 @@ ENTERPRISE (only with enterprise.enabled = yes)
   read\-only status: bonds, bridges, vlans, uplinks (ECMP), tethering (when tether.enabled) and licences
   (when licence.enabled), from the saved .ent profiles and the live kernel state;  i  details of the selected
   row;  I  the same plus the raw profile text. Changes are made with  netman ent ... / licence ... / key ...
+SETTINGS (key S: every netman.conf key, same data as `netman settings`)
+  tabs: Modules (the on/off switch of every module) then one tab per area; a module's tab exists only while it is enabled
+  j k move;  h l, tab, 1\-9 change tab;  / search all settings;  esc clears the search, then closes;  S or q close
+  enter / space   toggle a yes/no, cycle a choice, edit text and numbers (enter saves, esc cancels, errors show as you type)
+  + \-  step a number or cycle a choice backwards;  e  edit any value as text;  d  back to the default (removes the line)
+  mouse: click a tab or a row, click the selected row again to change it, wheel scrolls
+  Each change is saved at once to ~/.config/netman/netman.conf (atomic, comments kept) and applied live, except rows
+  marked "restart needed" (a daemon or tor process reads them at start). The right column and the line under the list
+  say where the value comes from (default, system /etc, user, env = an environment variable that overrides the file).
 HEADER (row 2, every tab)
   wifi / bt status, hostname, default route (iface via gateway), ip (pub = a public address), dns,
   and the network score 0\-100 with its reasons (rtt, loss, dBm). The score is measured in the background
@@ -320,127 +501,226 @@ HEADER (row 2, every tab)
 Settings come from defaults, \fI/etc/netman/netman.conf\fR, \fI~/.config/netman/netman.conf\fR and the environment variables \fBNETMAN_\fISECTION\fB_\fIKEY\fR, later ones win. \fBnetman config show\fR lists every value and where it came from; \fBnetman config check\fR validates; \fBnetman config set\fR and \fBtoggle\fR edit the user file.
 .TP
 .B wifi.enabled
-Wi\-Fi support: the wifi commands, the Wi\-Fi tab. no = skipped everywhere (CLI says 'wifi disabled in config'). Default: yes.
+Wi\-Fi support: the wifi commands, the Wi\-Fi tab. no = skipped everywhere (CLI says 'wifi disabled in config'). Default: yes. Panel tab: Wi\-Fi.
 .TP
 .B wifi.backend
-Which daemon to talk to. auto = wpa_supplicant if its control socket exists for the interface, else iwd. Default: auto.
+Which daemon to talk to. auto = wpa_supplicant if its control socket exists for the interface, else iwd. Default: auto. Panel tab: Wi\-Fi.
 .TP
 .B wifi.autoconnect
-The daemon joins known networks by itself (per\-network switch: wifi known autoconnect SSID on|off). Default: yes.
+The daemon joins known networks by itself (per\-network switch: wifi known autoconnect SSID on|off). Default: yes. Panel tab: Wi\-Fi.
 .TP
 .B wifi.rssi_good
-dBm at or above which a signal is 'good' (green in the TUI, 4 quality steps). Default: \-55.
+dBm at or above which a signal is 'good' (green in the TUI, 4 quality steps). Default: \-55. Panel tab: Wi\-Fi.
 .TP
 .B wifi.rssi_ok
-dBm at or above which a signal is 'ok'. Must be lower than rssi_good. Default: \-65.
+dBm at or above which a signal is 'ok'. Must be lower than rssi_good. Default: \-65. Panel tab: Wi\-Fi.
 .TP
 .B wifi.rssi_weak
-dBm at or above which a signal is 'weak' (below it: bad). Must be lower than rssi_ok. Default: \-75.
+dBm at or above which a signal is 'weak' (below it: bad). Must be lower than rssi_ok. Default: \-75. Panel tab: Wi\-Fi.
 .TP
 .B bluetooth.enabled
-Bluetooth support: the bt commands, the Bluetooth tab. Default: yes.
+Bluetooth support: the bt commands, the Bluetooth tab. Default: yes. Panel tab: Bluetooth.
 .TP
 .B bluetooth.agent
-Register netman's own pairing agent (PIN / passkey / confirmation prompts). no = rely on another agent such as your desktop's. Default: yes.
+Register netman's own pairing agent (PIN / passkey / confirmation prompts). no = rely on another agent such as your desktop's. Default: yes. Panel tab: Bluetooth.
 .TP
 .B net.enabled
-Ethernet / IP management: the net and roam commands, the Ethernet/IP tab. Default: yes.
+Ethernet / IP management: the net and roam commands, the Ethernet/IP tab. Default: yes. Acting on it needs root. Panel tab: Network.
 .TP
 .B net.dhcp
-Built\-in DHCPv4 client. no = `net dhcp` is refused and dhcp profiles are not applied (static profiles only). Default: yes.
+Built\-in DHCPv4 client. no = `net dhcp` is refused and dhcp profiles are not applied (static profiles only). Default: yes. Acting on it needs root. Panel tab: Network.
 .TP
 .B net.dns_mode
-Where DNS servers go: resolved = systemd\-resolved, resolvconf = write /etc/resolv.conf, auto = resolved when it runs. Default: auto.
+Where DNS servers go: resolved = systemd\-resolved, resolvconf = write /etc/resolv.conf, auto = resolved when it runs. Default: auto. Acting on it needs root. Panel tab: Network.
 .TP
 .B net.state_dir
-Lease cache and the per\-machine MAC secret. Default: /var/lib/netman.
+Lease cache and the per\-machine MAC secret. Default: /var/lib/netman. Restart needed. Acting on it needs root. Panel tab: Network.
 .TP
 .B roaming.enabled
-Autoconnect policy and the `roam` commands. Default: yes.
+Autoconnect policy and the `roam` commands. Default: yes. Acting on it needs root. Panel tab: Network.
 .TP
 .B roaming.probe
-Check connectivity after a network comes up (needs probe_url); a captive portal or no internet counts as a failure. Default: yes.
+Check connectivity after a network comes up (needs probe_url); a captive portal or no internet counts as a failure. Default: yes. Acting on it needs root. Panel tab: Network.
 .TP
 .B roaming.probe_url
-Plain\-http URL fetched by the probe: 204 = internet, any other answer = captive portal. Empty = no probing. Default: http://connectivitycheck.gstatic.com/generate_204.
+Plain\-http URL fetched by the probe: 204 = internet, any other answer = captive portal. Empty = no probing. Default: http://connectivitycheck.gstatic.com/generate_204. Acting on it needs root. Panel tab: Network.
 .TP
 .B roaming.random_mac
-Use a stable random (locally administered) MAC per profile instead of the hardware address. Default: no.
+Use a stable random (locally administered) MAC per profile instead of the hardware address. Default: no. Acting on it needs root. Panel tab: Network.
 .TP
 .B roaming.score_threshold
-A network scoring below this (0..100: signal, gateway RTT, loss, captive portal) is dropped for another candidate. Default: 20.
+A network scoring below this (0..100: signal, gateway RTT, loss, captive portal) is dropped for another candidate. Default: 20. Acting on it needs root. Panel tab: Network.
 .TP
 .B vpn.enabled
-WireGuard / OpenVPN / provider support: the vpn commands, the VPN tab. Default: yes.
+WireGuard / OpenVPN / provider support: the vpn commands, the VPN tab. Default: yes. Acting on it needs root. Panel tab: VPN.
 .TP
 .B vpn.killswitch
-`vpn up` also turns the nftables kill switch on (traffic only through the tunnel). Default: no.
+`vpn up` also turns the nftables kill switch on (traffic only through the tunnel). Default: no. Acting on it needs root. Panel tab: VPN.
 .TP
 .B vpn.watchdog
-The daemon reconnects a tunnel that died or whose handshake went stale. Default: yes.
+The daemon reconnects a tunnel that died or whose handshake went stale. Default: yes. Acting on it needs root. Panel tab: VPN.
+.TP
+.B vpn.openvpn
+OpenVPN profiles (NAME.ovpn). no = `vpn up` refuses them. Default: yes. Acting on it needs root. Panel tab: VPN.
+.TP
+.B vpn.ipsec
+IPsec / IKEv2 profiles (Type = ipsec, strongSwan swanctl). no = `vpn up` refuses them. Default: yes. Acting on it needs root. Panel tab: VPN.
+.TP
+.B vpn.l2tp
+L2TP/IPsec profiles (Type = l2tp, xl2tpd + pppd). no = `vpn up` refuses them. Default: yes. Acting on it needs root. Panel tab: VPN.
+.TP
+.B vpn.openconnect
+OpenConnect profiles: AnyConnect, GlobalProtect, Pulse, ... (Type = openconnect). no = `vpn up` refuses them. Default: yes. Acting on it needs root. Panel tab: VPN.
+.TP
+.B vpn.sstp
+SSTP profiles are recognised but not supported (no maintained client): this only changes the message. Default: yes. Acting on it needs root. Panel tab: VPN.
 .TP
 .B firewall.enabled
-Firewall management. no = fw apply / confirm / rollback are refused (show, plan, diff and preset still work). Off by default: it changes your rules. Default: no.
+Firewall management. no = fw apply / confirm / rollback are refused (show, plan, diff and preset still work). Off by default: it changes your rules. Default: no. Acting on it needs root. Panel tab: Firewall.
 .TP
 .B firewall.preset
-Ruleset `fw plan` and `fw apply` start from when you name no preset. Default: workstation.
+Ruleset `fw plan` and `fw apply` start from when you name no preset. Default: workstation. Acting on it needs root. Panel tab: Firewall.
 .TP
 .B firewall.confirm_s
-fw apply rolls back by itself unless you run `fw confirm` within this many seconds. 0 = apply for good at once. Default: 30.
+fw apply rolls back by itself unless you run `fw confirm` within this many seconds. 0 = apply for good at once. Default: 30. Acting on it needs root. Panel tab: Firewall.
 .TP
 .B firewall.default_zone
-Zone of interfaces that have none: trusted = accept all, home, public (stealth + limits), untrusted (nothing in). Default: public.
+Zone of interfaces that have none: trusted = accept all, home, public (stealth + limits), untrusted (nothing in). Default: public. Acting on it needs root. Panel tab: Firewall.
 .TP
 .B metrics.enabled
-Interface counters and rates: the metrics commands, the rates in the TUI. Default: yes.
+Interface counters and rates: the metrics commands, the rates in the TUI. Default: yes. Panel tab: Metrics.
 .TP
 .B metrics.dir
-Where `metrics record` appends one TSV file per interface (rotated at 1 MiB). Default: /var/lib/netman/metrics.
+Where `metrics record` appends one TSV file per interface (rotated at 1 MiB). Default: /var/lib/netman/metrics. Panel tab: Metrics.
 .TP
 .B metrics.interval_s
-Seconds between samples for `metrics watch` and `metrics record \-\-loop`. Default: 5.
+Seconds between samples for `metrics watch` and `metrics record \-\-loop`. Default: 5. Panel tab: Metrics.
 .TP
 .B enterprise.enabled
-Enterprise networking: bonding, bridges, vlans, routes and rules, ECMP, tethering. Off by default: it changes links and routes. Default: no.
+Enterprise networking: bonding, bridges, vlans, routes and rules, ECMP, tethering. Off by default: it changes links and routes. Default: no. Acting on it needs root. Panel tab: Enterprise.
 .TP
 .B enterprise.probe_ms
-ECMP: per\-uplink ICMP probe timeout and the tick between probes (ms). Default: 1000.
+ECMP: per\-uplink ICMP probe timeout and the tick between probes (ms). Default: 1000. Restart needed. Acting on it needs root. Panel tab: Enterprise.
 .TP
 .B enterprise.licence_dir
-Where licence (.lic) and VPN key (.key) files live. Default: /etc/netman/licences.
+Where licence (.lic) and VPN key (.key) files live. Default: /etc/netman/licences. Acting on it needs root. Panel tab: Enterprise.
 .TP
 .B enterprise.licence_warn_days
-`licence status` flags a licence expiring within this many days. Default: 30.
+`licence status` flags a licence expiring within this many days. Default: 30. Acting on it needs root. Panel tab: Enterprise.
 .TP
 .B enterprise.renew_hook
-Command (split on spaces, no shell) run by `licence renew NAME`: gets NAME CURRENT_PATH NEW_PATH and must write the renewed licence to NEW_PATH. netman never contacts a network for renewal itself. Default: .
+Command (split on spaces, no shell) run by `licence renew NAME`: gets NAME CURRENT_PATH NEW_PATH and must write the renewed licence to NEW_PATH. netman never contacts a network for renewal itself. Default: . Acting on it needs root. Panel tab: Enterprise.
 .TP
 .B enterprise.key_apply_hook
-Command run after `key rotate NAME`: gets NAME NEW_PUBKEY; failing restores the old key. Default: .
+Command run after `key rotate NAME`: gets NAME NEW_PUBKEY; failing restores the old key. Default: . Acting on it needs root. Panel tab: Enterprise.
 .TP
 .B licence.enabled
-Licence files, expiry check, renewal hook and WireGuard key rotation: the licence and key commands, the licence line in the Enterprise tab. Default: yes.
+Licence files, expiry check, renewal hook and WireGuard key rotation: the licence and key commands, the licence line in the Enterprise tab. Default: yes. Acting on it needs root. Panel tab: Enterprise.
 .TP
 .B tether.enabled
-USB / Bluetooth tethering detection and share\-out: `ent tether`, tether profile adds, the tether rows in the Enterprise tab. Off by default: sharing changes firewall and forwarding. Default: no.
+USB / Bluetooth tethering detection and share\-out: `ent tether`, tether profile adds, the tether rows in the Enterprise tab. Off by default: sharing changes firewall and forwarding. Default: no. Acting on it needs root. Panel tab: Enterprise.
 .TP
 .B wireguard.enabled
-Native WireGuard (generic netlink): the wg commands and WireGuard profiles of the vpn commands. no = only OpenVPN profiles work. Default: yes.
+Native WireGuard (generic netlink): the wg commands and WireGuard profiles of the vpn commands. no = only OpenVPN profiles work. Default: yes. Acting on it needs root. Panel tab: VPN.
 .TP
 .B nmapi.enabled
-NetworkManager D\-Bus API (org.freedesktop.NetworkManager) served by `netman daemon`, so nm\-applet / libnm / nmcli style clients work against netman. Default: yes.
+NetworkManager D\-Bus API (org.freedesktop.NetworkManager) served by `netman daemon`, so nm\-applet / libnm / nmcli style clients work against netman. Default: yes. Restart needed. Acting on it needs root. Panel tab: Daemon.
 .TP
 .B nmapi.refresh_s
-Seconds between the daemon's looks at the links and the Wi\-Fi state (it emits the D\-Bus signals for whatever changed). Default: 5.
+Seconds between the daemon's looks at the links and the Wi\-Fi state (it emits the D\-Bus signals for whatever changed). Default: 5. Restart needed. Acting on it needs root. Panel tab: Daemon.
+.TP
+.B tor.enabled
+Tor routing (`netman tor ...`, the Tor tab). Off by default: it loads a fail\-closed firewall table and runs a tor process. Needs tor installed. Default: no. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.mode
+transparent: nftables sends the routed users' TCP and DNS through Tor and DROPS everything else (no leaks). socks: only prints the SOCKS address; apps that ignore it are not protected. Default: transparent. Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.socks_port
+Tor SocksPort on 127.0.0.1 (per\-app mode). Default: 9050. Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.trans_port
+Tor TransPort on 127.0.0.1 (transparent mode). Default: 9040. Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.dns_port
+Tor DNSPort on 127.0.0.1 (transparent mode). Default: 5353. Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.control_port
+Tor ControlPort on 127.0.0.1. 0 = a unix socket in tor.dir (default, safer). Cookie authentication either way. Default: 0. Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.dir
+Where the generated torrc, data directory, cookie and hidden\-service keys live (tmpfs by default). Default: /run/netman/tor. Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.profile
+Persisted bridges, exit country and hidden services (what `netman tor bridge|exit|hs` edit). Default: /etc/netman/tor.conf. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.user
+Account tor runs as. Its traffic is the only one the firewall lets out. Default: tor. Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.route_uids
+Numeric uids forced through Tor, comma separated. Empty = everybody but tor's own user. Default: . Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.route_ifaces
+Interfaces whose forwarded traffic (hotspot, router) is also forced through Tor, e.g. wlan1. Empty = none. Default: . Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.obfs4_bin
+obfs4 pluggable transport binary, used when an obfs4 bridge is set. Default: /usr/bin/obfs4proxy. Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B tor.snowflake_bin
+Snowflake pluggable transport binary, used when a snowflake bridge is set. Default: /usr/bin/snowflake\-client. Restart needed. Acting on it needs root. Panel tab: Tor.
+.TP
+.B ssh.enabled
+SSH profiles and tunnels (`netman ssh ...`, the SSH tab). Off by default. Runs your ssh binary; host key checking is never turned off. Default: no. Panel tab: SSH.
+.TP
+.B ssh.dir
+Profiles NAME.ssh (host, user, key, jump hosts, forwards, keepalive, reconnect). Default: /etc/netman/ssh. Panel tab: SSH.
+.TP
+.B ssh.state_dir
+Pid, state, log and ControlMaster sockets of running connections. Default: /run/netman/ssh. Restart needed. Panel tab: SSH.
+.TP
+.B ssh.known_hosts
+known_hosts file netman uses (UserKnownHostsFile). Fill it with `netman ssh trust NAME SHA256:FINGERPRINT`. Default: /etc/netman/ssh/known_hosts. Panel tab: SSH.
+.TP
+.B ssh.ssh_bin
+Absolute path of the ssh client. Empty = ssh from PATH. Default: . Panel tab: SSH.
+.TP
+.B ssh.keyscan_bin
+Absolute path of ssh\-keyscan, used by `ssh hostkey`. Empty = from PATH. Default: . Panel tab: SSH.
+.TP
+.B ssh.keygen_bin
+Absolute path of ssh\-keygen, used for fingerprints (\-lf). Empty = from PATH. Default: . Panel tab: SSH.
+.TP
+.B mesh.enabled
+Mesh networks (`netman mesh ...`, the Mesh tab): batman\-adv and a WireGuard full mesh. Off by default: it creates links. Default: no. Acting on it needs root. Panel tab: Mesh.
+.TP
+.B mesh.dir
+Profiles NAME.mesh, peer lists NAME.peers and private keys NAME.key (mode 0600). Default: /etc/netman/mesh. Acting on it needs root. Panel tab: Mesh.
+.TP
+.B mesh.ip_bin
+Absolute path of ip (iproute2), needed for batman\-adv only; the WireGuard mesh uses netlink. Empty = from PATH. Default: . Acting on it needs root. Panel tab: Mesh.
+.TP
+.B mesh.batctl_bin
+Absolute path of batctl, optional: tuning and `mesh neighbors` for batman\-adv. Empty = from PATH. Default: . Acting on it needs root. Panel tab: Mesh.
+.TP
+.B bonding.enabled
+Link bonding (`netman bond ...`, the Bond tab). Off by default: it creates links. Same code as the enterprise bond profiles. Default: no. Acting on it needs root. Panel tab: Bond.
+.TP
+.B tunnel.enabled
+GRE / gretap / ipip / sit / VXLAN / Geneve / L2TPv3 tunnels (`netman tunnel ...`, the Tunnel tab). Off by default: it creates links. Default: no. Acting on it needs root. Panel tab: Tunnel.
+.TP
+.B tunnel.dir
+Tunnel profiles NAME.tun. Default: /etc/netman/tunnel. Acting on it needs root. Panel tab: Tunnel.
+.TP
+.B tunnel.ip_bin
+Absolute path of ip (iproute2), used for L2TPv3 only; the other kinds use netlink. Empty = from PATH. Default: . Acting on it needs root. Panel tab: Tunnel.
 .TP
 .B tui.theme
-TUI colours. Default: default.
+TUI colours. Default: default. Panel tab: Interface.
 .TP
 .B tui.unicode
-Box drawing and glyphs. auto = by locale; no = plain ASCII. Default: auto.
+Box drawing and glyphs. auto = by locale; no = plain ASCII. Default: auto. Panel tab: Interface.
 .TP
 .B privileges.sudo
-When netman re\-runs itself through sudo: auto = only when the command needs root, never, always. Default: auto.
+When netman re\-runs itself through sudo: auto = only when the command needs root, never, always. Default: auto. Panel tab: Interface.
 .SH FILES
 .I /etc/netman/netman.conf
 .br

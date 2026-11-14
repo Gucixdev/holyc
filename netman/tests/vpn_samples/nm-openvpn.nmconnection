@@ -1,0 +1,12 @@
+[connection]
+id=corp-ovpn
+type=vpn
+
+[vpn]
+service-type=org.freedesktop.NetworkManager.openvpn
+remote=vpn.example.net:443
+proto-tcp=yes
+connection-type=password
+username=alice
+ca=/etc/ssl/corp-ca.pem
+tls-crypt=/etc/ssl/ta.key

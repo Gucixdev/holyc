@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# settings_cli_test - `netman settings ...` against the real binary: goldens, JSON validity, atomic comment-keeping writes, pick through a fake menu.
+# Only temp files (NETMAN_CONFIG); /etc and the live network are never touched.
+set -u
+cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+cc -std=gnu11 -Wall -Wextra -O2 -Wno-format-truncation -Isrc -Isrc/mods src/netman.c src/config.c src/mods/enterprise/enterprise.c src/mods/enterprise/tether.c src/mods/enterprise/licence.c src/mods/wireguard.c src/mods/vpnmod.c src/mods/openvpn.c src/mods/ipsec.c src/mods/l2tp.c src/mods/openconnect.c src/mods/sstp.c src/mods/vpnimport.c src/mods/tor.c src/mods/ssh.c src/mods/mesh.c src/mods/bonding.c src/mods/tunnel.c -o "$work/netman" 2>/dev/null || exit 1
+N="$work/netman"; pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; }
+export NETMAN_CONFIG="$work/c.conf"
+unset $(env | sed -n 's/^\(NETMAN_[A-Z_]*\)=.*/\1/p' | grep -v '^NETMAN_CONFIG$')
+export NETMAN_CONFIG="$work/c.conf"
+printf '# my notes\n[privileges]\nsudo = never   # keep\n\n[wifi]\nbackend = iwd\n' >"$work/c.conf"
+chk() { local want=$1 desc=$2; shift 2; local rc; LAST=$("$@" 2>&1); rc=$?; [ "$rc" = "$want" ] && ok || no "$desc: rc $rc, wanted $want ($LAST)"; }
+contains() { grep -qF -- "$1" <<<"$LAST" && ok || no "$2: wanted '$1' in: $LAST"; }
+absent() { grep -qF -- "$1" <<<"$LAST" && no "$2: unexpected '$1' in: $LAST" || ok; }
+
+chk 0 get "$N" settings get wifi.backend; [ "$LAST" = iwd ] && ok || no "get prints the bare value: $LAST"
+chk 1 "get unknown" "$N" settings get wifi.nope
+chk 0 list "$N" settings list wifi; contains "wifi.backend" "list shows key"; contains "iwd" "list shows value"; contains "user" "list shows source"
+chk 0 "settings = list" "$N" settings; contains "wifi.backend" "bare settings lists"
+chk 0 menu "$N" settings menu wifi; contains "wifi.backend = iwd  # " "menu line format"
+absent "ssh." "menu section filter"
+# set / comments kept / atomic
+chk 0 set "$N" settings set wifi.backend wpa; grep -q '^backend = wpa' "$work/c.conf" && ok || no "set wrote the value"
+grep -q '# my notes' "$work/c.conf" && grep -q 'sudo = never   # keep' "$work/c.conf" && ok || no "comments survive a set"
+cp "$work/c.conf" "$work/before"
+chk 1 "bad value refused" "$N" settings set wifi.backend nonsense; cmp -s "$work/before" "$work/c.conf" && ok || no "bad value left the file unchanged"
+chk 1 "bad int refused" "$N" settings set roaming.score_threshold 101; cmp -s "$work/before" "$work/c.conf" && ok || no "bad int left the file unchanged"
+[ "$(ls -A "$work" | grep -c 'c.conf.')" = 0 ] && ok || no "no temp files left: $(ls -A "$work")"
+chk 0 toggle "$N" settings toggle ssh.enabled; contains "ssh.enabled" "toggle message"
+chk 0 "toggle value" "$N" settings get ssh.enabled; [ "$LAST" = yes ] && ok || no "toggle flipped ssh.enabled to yes ($LAST)"
+chk 1 "toggle non-bool" "$N" settings toggle wifi.backend
+chk 0 reset "$N" settings reset wifi.backend; grep -q '^backend' "$work/c.conf" && no "reset removed the line" || ok
+chk 0 "reset when unset" "$N" settings reset wifi.backend
+chk 0 check "$N" settings check; contains "settings ok" "check ok"
+# check on a broken file
+printf '[wifi]\nbackend = zzz\n' >"$work/bad.conf"
+NETMAN_CONFIG="$work/bad.conf" "$N" settings check >/dev/null 2>&1; [ $? = 1 ] && ok || no "check fails on a broken file"
+# env source
+LAST=$(NETMAN_WIFI_BACKEND=wpa "$N" settings list wifi 2>&1); contains "env" "env shown as source"
+# JSON
+if command -v python3 >/dev/null; then
+	"$N" settings --dump-api | python3 -c 'import json,sys; d=json.load(sys.stdin); s=d["settings"]; assert len(s)>=70; assert {"key","type","default","value","source","description","restart","needs_root"} <= set(s[0]); assert any(x["key"]=="ssh.enabled" and x["value"]=="yes" for x in s)' 2>"$work/err" && ok || no "--dump-api is valid JSON with the schema: $(cat "$work/err")"
+	"$N" settings check --json | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null && ok || no "check --json is valid JSON"
+	NETMAN_CONFIG="$work/bad.conf" "$N" settings check --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d' 2>/dev/null && ok || no "check --json on a broken file is valid JSON"
+fi
+chk 0 schema "$N" settings schema; contains "wifi.backend|choice" "desktop schema pipe format"
+# pick through a fake menu: first call chooses a key, second the value
+cat >"$work/menu" <<'M'
+#!/bin/sh
+case "$NETMAN_MENU_PROMPT" in *backend*) echo iwd;; *) echo "wifi.backend = x  # d";; esac
+M
+chmod +x "$work/menu"
+LAST=$(echo "wifi.backend = auto  # d" | NETMAN_MENU="$work/menu" "$N" settings pick 2>&1); "$N" settings get wifi.backend | grep -qx iwd && ok || no "pick set the chosen value: $LAST"
+LAST=$(echo "wifi.backend = auto  # d" | "$N" settings pick --choices 2>&1); contains "wpa" "pick --choices lists choices"
+LAST=$(echo "wifi.backend" | "$N" settings pick --value wpa 2>&1); "$N" settings get wifi.backend | grep -qx wpa && ok || no "pick --value on a bare key: $LAST"
+chk 0 "help settings" "$N" help settings; contains "settings toggle" "help settings lists the commands"; contains "wifi.backend" "help settings lists keys"
+printf 'settings_cli_test: %d ok, %d failed\n' "$pass" "$fail"; [ "$fail" = 0 ]

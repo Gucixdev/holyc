@@ -39,6 +39,11 @@
 	X(VPN_ENABLED, "vpn", "enabled", "bool", "yes", "WireGuard / OpenVPN / provider support: the vpn commands, the VPN tab.") \
 	X(VPN_KILLSWITCH, "vpn", "killswitch", "bool", "no", "`vpn up` also turns the nftables kill switch on (traffic only through the tunnel).") \
 	X(VPN_WATCHDOG, "vpn", "watchdog", "bool", "yes", "The daemon reconnects a tunnel that died or whose handshake went stale.") \
+	X(VPN_OPENVPN, "vpn", "openvpn", "bool", "yes", "OpenVPN profiles (NAME.ovpn). no = `vpn up` refuses them.") \
+	X(VPN_IPSEC, "vpn", "ipsec", "bool", "yes", "IPsec / IKEv2 profiles (Type = ipsec, strongSwan swanctl). no = `vpn up` refuses them.") \
+	X(VPN_L2TP, "vpn", "l2tp", "bool", "yes", "L2TP/IPsec profiles (Type = l2tp, xl2tpd + pppd). no = `vpn up` refuses them.") \
+	X(VPN_OPENCONNECT, "vpn", "openconnect", "bool", "yes", "OpenConnect profiles: AnyConnect, GlobalProtect, Pulse, ... (Type = openconnect). no = `vpn up` refuses them.") \
+	X(VPN_SSTP, "vpn", "sstp", "bool", "yes", "SSTP profiles are recognised but not supported (no maintained client): this only changes the message.") \
 	X(FW_ENABLED, "firewall", "enabled", "bool", "no", "Firewall management. no = fw apply / confirm / rollback are refused (show, plan, diff and preset still work). Off by default: it changes your rules.") \
 	X(FW_PRESET, "firewall", "preset", "enum:workstation|lockdown", "workstation", "Ruleset `fw plan` and `fw apply` start from when you name no preset.") \
 	X(FW_CONFIRM, "firewall", "confirm_s", "int:0:3600", "30", "fw apply rolls back by itself unless you run `fw confirm` within this many seconds. 0 = apply for good at once.") \
@@ -57,6 +62,34 @@
 	X(WG_ENABLED, "wireguard", "enabled", "bool", "yes", "Native WireGuard (generic netlink): the wg commands and WireGuard profiles of the vpn commands. no = only OpenVPN profiles work.") \
 	X(NMAPI_ENABLED, "nmapi", "enabled", "bool", "yes", "NetworkManager D-Bus API (org.freedesktop.NetworkManager) served by `netman daemon`, so nm-applet / libnm / nmcli style clients work against netman.") \
 	X(NMAPI_REFRESH, "nmapi", "refresh_s", "int:1:3600", "5", "Seconds between the daemon's looks at the links and the Wi-Fi state (it emits the D-Bus signals for whatever changed).") \
+	X(TOR_ENABLED, "tor", "enabled", "bool", "no", "Tor routing (`netman tor ...`, the Tor tab). Off by default: it loads a fail-closed firewall table and runs a tor process. Needs tor installed.") \
+	X(TOR_MODE, "tor", "mode", "enum:transparent|socks", "transparent", "transparent: nftables sends the routed users' TCP and DNS through Tor and DROPS everything else (no leaks). socks: only prints the SOCKS address; apps that ignore it are not protected.") \
+	X(TOR_SOCKS, "tor", "socks_port", "int:1:65535", "9050", "Tor SocksPort on 127.0.0.1 (per-app mode).") \
+	X(TOR_TRANS, "tor", "trans_port", "int:1:65535", "9040", "Tor TransPort on 127.0.0.1 (transparent mode).") \
+	X(TOR_DNS, "tor", "dns_port", "int:1:65535", "5353", "Tor DNSPort on 127.0.0.1 (transparent mode).") \
+	X(TOR_CONTROL, "tor", "control_port", "int:0:65535", "0", "Tor ControlPort on 127.0.0.1. 0 = a unix socket in tor.dir (default, safer). Cookie authentication either way.") \
+	X(TOR_DIR, "tor", "dir", "path", "/run/netman/tor", "Where the generated torrc, data directory, cookie and hidden-service keys live (tmpfs by default).") \
+	X(TOR_PROFILE, "tor", "profile", "path", "/etc/netman/tor.conf", "Persisted bridges, exit country and hidden services (what `netman tor bridge|exit|hs` edit).") \
+	X(TOR_USER, "tor", "user", "list", "tor", "Account tor runs as. Its traffic is the only one the firewall lets out.") \
+	X(TOR_UIDS, "tor", "route_uids", "list", "", "Numeric uids forced through Tor, comma separated. Empty = everybody but tor's own user.") \
+	X(TOR_IFACES, "tor", "route_ifaces", "list", "", "Interfaces whose forwarded traffic (hotspot, router) is also forced through Tor, e.g. wlan1. Empty = none.") \
+	X(TOR_OBFS4, "tor", "obfs4_bin", "cmd", "/usr/bin/obfs4proxy", "obfs4 pluggable transport binary, used when an obfs4 bridge is set.") \
+	X(TOR_SNOW, "tor", "snowflake_bin", "cmd", "/usr/bin/snowflake-client", "Snowflake pluggable transport binary, used when a snowflake bridge is set.") \
+	X(SSH_ENABLED, "ssh", "enabled", "bool", "no", "SSH profiles and tunnels (`netman ssh ...`, the SSH tab). Off by default. Runs your ssh binary; host key checking is never turned off.") \
+	X(SSH_DIR, "ssh", "dir", "path", "/etc/netman/ssh", "Profiles NAME.ssh (host, user, key, jump hosts, forwards, keepalive, reconnect).") \
+	X(SSH_STATE, "ssh", "state_dir", "path", "/run/netman/ssh", "Pid, state, log and ControlMaster sockets of running connections.") \
+	X(SSH_KNOWN, "ssh", "known_hosts", "path", "/etc/netman/ssh/known_hosts", "known_hosts file netman uses (UserKnownHostsFile). Fill it with `netman ssh trust NAME SHA256:FINGERPRINT`.") \
+	X(SSH_BIN, "ssh", "ssh_bin", "cmd", "", "Absolute path of the ssh client. Empty = ssh from PATH.") \
+	X(SSH_KEYSCAN, "ssh", "keyscan_bin", "cmd", "", "Absolute path of ssh-keyscan, used by `ssh hostkey`. Empty = from PATH.") \
+	X(SSH_KEYGEN, "ssh", "keygen_bin", "cmd", "", "Absolute path of ssh-keygen, used for fingerprints (-lf). Empty = from PATH.") \
+	X(MESH_ENABLED, "mesh", "enabled", "bool", "no", "Mesh networks (`netman mesh ...`, the Mesh tab): batman-adv and a WireGuard full mesh. Off by default: it creates links.") \
+	X(MESH_DIR, "mesh", "dir", "path", "/etc/netman/mesh", "Profiles NAME.mesh, peer lists NAME.peers and private keys NAME.key (mode 0600).") \
+	X(MESH_IP, "mesh", "ip_bin", "cmd", "", "Absolute path of ip (iproute2), needed for batman-adv only; the WireGuard mesh uses netlink. Empty = from PATH.") \
+	X(MESH_BATCTL, "mesh", "batctl_bin", "cmd", "", "Absolute path of batctl, optional: tuning and `mesh neighbors` for batman-adv. Empty = from PATH.") \
+	X(BOND_ENABLED, "bonding", "enabled", "bool", "no", "Link bonding (`netman bond ...`, the Bond tab). Off by default: it creates links. Same code as the enterprise bond profiles.") \
+	X(TUN_ENABLED, "tunnel", "enabled", "bool", "no", "GRE / gretap / ipip / sit / VXLAN / Geneve / L2TPv3 tunnels (`netman tunnel ...`, the Tunnel tab). Off by default: it creates links.") \
+	X(TUN_DIR, "tunnel", "dir", "path", "/etc/netman/tunnel", "Tunnel profiles NAME.tun.") \
+	X(TUN_IP, "tunnel", "ip_bin", "cmd", "", "Absolute path of ip (iproute2), used for L2TPv3 only; the other kinds use netlink. Empty = from PATH.") \
 	X(TUI_THEME, "tui", "theme", "enum:default|mono|light", "default", "TUI colours.") \
 	X(TUI_UNICODE, "tui", "unicode", "enum:auto|yes|no", "auto", "Box drawing and glyphs. auto = by locale; no = plain ASCII.") \
 	X(PRIV_SUDO, "privileges", "sudo", "enum:auto|never|always", "auto", "When netman re-runs itself through sudo: auto = only when the command needs root, never, always.")
@@ -99,6 +132,8 @@ void netman_config_example(FILE *o);                                           /
 const char *netman_config_user_path(char *buf, size_t n);                      /* the file `config set` edits by default */
 /* edit PATH atomically (mkstemp + rename in the same directory), comments and layout kept; the result is re-parsed before it replaces the file */
 int netman_config_set_file(const char *path, const char *dotted, const char *value, char *err, size_t errsz);
+/* drop the assignment of DOTTED from PATH (reset to default): 0 removed, 1 it was not set, -1 error */
+int netman_config_unset_file(const char *path, const char *dotted, char *err, size_t errsz);
 int netman_config_toggle_file(const char *path, const char *dotted, char *err, size_t errsz);   /* bool keys: flips the effective value */
 int netman_config_split_url(const char *url, char *host, size_t hn, int *port, char *path, size_t pn);   /* roaming.probe_url pieces; 0 ok */
 #endif

@@ -308,6 +308,11 @@ static void netman__link_cb(const struct nlmsghdr *m, void *u)
 		else if (a->rta_type == IFLA_MTU && RTA_PAYLOAD(a) >= 4) memcpy(&f->mtu, RTA_DATA(a), 4);
 		else if (a->rta_type == IFLA_ADDRESS && RTA_PAYLOAD(a) == 6) memcpy(f->mac, RTA_DATA(a), 6);
 	}
+	/* kernel fallback tunnel devices (appear in every new netns once ipip/sit/gre/ip6_tunnel/vti are loaded): never a real link, hidden while down */
+	if (!f->up) {
+		static const char *const fb[] = { "tunl0", "sit0", "gre0", "gretap0", "erspan0", "ip6tnl0", "ip6gre0", "ip6gretap0", "ip6erspan0", "ip_vti0", "ip6_vti0", NULL };
+		for (int k = 0; fb[k]; k++) if (!strcmp(f->name, fb[k])) { c->n--; break; }
+	}
 }
 static void netman__addr_cb(const struct nlmsghdr *m, void *u)
 {

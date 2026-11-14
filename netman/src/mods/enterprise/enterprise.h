@@ -120,6 +120,7 @@ NETMAN_ENT_DECL(link)
 NETMAN_ENT_DECL(ipv6)
 NETMAN_ENT_DECL(wol)
 
+int netman_ent_bond_slave(const char *bond, const char *slave, int add); /* add (1) or release (0) one slave of a live bond */
 int netman_ent_getinfo(const char *ifn, netman_ent_info *i);
 int netman_ent_members(const char *master, char out[][16], int max);	      /* ifaces enslaved to a bond/bridge */
 int netman_ent_bridge_vlans(const char *port, netman_ent_vlan *out, int max); /* vlan filter table of a bridge port */

@@ -21,12 +21,19 @@ static int nc_usage(const nc_cmd *c) { fprintf(stderr, "usage: netman %s %s\n", 
 
 /* ---- config -> module globals ------------------------------------------------------------------------------------- */
 
+static int nc_vpn_type_on(const char *type)
+{
+	static const struct { const char *t; int k; } m[] = { { "openvpn", NC_VPN_OPENVPN }, { "ipsec", NC_VPN_IPSEC }, { "l2tp", NC_VPN_L2TP }, { "openconnect", NC_VPN_OPENCONNECT }, { "sstp", NC_VPN_SSTP } };
+	for (unsigned i = 0; i < sizeof m / sizeof *m; i++) if (!strcmp(type, m[i].t)) return netman_config_bool(&nc_cfg, m[i].k);
+	return 1;
+}
 static char nc_probe_host[160], nc_probe_path[256];
 static void nc_apply(const netman_config *c)
 {
 	const char *b = netman_config_str(c, NC_WIFI_BACKEND), *d = netman_config_str(c, NC_NET_DNS_MODE), *u = netman_config_str(c, NC_ROAM_PROBE_URL);
 	int port = 80;
 	netman_vpn_env();
+	netman_vpn_enabled_cb = nc_vpn_type_on;
 	{ const char *e = getenv("NETMAN_CONF_DIR"); if (e && *e) netman_conf_dir = e; }   /* profile directory (NAME.conf / NAME.ent), default /etc/netman: relocation and tests */
 	netman_lic_dir = netman_config_str(c, NC_LIC_DIR);
 	netman_lic_warn_days = netman_config_int(c, NC_LIC_WARN);
@@ -48,14 +55,14 @@ static int nc_vpn_has_profiles(void)
 	struct dirent *e;
 	int found = 0;
 	if (!d) return errno == EACCES;
-	while (!found && (e = readdir(d))) { const char *dot = strrchr(e->d_name, '.'); found = dot && (!strcmp(dot, ".conf") || !strcmp(dot, ".ovpn")); }
+	while (!found && (e = readdir(d))) { const char *dot = strrchr(e->d_name, '.'); found = dot && (!strcmp(dot, ".conf") || !strcmp(dot, ".ovpn") || !strcmp(dot, ".vpn")); }
 	closedir(d);
 	return found;
 }
 
 static int nc_enabled(const char *module)
 {
-	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED }, { "wireguard", NC_WG_ENABLED }, { "nmapi", NC_NMAPI_ENABLED } };
+	static const struct { const char *m; int k; } t[] = { { "wifi", NC_WIFI_ENABLED }, { "bluetooth", NC_BT_ENABLED }, { "net", NC_NET_ENABLED }, { "roaming", NC_ROAM_ENABLED }, { "vpn", NC_VPN_ENABLED }, { "firewall", NC_FW_ENABLED }, { "metrics", NC_METRICS_ENABLED }, { "enterprise", NC_ENT_ENABLED }, { "licence", NC_LICENCE_ENABLED }, { "tether", NC_TETHER_ENABLED }, { "wireguard", NC_WG_ENABLED }, { "nmapi", NC_NMAPI_ENABLED }, { "tor", NC_TOR_ENABLED }, { "ssh", NC_SSH_ENABLED }, { "mesh", NC_MESH_ENABLED }, { "bonding", NC_BOND_ENABLED }, { "tunnel", NC_TUN_ENABLED } };
 	if (!module) return 1;
 	for (unsigned i = 0; i < sizeof t / sizeof *t; i++) if (!strcmp(module, t[i].m)) return netman_config_bool(&nc_cfg, t[i].k);
 	return 1;
@@ -236,6 +243,89 @@ static int h_roam_prefer(const nc_cmd *c, int n, char **a)   /* PROFILE PRIORITY
 }
 
 /* ---- vpn ----------------------------------------------------------------------------------------------------------- */
+
+static void nc_tor_cfg(netman_tor_cfg *o)
+{
+	const netman_config *c = &nc_cfg;
+	netman_tor_defaults(o);
+	snprintf(o->mode, sizeof o->mode, "%s", netman_config_str(c, NC_TOR_MODE)); snprintf(o->dir, sizeof o->dir, "%s", netman_config_str(c, NC_TOR_DIR));
+	snprintf(o->persist, sizeof o->persist, "%s", netman_config_str(c, NC_TOR_PROFILE)); snprintf(o->tor_user, sizeof o->tor_user, "%s", netman_config_str(c, NC_TOR_USER));
+	snprintf(o->route_uids, sizeof o->route_uids, "%s", netman_config_str(c, NC_TOR_UIDS)); snprintf(o->route_ifaces, sizeof o->route_ifaces, "%s", netman_config_str(c, NC_TOR_IFACES));
+	snprintf(o->obfs4_bin, sizeof o->obfs4_bin, "%s", netman_config_str(c, NC_TOR_OBFS4)); snprintf(o->snowflake_bin, sizeof o->snowflake_bin, "%s", netman_config_str(c, NC_TOR_SNOW));
+	o->socks_port = netman_config_int(c, NC_TOR_SOCKS); o->trans_port = netman_config_int(c, NC_TOR_TRANS); o->dns_port = netman_config_int(c, NC_TOR_DNS); o->control_port = netman_config_int(c, NC_TOR_CONTROL);
+	o->out = stdout; o->err = stderr;
+}
+static int h_tor(const nc_cmd *c, int n, char **a)   /* "tor bridge add X" -> {bridge, add, X} */
+{
+	netman_tor_cfg o; char *av[24]; int k = 0;
+	if (!nc_enabled("tor")) { fputs("netman: tor is disabled in config (netman config toggle tor.enabled)\n", stderr); return 3; }
+	nc_tor_cfg(&o);
+	av[k++] = (char *)(strchr(c->name, ' ') + 1);
+	for (int i = 0; i < n && k < 22; i++) av[k++] = a[i];
+	av[k] = NULL;
+	return netman_tor_main(&o, k, av);
+}
+
+/* ssh / mesh / bond / tunnel: the mods own all logic; "ssh up X" -> {up, X}. Disabled in config = refuse with the hint. */
+static int nc_modoff(const char *m)
+{
+	if (nc_enabled(m)) return 0;
+	fprintf(stderr, "netman: %s is disabled in config (netman config toggle %s.enabled)\n", !strcmp(m, "bonding") ? "bond" : m, m);
+	return 1;
+}
+static int nc_modargv(const nc_cmd *c, int n, char **a, char **av)
+{
+	int k = 0;
+	av[k++] = (char *)(strchr(c->name, ' ') + 1);
+	for (int i = 0; i < n && k < 30; i++) av[k++] = a[i];
+	av[k] = NULL;
+	return k;
+}
+static void nc_ssh_cfg(netman_ssh_cfg *o)
+{
+	netman_ssh_cfg_defaults(o);
+	snprintf(o->dir, sizeof o->dir, "%s", netman_config_str(&nc_cfg, NC_SSH_DIR)); snprintf(o->state, sizeof o->state, "%s", netman_config_str(&nc_cfg, NC_SSH_STATE));
+	snprintf(o->known, sizeof o->known, "%s", netman_config_str(&nc_cfg, NC_SSH_KNOWN)); if (*netman_config_str(&nc_cfg, NC_SSH_BIN)) snprintf(o->bin, sizeof o->bin, "%s", netman_config_str(&nc_cfg, NC_SSH_BIN));
+	if (*netman_config_str(&nc_cfg, NC_SSH_KEYSCAN)) snprintf(o->keyscan, sizeof o->keyscan, "%s", netman_config_str(&nc_cfg, NC_SSH_KEYSCAN)); if (*netman_config_str(&nc_cfg, NC_SSH_KEYGEN)) snprintf(o->keygen, sizeof o->keygen, "%s", netman_config_str(&nc_cfg, NC_SSH_KEYGEN));
+}
+static void nc_mod_globals(void)   /* the mods that keep their paths in globals; empty bin keys keep the mod's default (PATH lookup) */
+{
+	netman_mesh_dir = netman_config_str(&nc_cfg, NC_MESH_DIR); netman_tunnel_dir = netman_config_str(&nc_cfg, NC_TUN_DIR);
+	if (*netman_config_str(&nc_cfg, NC_MESH_IP)) netman_mesh_ip = netman_config_str(&nc_cfg, NC_MESH_IP);
+	if (*netman_config_str(&nc_cfg, NC_MESH_BATCTL)) netman_mesh_batctl = netman_config_str(&nc_cfg, NC_MESH_BATCTL);
+	if (*netman_config_str(&nc_cfg, NC_TUN_IP)) netman_tunnel_ip = netman_config_str(&nc_cfg, NC_TUN_IP);
+}
+static int h_ssh(const nc_cmd *c, int n, char **a)
+{
+	netman_ssh_cfg o; char *av[32]; int k;
+	if (nc_modoff("ssh")) return 3;
+	nc_ssh_cfg(&o);
+	k = nc_modargv(c, n, a, av);
+	return netman_ssh_main(&o, stdout, stderr, k, av);
+}
+static int h_mesh(const nc_cmd *c, int n, char **a)
+{
+	char *av[32]; int k;
+	if (nc_modoff("mesh")) return 3;
+	nc_mod_globals();
+	k = nc_modargv(c, n, a, av);
+	return netman_mesh_main(stdout, stderr, k, av);
+}
+static int h_bond(const nc_cmd *c, int n, char **a)
+{
+	char *av[32]; int k;
+	if (nc_modoff("bonding")) return 3;
+	k = nc_modargv(c, n, a, av);
+	return netman_bond_main(stdout, stderr, k, av);
+}
+static int h_tunnel(const nc_cmd *c, int n, char **a)
+{
+	char *av[32]; int k;
+	if (nc_modoff("tunnel")) return 3;
+	nc_mod_globals();
+	k = nc_modargv(c, n, a, av);
+	return netman_tunnel_main(stdout, stderr, k, av);
+}
 
 static int h_vpn(const nc_cmd *c, int n, char **a)   /* the library's own front end: "vpn up X" -> {vpn, up, X} */
 {
@@ -606,6 +696,44 @@ static int h_cfg_toggle(const nc_cmd *c, int n, char **a)
 	printf("%s toggled  (%s)\n", a[0], path);
 	return 0;
 }
+/* ---- settings (the schema in settings.c: list/get/set/toggle/reset/check, the JSON API, the dmenu helpers) ------------------------ */
+
+static int nc_flag(int *n, char **a, const char *flag)   /* remove FLAG from a[0..n) if present */
+{
+	for (int i = 0; i < *n; i++) if (!strcmp(a[i], flag)) { memmove(a + i, a + i + 1, (size_t)(*n - i - 1) * sizeof *a); (*n)--; return 1; }
+	return 0;
+}
+static int nc_set_rc(int rc, const char *err) { if (rc) fprintf(stderr, "netman: %s\n", err); return rc ? 1 : 0; }
+static int h_set_list(const nc_cmd *c, int n, char **a)
+{
+	int all = nc_flag(&n, a, "--all");
+	if (n > 1) return nc_usage(c);
+	if (nset_list(&nc_cfg, stdout, n ? a[0] : NULL, all)) { fprintf(stderr, "netman: no settings in '%s' (netman settings list --all)\n", n ? a[0] : ""); return 1; }
+	return 0;
+}
+static int h_set_menu(const nc_cmd *c, int n, char **a)
+{
+	int all = nc_flag(&n, a, "--all");
+	if (n > 1) return nc_usage(c);
+	nset_menu(&nc_cfg, stdout, n ? a[0] : NULL, all);
+	return 0;
+}
+static int h_set_get(const nc_cmd *c, int n, char **a) { char e[400] = ""; if (n != 1) return nc_usage(c); return nc_set_rc(nset_get(&nc_cfg, a[0], stdout, e, sizeof e), e); }
+static int h_set_set(const nc_cmd *c, int n, char **a) { char e[600] = "", path[512]; if (n != 2) return nc_usage(c); return nc_set_rc(nset_set(nc_cfg_path(path, sizeof path), a[0], a[1], stdout, e, sizeof e), e); }
+static int h_set_toggle(const nc_cmd *c, int n, char **a) { char e[600] = "", path[512]; if (n != 1) return nc_usage(c); return nc_set_rc(nset_toggle(nc_cfg_path(path, sizeof path), a[0], stdout, e, sizeof e), e); }
+static int h_set_reset(const nc_cmd *c, int n, char **a) { char e[600] = "", path[512]; if (n != 1) return nc_usage(c); return nc_set_rc(nset_reset(nc_cfg_path(path, sizeof path), a[0], stdout, e, sizeof e), e); }
+static int h_set_check(const nc_cmd *c, int n, char **a) { int j = nc_flag(&n, a, "--json"); if (n) return nc_usage(c); return nset_check(stdout, j); }
+static int h_set_schema(const nc_cmd *c, int n, char **a) { (void)c; (void)n; (void)a; nset_schema(stdout); return 0; }
+static int h_set_api(const nc_cmd *c, int n, char **a) { char path[512]; (void)c; (void)n; (void)a; nset_dump_api(&nc_cfg, nc_cfg_path(path, sizeof path), stdout); return 0; }
+static int h_set_pick(const nc_cmd *c, int n, char **a)
+{
+	char e[600] = "", path[512];
+	int ch = nc_flag(&n, a, "--choices");
+	const char *val = NULL;
+	if (n == 2 && !strcmp(a[0], "--value")) { val = a[1]; n = 0; }
+	if (n) return nc_usage(c);
+	return nc_set_rc(nset_pick(&nc_cfg, nc_cfg_path(path, sizeof path), stdin, stdout, ch, val, e, sizeof e), e);
+}
 static int h_fw_preset(const nc_cmd *c, int n, char **a)
 {
 	char *v[2] = { "firewall.preset", NULL };
@@ -656,8 +784,53 @@ static const nc_cmd nc_table[] = {
 	{ "net profile apply", "NAME", h_prof_apply, R_YES, "net", "bring a profile up", "" },
 	{ "roam status", "", h_roam_status, R_NO, "roaming", "probe setting and the score of each live interface", "" },
 	{ "roam prefer", "PROFILE PRIORITY", h_roam_prefer, R_YES, "roaming", "set a profile priority (higher wins)", "" },
-	{ "vpn list", "", h_vpn, R_NO, "vpn", "WireGuard and OpenVPN profiles and their state", "" },
-	{ "vpn import", "FILE [NAME]", h_vpn, R_YES, "vpn", "copy a WireGuard / OpenVPN config into the profile dir (/etc/netman/vpn, mode 0600)", "Refuses to overwrite. Directory override: env NETMAN_VPN_CONF_DIR." },
+	{ "tor up", "", h_tor, R_YES, "tor", "start Tor and the fail-closed firewall (transparent mode: all TCP + DNS via Tor, everything else dropped)", "Needs tor installed. Rules go in BEFORE tor starts and stay until `tor down`. Threat model: see the readme; Tor does not anonymise logged-in accounts." },
+	{ "tor down", "", h_tor, R_YES, "tor", "stop Tor, then remove the firewall table", "" },
+	{ "tor status", "", h_tor, R_NO, "tor", "mode, bootstrap %, circuits, exit ip, bridges, hidden services, SOCKS settings", "" },
+	{ "tor newnym", "", h_tor, R_YES, "tor", "new Tor identity: fresh circuits for new connections", "" },
+	{ "tor bridge", "add LINE | clear", h_tor, R_YES, "tor", "set or clear obfs4 / snowflake bridges", "LINE e.g. 'obfs4 1.2.3.4:443 FINGERPRINT cert=... iat-mode=0'." },
+	{ "tor exit", "CC|off", h_tor, R_YES, "tor", "force the exit country (strict)", "" },
+	{ "tor hs", "add NAME PORT HOST:PORT | list | del NAME", h_tor, R_YES, "tor", "onion services: publish a local port as a .onion", "" },
+	{ "vpn list", "", h_vpn, R_NO, "vpn", "VPN profiles (WireGuard, OpenVPN, IPsec/IKEv2, L2TP, OpenConnect) and their state", "" },
+	{ "ssh status", "", h_ssh, R_NO, "ssh", "SSH profiles and connections: state, user@host:port, reconnects", "Rows: NAME up|connecting|down user@host:port. The same list is the SSH tab." },
+	{ "ssh save", "NAME host=H [user=U key=PATH jump=J1,J2 port=N forward=L:... keepalive=N control=yes reconnect=yes tun=L:R strict=yes|accept-new]", h_ssh, R_YES, "ssh", "create or change an SSH profile", "Forwards: forward=L:8080:db:5432 (local), R:9000:localhost:22 (remote), D:1080 (SOCKS); repeat forward= up to 8 times. strict accepts only yes or accept-new: netman never turns host key checking off, and a profile that asks for it is refused. Stored as NAME.ssh." },
+	{ "ssh show", "NAME", h_ssh, R_NO, "ssh", "print a profile", "" },
+	{ "ssh argv", "NAME", h_ssh, R_NO, "ssh", "print the exact ssh command line a profile runs (nothing is started)", "" },
+	{ "ssh up", "NAME", h_ssh, R_YES, "ssh", "start the connection in the background; it reconnects with backoff when it drops", "A supervisor keeps ssh -N running, logs to the state dir, and assigns tun_addr once an ssh -w device exists." },
+	{ "ssh down", "NAME", h_ssh, R_YES, "ssh", "stop the connection and its supervisor", "" },
+	{ "ssh apply", "", h_ssh, R_YES, "ssh", "start every profile with auto = yes", "" },
+	{ "ssh hostkey", "NAME", h_ssh, R_NO, "ssh", "fetch and show the host key fingerprint (ssh-keyscan + ssh-keygen -lf)", "Compare it with what the server's admin gave you, then `ssh trust`." },
+	{ "ssh trust", "NAME SHA256:FP [HOST]", h_ssh, R_YES, "ssh", "store the host key only if its fingerprint equals FP", "Safer than accept-new: the key goes into the known_hosts file only when the fingerprint you typed matches what the host presents." },
+	{ "ssh check", "NAME", h_ssh, R_NO, "ssh", "is the ControlMaster alive (ssh -O check)", "" },
+	{ "ssh exec", "NAME COMMAND...", h_ssh, R_NO, "ssh", "run a command over the profile's ControlMaster", "" },
+	{ "ssh del", "NAME", h_ssh, R_YES, "ssh", "delete a profile (stop it first)", "" },
+	{ "mesh status", "", h_mesh, R_NO, "mesh", "mesh profiles: state, kind, device, peers handshaked/total", "The same list is the Mesh tab." },
+	{ "mesh save", "NAME kind=batman ifaces=A,B | kind=wg self=NODE [k=v...]", h_mesh, R_YES, "mesh", "create or change a mesh profile", "batman: ifaces orig_interval gw_mode hop_penalty mtu addr. wg: self port prefix keepalive key addr. Stored as NAME.mesh." },
+	{ "mesh show", "NAME", h_mesh, R_NO, "mesh", "print a profile", "" },
+	{ "mesh init", "NAME", h_mesh, R_YES, "mesh", "generate this node's WireGuard private key (mode 0600) and print the public key; never overwrites", "" },
+	{ "mesh node", "NAME add NODE PUBKEY ENDPOINT|- ADDRESS | del NODE | list", h_mesh, R_YES, "mesh", "edit the WireGuard mesh peer list", "One list for every node. ENDPOINT - means the node is not reachable directly (it must connect to you)." },
+	{ "mesh gen", "NAME [NODE]", h_mesh, R_NO, "mesh", "print the wg-quick config of a node (default: this one)", "Every other node becomes a peer with AllowedIPs = its mesh address only. The private key is filled in only for this node." },
+	{ "mesh up", "NAME", h_mesh, R_YES, "mesh", "bring the mesh up (batman: ip link add type batadv; wg: netlink, no wg binary)", "" },
+	{ "mesh down", "NAME", h_mesh, R_YES, "mesh", "remove the mesh device", "" },
+	{ "mesh apply", "", h_mesh, R_YES, "mesh", "bring up every mesh profile with auto = yes", "" },
+	{ "mesh neighbors", "NAME", h_mesh, R_NO, "mesh", "batman-adv neighbours (needs batctl)", "" },
+	{ "mesh del", "NAME", h_mesh, R_YES, "mesh", "delete a profile (the peer list and key file are kept)", "" },
+	{ "bond status", "", h_bond, R_NO, "bonding", "bonds: state, mode, slaves up/total, active slave", "The same list is the Bond tab." },
+	{ "bond modes", "", h_bond, R_NO, "bonding", "the bonding modes and what each needs from the switch", "" },
+	{ "bond show", "NAME", h_bond, R_NO, "bonding", "live state and profile of a bond", "" },
+	{ "bond add", "NAME [KEY=VALUE...] SLAVE...", h_bond, R_YES, "bonding", "create a bond and enslave interfaces", "e.g. `bond add bond0 mode=802.3ad miimon=100 eth0 eth1`. Shares the code and NAME.ent profiles of `ent save NAME bond`." },
+	{ "bond del", "NAME", h_bond, R_YES, "bonding", "delete the bond", "" },
+	{ "bond slave", "add|del NAME IFACE", h_bond, R_YES, "bonding", "add or remove one slave of a bond", "" },
+	{ "bond apply", "", h_bond, R_YES, "bonding", "re-create every saved bond", "" },
+	{ "tunnel status", "", h_tunnel, R_NO, "tunnel", "tunnels: state, kind, local>remote, mtu, rx/tx", "The same list is the Tunnel tab." },
+	{ "tunnel save", "NAME kind=gre|gretap|ipip|sit|vxlan|geneve|l2tp local=A remote=B [k=v...]", h_tunnel, R_YES, "tunnel", "create or change a tunnel profile", "Keys: link addr key ttl mtu auto vni port group, l2tp: tunnel_id peer_tunnel_id session_id peer_session_id encap lport rport. mtu = auto subtracts the encapsulation overhead from the underlay MTU. Stored as NAME.tun." },
+	{ "tunnel show", "NAME", h_tunnel, R_NO, "tunnel", "print a profile", "" },
+	{ "tunnel mtu", "NAME", h_tunnel, R_NO, "tunnel", "show the underlay MTU, the overhead and the tunnel MTU `auto` picks", "" },
+	{ "tunnel up", "NAME", h_tunnel, R_YES, "tunnel", "create the tunnel device, set mtu and address, bring it up", "" },
+	{ "tunnel down", "NAME", h_tunnel, R_YES, "tunnel", "delete the tunnel device", "" },
+	{ "tunnel apply", "", h_tunnel, R_YES, "tunnel", "bring up every tunnel with auto = yes", "" },
+	{ "tunnel del", "NAME", h_tunnel, R_YES, "tunnel", "delete a profile", "" },
+	{ "vpn import", "FILE [NAME]", h_vpn, R_YES, "vpn", "import a VPN profile: WireGuard / OpenVPN / NetworkManager .nmconnection / strongSwan conf / netman .vpn (into /etc/netman/vpn, mode 0600)", "Refuses to overwrite. Converts NetworkManager keyfiles (wireguard, openvpn, strongswan, l2tp, openconnect) and strongSwan swanctl.conf / ipsec.conf; PPTP is refused (insecure). Passwords kept in secret stores are not imported; the note says what was left out. Directory override: env NETMAN_VPN_CONF_DIR." },
 	{ "vpn info", "NAME", h_vpn, R_YES, "vpn", "everything known about one profile: endpoint, handshake, transfer, allowed ips, split or full tunnel, kill switch", "" },
 	{ "vpn up", "NAME [WAIT_S]", h_vpn, R_YES, "vpn", "bring a tunnel up (plus the kill switch if vpn.killswitch)", "" },
 	{ "vpn down", "NAME", h_vpn, R_YES, "vpn", "take a tunnel down", "" },
@@ -700,6 +873,17 @@ static const nc_cmd nc_table[] = {
 	{ "config show", "", h_cfg_show, R_NEV, NULL, "every setting with its value and where it came from", "" },
 	{ "config check", "", h_cfg_check, R_NEV, NULL, "validate the config files and environment", "Errors are FILE:LINE with a did-you-mean for unknown keys." },
 	{ "config set", "SECTION.KEY VALUE", h_cfg_set, R_NEV, NULL, "edit the user config file (atomic, comments kept)", "" },
+	{ "settings", "", h_set_list, R_NEV, NULL, "the settings panel's data as a list: key, value, where it comes from, what it does (= settings list)", "The TUI panel is key S inside `netman -tui`. Everything below works on the same schema (src/settings.c)." },
+	{ "settings list", "[SECTION|TAB] [--all]", h_set_list, R_NEV, NULL, "every setting: key, value, source (default/system/user/env), description", "Settings of a module that is switched off are left out; --all lists them. [restart] = needs a restart of the thing that reads it, [root] = acting on it needs root." },
+	{ "settings get", "KEY", h_set_get, R_NEV, NULL, "print the effective value of one setting", "" },
+	{ "settings set", "KEY VALUE", h_set_set, R_NEV, NULL, "validate and write one setting into the user file (atomic, comments kept)", "Same as config set, plus a note when the change needs a restart or an environment variable overrides it." },
+	{ "settings toggle", "KEY", h_set_toggle, R_NEV, NULL, "flip a yes/no setting", "" },
+	{ "settings reset", "KEY", h_set_reset, R_NEV, NULL, "remove the setting from the user file (back to the system file or the default)", "" },
+	{ "settings check", "[--json]", h_set_check, R_NEV, NULL, "validate the config files and environment; --json for scripts", "Exit 1 with FILE:LINE when something is wrong. Lists the settings an environment variable overrides." },
+	{ "settings schema", "", h_set_schema, R_NEV, NULL, "the schema in the pipe format of desktop's settings.schema (key|type|extra|apply|default|label)", "" },
+	{ "settings --dump-api", "", h_set_api, R_NEV, NULL, "JSON: the whole schema, the current values and where each one comes from", "For a launcher or panel that hosts netman's settings: tabs, then one object per setting with type, range or choices, default, value, source, needs_root, restart, gate and hidden." },
+	{ "settings menu", "[SECTION|TAB] [--all]", h_set_menu, R_NEV, NULL, "dmenu-ready lines: `section.key = value  # description`", "netman settings menu | dmenu -l 20 | netman settings pick" },
+	{ "settings pick", "[--choices] [--value VALUE]", h_set_pick, R_NEV, NULL, "read the chosen menu line on stdin, offer the values in a menu and set the one chosen", "The value menu is $NETMAN_MENU (a shell command, default `dmenu -p \"$NETMAN_MENU_PROMPT\"`); nothing chosen = nothing changed. --choices prints the choices instead; --value V sets V without asking." },
 	{ "daemon", "[--bus ADDRESS]", h_daemon, R_YES, "nmapi", "serve the NetworkManager D-Bus API (drop-in for NM clients)", "Claims org.freedesktop.NetworkManager on the system bus (fails if a NetworkManager owns it) and answers until SIGTERM. --bus selects another bus, e.g. a private dbus-daemon. See docs/nm-api-surface.md for what is implemented." },
 	{ "config toggle", "SECTION.KEY", h_cfg_toggle, R_NEV, NULL, "flip a yes/no setting", "" },
 	{ "config example", "", h_cfg_example, R_NEV, NULL, "print the documented example config", "" },

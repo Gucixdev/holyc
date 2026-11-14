@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# pty_settings - the Settings panel (key S) in the real TUI inside `unshare -Urn` (the host network is never touched; the config is a temp file).
+# Checks: footer hint, panel opens, tabs (a module's tab only while it is enabled), toggling writes the file and applies live, enum cycling,
+# inline editing with a validation message, reset with d, search, mouse (SGR) click + wheel, "restart needed", 80x24 and 40x12, clean exit.
+set -u
+self=$(readlink -f "$0"); cd "$(dirname "$self")" || exit 1
+if [ -z "${NM_PTY_SET_INNER:-}" ]; then
+	command -v tmux >/dev/null && command -v unshare >/dev/null || { echo "pty_settings: skipped (tmux/unshare missing)"; exit 0; }
+	unshare -Urn true 2>/dev/null || { echo "pty_settings: skipped (no user namespaces)"; exit 0; }
+	NM_PTY_SET_INNER=1 exec unshare -Urn "$self"
+fi
+ip link set lo up
+work=$(mktemp -d); trap 'tmux -L nmset kill-server 2>/dev/null; rm -rf "$work"' EXIT
+cc -std=gnu11 -Wall -Wextra -O2 -Wno-format-truncation -I../src -I../src/mods -o "$work/nm" ../src/netman.c ../src/config.c ../src/mods/enterprise/enterprise.c ../src/mods/enterprise/tether.c ../src/mods/enterprise/licence.c ../src/mods/wireguard.c ../src/mods/vpnmod.c ../src/mods/openvpn.c ../src/mods/ipsec.c ../src/mods/l2tp.c ../src/mods/openconnect.c ../src/mods/sstp.c ../src/mods/vpnimport.c ../src/mods/tor.c ../src/mods/ssh.c ../src/mods/mesh.c ../src/mods/bonding.c ../src/mods/tunnel.c || exit 1
+chmod 755 "$work"
+conf="$work/c.conf"
+fresh() { printf '[privileges]\nsudo = never\n# keep this comment\n[wifi]\nenabled = no\n[bluetooth]\nenabled = no\n[vpn]\nenabled = no\n[net]\nenabled = yes\n' >"$conf"; }
+T="tmux -L nmset"
+pass=0 fail=0
+ok() { pass=$((pass + 1)); }
+no() { fail=$((fail + 1)); printf 'FAIL: %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/      | /'; }
+snap() { $T capture-pane -p -t t; }
+has() { local s i; for i in $(seq 1 16); do s=$(snap); grep -qF -- "$1" <<<"$s" && { ok; return; }; sleep 0.25; done; no "$2 (wanted '$1')" "$s"; }
+hasnt() { local s i; for i in $(seq 1 16); do s=$(snap); grep -qF -- "$1" <<<"$s" || { ok; return; }; sleep 0.25; done; no "$2 (did not want '$1')" "$s"; }
+infile() { for i in $(seq 1 12); do grep -qE -- "$1" "$conf" && { ok; return; }; sleep 0.25; done; no "$2 (wanted /$1/ in the file)" "$(cat "$conf")"; }
+notinfile() { sleep 0.5; grep -qE -- "$1" "$conf" && no "$2 (did not want /$1/ in the file)" "$(cat "$conf")" || ok; }
+keys() { $T send-keys -t t "$@"; sleep 0.5; }
+lit() { $T send-keys -l -t t "$1"; sleep 0.5; }
+start() { $T kill-server 2>/dev/null; $T -u new-session -d -s t -x "$1" -y "$2" "NETMAN_CONFIG=$conf LANG=C.UTF-8 TERM=xterm-256color $work/nm -tui; echo EXIT:\$?; sleep 30"; sleep 2; }
+
+fresh; start 100 26
+has "S settings" "footer hint"
+keys S; has "netman settings" "panel title"; has "Modules" "Modules tab"; has "ssh.enabled" "module switches listed on Modules"
+hasnt "Tor " "no Tor tab while tor is off"
+# toggle ssh.enabled on: cursor to ssh.enabled
+keys /; lit "ssh.enabled"; keys Enter; has "[ ] ssh.enabled" "found by search, unchecked"
+keys Space; has "[x] ssh.enabled" "toggled on in the panel"; infile 'enabled *= *yes' "written to the file"; infile 'keep this comment' "comment kept"
+keys Escape; has "SSH" "the SSH tab appears once ssh is enabled"
+keys Tab; keys Tab; has "SSH" "tab bar still shows SSH"
+# the SSH tab lists its keys; select ssh_bin through the search
+for i in 1 2 3 4 5 6 7 8; do snap | grep -q "known_hosts" && break; keys l; done
+has "known_hosts" "SSH tab lists its keys"
+keys /; lit "ssh.ssh_bin"; keys Enter
+# inline edit with validation
+keys e; lit "relative/path"; has "absolute program path" "validation message while typing"
+keys Enter; has "absolute program path" "an invalid value is refused"; notinfile 'relative/path' "nothing written for an invalid value"
+for i in $(seq 1 16); do keys BSpace; done; lit "/usr/bin/ssh"; has "valid" "valid message"; keys Enter; infile 'ssh_bin *= */usr/bin/ssh' "valid value saved"
+keys d; infile '^\[ssh\]' "section stays"; notinfile 'ssh_bin' "d resets (line removed)"
+# enum cycling + live theme + restart note
+keys Escape; keys /; lit "tui.theme"; keys Enter; keys Space; infile 'theme *= *mono' "enum cycled and saved"; has "mono" "enum shown"
+keys Escape; keys /; lit "nmapi.refresh"; keys Enter; keys +; has "restart needed" "restart flag on a daemon setting"
+# mouse (SGR): wheel, click a tab, click a row, click the selected row again to act
+keys Escape; keys Escape; keys S; has "Modules" "panel reopened"
+click() { $T send-keys -l -t t $'\e[<0;'"$1;$2"'M'; sleep 0.3; $T send-keys -l -t t $'\e[<0;'"$1;$2"'m'; sleep 0.4; }
+$T send-keys -l -t t $'\e[<65;10;10M'; sleep 0.3; $T send-keys -l -t t $'\e[<64;10;10M'; sleep 0.3
+click 15 2; has "dhcp" "clicking the Network tab shows its rows"
+click 20 6; notinfile 'probe *= *no' "the first click only selects the row"; click 20 6; infile 'probe *= *no' "clicking the selected row again toggles it"; has "[ ] roaming.probe" "checkbox updated"
+keys q; keys q; has "EXIT:0" "clean exit"
+# sizes
+for size in "80 24" "40 12"; do
+	set -- $size
+	fresh; start "$1" "$2"
+	keys S; has "settings" "panel at $1x$2"; keys j; keys j; keys l
+	s=$(snap); wd=$(awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' <<<"$s")
+	[ "$wd" -le "$1" ] && ok || no "no row wider than $1 at $1x$2" "$s"
+	has "esc close" "key bar at $1x$2"
+	keys q; keys q; has "EXIT:0" "clean exit at $1x$2"
+done
+echo "pty_settings: $pass ok, $fail failed"
+[ "$fail" -eq 0 ]

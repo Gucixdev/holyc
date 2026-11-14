@@ -193,7 +193,13 @@ parse_color (const char *str, char **end, Clr def)
     }
     if (end)
         *end = (char *)str + 7;
-    drw_clr_create(&dummy, &c, str);
+    {
+        /* hand drw exactly "#rrggbb": the rest of the bar line follows the colour */
+        char col[8];
+        memcpy(col, str, 7);
+        col[7] = '\0';
+        drw_clr_create(&dummy, &c, col);
+    }
     return c;
 }
 

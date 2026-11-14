@@ -8,7 +8,7 @@
 #define _GNU_SOURCE
 #include "enterprise.h"
 #include "entcore.h"
-#include "net.h"
+#include "../net.h"
 
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -205,7 +205,7 @@ int netman_ent_tether_show(const netman_ent *e, FILE *f)
 
 /* ---------------------------------------------------------------- Bluetooth PAN (bluez D-Bus) */
 #ifdef NETMAN_ENT_DBUS
-#include "dbus.h"
+#include "../dbus.h"
 static int th_btpath(const char *mac, char *p, size_t n)
 {
 	unsigned m[6];
